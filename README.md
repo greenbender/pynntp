@@ -1,0 +1,4 @@
+pynntp
+======
+
+Python nntp library
