@@ -1,0 +1,6 @@
+# temp files
+~*
+.*.swp
+
+# python compiled
+*.pyc

@@ -1,6 +1,6 @@
 #!/usr/bin/python
 """
-StringBuffer is the FIFO version of pythons StringIO.
+A reasonably efficient FIFO buffer.
 Copyright (C) 2013  Byron Platt
 
 This program is free software: you can redistribute it and/or modify
@@ -21,7 +21,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 _DISCARD_SIZE = 0xffff
 
-class StringBuffer(object):
+class Fifo(object):
 
     def __init__(self, data=""):
 

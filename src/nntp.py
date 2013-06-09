@@ -1,6 +1,6 @@
 #!/usr/bin/python
 """
-An NNTP library - a bit more useful than the lib nntp one (hopefully).
+An NNTP library - a bit more useful than the libnntp one (hopefully).
 Copyright (C) 2013  Byron Platt
 
 This program is free software: you can redistribute it and/or modify
@@ -25,7 +25,7 @@ import zlib
 import shlex
 import socket
 import iodict
-import stringbuffer
+import fifo
 import yenc
 
 class NNTPError(Exception):
@@ -54,7 +54,16 @@ class NNTPDataError(NNTPError):
     pass
 
 class Reader(object):
+    """NNTP Reader.
 
+    Note:
+        All commands can raise the following exceptions:
+            NNTPProtocolError
+            NNTPPermanentError
+            NNTPReplyError
+            IOError (socket.error)
+    """
+            
     def __init__(self, host, port=119, username="anonymous", password="anonymous", timeout=30, tls=False):
 
         self.socket = socket.socket()
@@ -62,7 +71,7 @@ class Reader(object):
         if tls:
             self.socket = ssl.wrap_socket(self.socket)
 
-        self.__buffer = stringbuffer.StringBuffer()
+        self.__buffer = fifo.Fifo()
 
         self.username = username
         self.password = password
@@ -106,9 +115,12 @@ class Reader(object):
         except ValueError:
             raise NNTPProtocolError(line)
 
+        if code < 100 or code >= 600:
+            raise NNTPProtocolError(line)
+
         if len(parts) > 1:
             message = parts[1]
-
+        
         if 400 <= code <= 499:
             raise NNTPTemporaryError(code, message)
 
@@ -138,7 +150,7 @@ class Reader(object):
             raise NNTPDataError("Bad yEnc header")
 
         # data
-        buf, trailer = stringbuffer.StringBuffer(), ""
+        buf, trailer = fifo.Fifo(), ""
         for line in self.__line_gen():
             if line.startswith("=yend"):
                 trailer = line
@@ -224,16 +236,13 @@ class Reader(object):
             raise NNTPReplyError(code, message)
 
         parts = message.split(None, 4)
-        if len(parts) < 4:
-            raise NNTPDataError("Invalid GROUP status '%s'" % message)
-        
         try:
             total = int(parts[0])
             first = int(parts[1])
             last  = int(parts[2])
-        except ValueError:
+            group = parts[3]
+        except (IndexError, ValueError):
             raise NNTPDataError("Invalid GROUP status '%s'" % message)
-        group = parts[3]
 
         return total, first, last, group
 
@@ -299,14 +308,12 @@ class Reader(object):
         
         for line in self.__info_gen():
             parts = line.rstrip().split()
-            if len(parts) != 4:
-                raise NNTPDataError("Invalid LIST info")
             try:
                 group = parts[0]
                 first = int(parts[1])
                 last  = int(parts[2])
                 post  = {"y": True, "n": False, "m": None}[parts[3]]
-            except (ValueError, KeyError):
+            except (IndexError, ValueError, KeyError):
                 raise NNTPDataError("Invalid LIST info")
             yield group, first, last, post
 
@@ -339,14 +346,14 @@ class Reader(object):
 
         self.__overview_fmt = []
         for line in self.__info_gen():
-            parts = line.rstrip().split(":")
-            if len(parts) != 2:
-                raise NNTPDataError("Overview format missing colon")
-            name, suffix = parts
+            try:
+                name, suffix = line.rstrip().split(":")
+            except ValueError:
+                raise NNTPDataError("Invalid LIST OVERVIEW.FMT")
             if suffix and not name:
                 name, suffix = suffix, name
             if suffix and suffix != "full":
-                raise NNTPDataError("Invalid overview format suffix")
+                raise NNTPDataError("Invalid LIST OVERVIEW.FMT")
             self.__overview_fmt.append((name, suffix == "full"))
 
         return self.__overview_fmt
@@ -394,6 +401,29 @@ class Reader(object):
         return self.__info_compressed()
 
     def xover_gen(self, first=None, last=None):
+        """Generator for the XOVER command.
+
+        The XOVER command returns information from the overview database for
+        the article(s) specified.
+
+        <http://tools.ietf.org/html/rfc2980#section-2.8>
+
+        Args:
+            first (int): First article number in range. If not supplied the
+                current article is retrieved.
+            last (int): Last article number in range. If not supplied all
+                articles following the specified first article are retrieved.
+
+        Returns:
+            A list of fields as given by the overview database for each
+            available article in the specified range. The fields that are
+            returned can be determined using the LIST OVERVIEW.FMT command if
+            the server supports it.
+
+        Raises:
+            NNTPReplyError: If no such article exists or the currently selected
+                newsgroup is invalid.
+        """
 
         args = None
         if first is not None:
@@ -406,13 +436,62 @@ class Reader(object):
             raise NNTPReplyError(code, message)
 
         for line in self.__info_gen():
-            yield line.split("\t")
+            yield line.rstrip().split("\t")
 
     def xover(self, first=None, last=None):
+        """The XOVER command.
+
+        The XOVER command returns information from the overview database for
+        the article(s) specified.
+
+        <http://tools.ietf.org/html/rfc2980#section-2.8>
+
+        Args:
+            first (int): First article number in range. If not supplied the
+                current article is retrieved.
+            last (int): Last article number in range. If not supplied all
+                articles following the specified first article are retrieved.
+
+        Returns:
+            A table (list of lists) of articles and their fields as given by the
+            overview database for each available article in the specified range.
+            The fields that are given can be determined using the LIST
+            OVERVIEW.FMT command if the server supports it.
+
+        Raises:
+            NNTPReplyError: If no such article exists or the currently selected
+                newsgroup is invalid.
+        """
 
         return [x for x in self.xover_gen(first, last)]
 
     def xzver_gen(self, first=None, last=None):
+        """Generator for the XZVER command.
+
+        The XZVER command returns information from the overview database for
+        the article(s) specified. It is part of the compressed headers
+        extensions that are supported by some usenet servers. It is the
+        compressed version of the XOVER command.
+
+        <http://helpdesk.astraweb.com/index.php?_m=news&_a=viewnews&newsid=9>
+
+        Args:
+            first (int): First article number in range. If not supplied the
+                current article is retrieved.
+            last (int): Last article number in range. If not supplied all
+                articles following the specified first article are retrieved.
+
+        Returns:
+            A list of fields as given by the overview database for each
+            available article in the specified range. The fields that are
+            returned can be determined using the LIST OVERVIEW.FMT command if
+            the server supports it.
+
+        Raises:
+            NNTPTemporaryError: If no such article exists or the currently
+                selected newsgroup is invalid.
+            NNTPDataError: If the compressed response cannot be decoded.
+        """
 
         args = None
         if first is not None:
@@ -436,16 +515,16 @@ if __name__ == "__main__":
     import sys
 
     try:
-        host = sys.argv[0]
-        port = int(sys.argv[1])
-        usename = sys.argv[2]
-        password = sys.argv[3]
-        tls = int(sys.argv[4])
+        host = sys.argv[1]
+        port = int(sys.argv[2])
+        username = sys.argv[3]
+        password = sys.argv[4]
+        tls = int(sys.argv[5])
     except:
-        print "%s <host> <port> <username> <password> <ssl(0|1)>"
+        print "%s <host> <port> <username> <password> <ssl(0|1)>" % sys.argv[0]
         sys.exit(1)
 
-    r = Reader(host, port, username, password, tls)
+    r = Reader(host, port, username, password, tls=tls)
 
     print "HELP"
     print r.help()
@@ -464,30 +543,30 @@ if __name__ == "__main__":
     print total, first, last, name
     print
 
-#    print "HEAD"
-#    print len(r.head())
-#    print
+    print "HEAD"
+    print r.head()
+    print
 
     print "LIST"
     print len(r.list())
     print
 
-#    print "LIST NEWSGROUPS"
-#    print len(r.list_newsgroups())
-#    print
-#
-#    print "XHDR Date", "%d-%d" % (first, first + 100)
-#    print len(r.xhdr("Date", first, first + 100))
-#    print
-#
-#    print "XZHDR Date", "%d-%d" % (first, first + 100)
-#    print len(r.xzhdr("Date", first, first + 100))
-#    print
-
-    print "XOVER" , "%d-%d" % (first, first + 10000)
-    print len(r.xover(first, first + 10000))
+    print "LIST NEWSGROUPS"
+    print len(r.list_newsgroups())
     print
 
-    print "XZVER" , "%d-%d" % (first, first + 10000)
-    print len(r.xzver(first, first + 10000))
+    print "XHDR Date", "%d-%d" % (first, first + 10)
+    print r.xhdr("Date", first, first + 10)
+    print
+
+    print "XZHDR Date", "%d-%d" % (first, first + 10)
+    print r.xzhdr("Date", first, first + 10)
+    print
+
+    print "XOVER" , "%d-%d" % (first, first + 10)
+    print r.xover(first, first + 10)
+    print
+
+    print "XZVER" , "%d-%d" % (first, first + 10)
+    print r.xzver(first, first + 10)
     print
