@@ -164,12 +164,7 @@ class Reader(object):
         while True:
             buf = self.__buffer.read()
             if not buf:
-                #self.__buffer.write(self.socket.recv(4096))
-                data = self.socket.recv(4096)
-                fd = open("/tmp/foo", "ab")
-                fd.write(data)
-                fd.close()
-                self.__buffer.write(data)
+                self.__buffer.write(self.socket.recv(4096))
                 continue
             yield buf
 
