@@ -69,7 +69,7 @@ class Fifo(object):
             self.__discard()
             return data
 
-        data = self.buf
+        data = self.buf[self.pos:]
         self.clear()
         return data
 
@@ -114,7 +114,7 @@ class Fifo(object):
             newpos = self.pos + length
             return self.buf[self.pos:newpos]
 
-        return self.buf
+        return self.buf[self.pos:]
 
     def peekline(self):
 

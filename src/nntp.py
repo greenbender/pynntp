@@ -28,6 +28,7 @@ import datetime
 import iodict
 import fifo
 import yenc
+import tz
 
 class NNTPError(Exception):
     pass
@@ -53,30 +54,6 @@ class NNTPProtocolError(NNTPError):
 
 class NNTPDataError(NNTPError):
     pass
-
-
-class GMT(datetime.tzinfo):
-    """GMT"""
-
-    def utcoffset(self, dt):
-        return datetime.timedelta(0)
-
-    def tzname(self, dt):
-        return "GMT"
-
-    def dst(self, dt):
-        return datetime.timedelta(0)
-
-gmt = GMT()
-
-
-class UTC(GMT):
-    """UTC"""
-
-    def tzname(self, dt):
-        return "UTC"
-
-utc = UTC()
 
 
 class Reader(object):
@@ -116,7 +93,7 @@ class Reader(object):
             timeout: Connection timeout (default 30 seconds)
             use_ssl: Should we use ssl (default False)
 
-        raises:
+        Raises:
             socket.error: On error in underlying socket and/or ssl wrapper. See
                 socket and ssl modules for further details.
             NNTPReplyError: On bad response code from server.
@@ -167,6 +144,34 @@ class Reader(object):
             if line.startswith(".."):
                 yield line[1:]
             yield line
+
+    def __buf_gen(self):
+        """Generator that reads a line of data from the server.
+
+        It first attempts to read from the internal buffer. If there is not
+        enough data to read a line it then requests more data from the server
+        and adds it to the buffer. This process repeats until a line of data
+        can be read from the internal buffer. When a line of data is read
+        it is yielded.
+
+        A terminating line (line containing single period) is received the
+        generator exits.
+
+        If there is a line begining with an 'escaped' period then the extra
+        period is trimmed. 
+        """
+
+        while True:
+            buf = self.__buffer.read()
+            if not buf:
+                #self.__buffer.write(self.socket.recv(4096))
+                data = self.socket.recv(4096)
+                fd = open("/tmp/foo", "ab")
+                fd.write(data)
+                fd.close()
+                self.__buffer.write(data)
+                continue
+            yield buf
 
     def __drain(self):
         """Reads lines until a termiating line is recieved.
@@ -236,14 +241,14 @@ class Reader(object):
 
         return "".join([x for x in self.__info_gen()])
     
-    def __info_compressed_gen(self):
+    def __info_compressed_yenc_zlib_gen(self):
         """Generator for the lines of a compressed info (textual) response.
 
         Compressed responses are an extension to the NNTP protocol supported by
         some usenet servers to reduce the bandwidth of heavily used range style
         commands that can return large amounts of textual data. The server
         returns that same data as it would for the uncompressed versions of the
-        command the difference being that the data is gzip compressed and then
+        command the difference being that the data is zlib deflated and then
         yEnc encoded.
 
         This function will produce that same output as the __info_gen()
@@ -293,7 +298,49 @@ class Reader(object):
         if ecrc32 != dcrc32 & 0xffffffff:
             raise NNTPDataError("Bad yEnc CRC")
 
-    def __info_compressed(self):
+    def __info_compressed_gzip_gen(self):
+        """Generator for the lines of a compressed info (textual) response.
+
+        Compressed responses are an extension to the NNTP protocol supported by
+        some usenet servers to reduce the bandwidth of heavily used range style
+        commands that can return large amounts of textual data. The server
+        returns that same data as it would for the uncompressed versions of the
+        command the difference being that the data is gzip compressed.
+
+        This function will produce that same output as the __info_gen()
+        function. In other words it takes care of decoding and decompression.
+
+        The usaged principles for the __info_gen() function also apply here.
+        """
+
+        inflate = zlib.decompressobj(15+32)
+
+        # data
+        buf = fifo.Fifo()
+        for data in self.__buf_gen():
+            data = inflate.decompress(data)
+            if not data:
+                continue
+            buf.write(data)
+            for line in buf:
+                if line == ".\r\n":
+                    return
+                if line.startswith(".."):
+                    yield line[1:]
+                yield line
+
+    def __info_compressed_gen(self, code, message):
+        """Determine the decompression method.
+        """
+
+        # eweka use this format
+        if message.endswith("[COMPRESS=GZIP]"):
+            return self.__info_compressed_gzip_gen()
+
+        # default format used by astraweb
+        return self.__info_compressed_yenc_zlib_gen()
+
+    def __info_compressed(self, code, message):
         """The complete content of a compressed info (textual) response.
 
         See the __info_compressed_gen() function for further information
@@ -306,7 +353,7 @@ class Reader(object):
             A the complete content of a compressed textual response.
         """
 
-        return "".join([x for x in self.__info_compressed_gen()])
+        return "".join([x for x in self.__info_compressed_gen(code, message)])
 
     def __command(self, verb, args=None):
         """Call a command on the server.
@@ -327,7 +374,7 @@ class Reader(object):
 
         cmd = verb
         if args:
-            cmd += " %s" % args
+            cmd += " " + args
         cmd += "\r\n"
 
         self.socket.sendall(cmd)
@@ -345,6 +392,48 @@ class Reader(object):
             code, message = self.__command(verb, args)
 
         return code, message
+
+
+    # helpers
+
+    @staticmethod
+    def __parse_msgid_article(obj):
+
+        return str(obj)
+
+    @staticmethod
+    def __parse_range(obj):
+        
+        if isinstance(obj, (int, long)):
+            return str(obj)
+
+        if isinstance(obj, tuple):
+            arg = str(obj[0]) + "-"
+            if len(obj) > 1:
+                arg += str(obj[1])
+            return arg
+        
+        raise ValueError("Must be an integer or tuple")
+
+    @staticmethod
+    def __parse_msgid_range(obj):
+
+        if isinstance(obj, basestring):
+            return obj
+
+        return Reader.__parse_range(obj)
+
+    @staticmethod
+    def __parse_newsgroup(line):
+        parts = line.split()
+        try:
+            group = parts[0]
+            low = int(parts[1])
+            high = int(parts[2])
+            status = parts[3]
+        except (IndexError, ValueError):
+            raise NNTPDataError("Invalid newsgroup info")
+        return group, low, high, status
 
 
     # session administration commands
@@ -401,6 +490,9 @@ class Reader(object):
         the request to quit the connection is closed both at the server and by
         this function.
 
+        Once this method has been called, no other methods of the Reader object
+        should be called.
+
         See <http://tools.ietf.org/html/rfc3977#section-5.4>
         """
 
@@ -434,9 +526,11 @@ class Reader(object):
             raise NNTPReplyError(code, message)
 
         try:
-            return datetime.datetime.strptime(message, "%Y%m%d%H%M%S").replace(tzinfo=utc)
+            ts = datetime.datetime.strptime(message, "%Y%m%d%H%M%S")
         except TypeError:
             raise NNTPDataError("Bad timestamp")
+
+        return ts.replace(tzinfo=tz.GMT)
 
     def help(self):
         """HELP command.
@@ -475,9 +569,10 @@ class Reader(object):
             then it will be converted to GMT by this function.
         """
 
-        ts = timestamp
-        if ts.tzinfo:
-            ts = ts.asttimezone(gmt)
+        if timestamp.tzinfo:
+            ts = timestamp.asttimezone(tz.GMT)
+        else:
+            ts = timestamp.replace(tzinfo=tz.GMT)
 
         args = ts.strftime("%Y%m%d %H%M%S %Z")
 
@@ -486,15 +581,7 @@ class Reader(object):
             raise NNTPReplyError(code, message)
         
         for line in self.__info_gen():
-            parts = line.rstrip().split()
-            try:
-                group = parts[0]
-                high = int(parts[1])
-                low  = int(parts[2])
-                status  = parts[3]
-            except (IndexError, ValueError):
-                raise NNTPDataError("Invalid LIST info")
-            yield group, high, low, status
+            yield self.__parse_newsgroup(line)
     
     def newgroups(self, timestamp):
         """NEWGROUPS command.
@@ -519,13 +606,60 @@ class Reader(object):
 
         return [x for x in self.newgroups_gen(timestamp)]
 
-    def newnews(self):
-        """NEWNEWS command.
+    def newnews_gen(self, pattern, timestamp):
+        """Generator for the NEWNEWS command.
+
+        Yields the next message-id in the newsgroups whose names match the
+        pattern, since the specified timestamp.
+
+        See the newnews() function for more detailed information.
 
         See <http://tools.ietf.org/html/rfc3977#section-7.4>
+
+        Args:
+            pattern: glob matching newsgroups of intrest.
+            timestamp: Datetime object giving create-after datetime.
+
+        Note: If the datetime object supplied as the timestamp is naive (tzinfo
+            is None) then it is assumed to be given as GMT. If tzinfo is set
+            then it will be converted to GMT by this function.
         """
 
-        raise NotImplementedError()
+        if timestamp.tzinfo:
+            ts = timestamp.asttimezone(tz.GMT)
+        else:
+            ts = timestamp.replace(tzinfo=tz.GMT)
+
+        args = pattern
+        args += " " + ts.strftime("%Y%m%d %H%M%S %Z")
+
+        code, message = self.__command("NEWNEWS", args)
+        if code != 230:
+            raise NNTPReplyError(code, message)
+        
+        for line in self.__info_gen():
+            yield line.strip()
+
+    def newnews(self, pattern, timestamp):
+        """NEWNEWS command.
+
+        Retrieves a list of message-ids from the newsgroups whose names match
+        the pattern, that where created since the specified timestamp.
+
+        Not all usenet server implement this command.
+
+        See <http://tools.ietf.org/html/rfc3977#section-7.4>
+
+        Args:
+            pattern: glob matching newsgroups of intrest.
+            timestamp: Datetime object giving create-after datetime.
+
+        Note: If the datetime object supplied as the timestamp is naive (tzinfo
+            is None) then it is assumed to be given as GMT. If tzinfo is set
+            then it will be converted to GMT by this function.
+        """
+
+        return [x for x in self.newnews_gen(pattern, timestamp)]
 
 
     # list commands
@@ -533,10 +667,10 @@ class Reader(object):
     def list_active_gen(self, pattern=None):
         """Generator for the LIST ACTIVE command.
 
-        Note: The status field is typically one of the following:
-            "y" Posting is permitted.
-            "n" Posting is not permitted.
-            "m" Postings will be forwarded to the newsgroup moderator.
+        See list_active() for more information.
+
+        Yields:
+            An element in the list returned by list_active().
         """
 
         args = pattern
@@ -551,15 +685,7 @@ class Reader(object):
             raise NNTPReplyError(code, message)
         
         for line in self.__info_gen():
-            parts = line.rstrip().split()
-            try:
-                group = parts[0]
-                first = int(parts[1])
-                last  = int(parts[2])
-                post  = {"y": True, "n": False, "m": None}[parts[3]]
-            except (IndexError, ValueError, KeyError):
-                raise NNTPDataError("Invalid LIST info")
-            yield group, first, last, post
+            yield self.__parse_newsgroup(line)
 
     def list_active(self, pattern=None):
 
@@ -606,8 +732,10 @@ class Reader(object):
     def list_overview_fmt_gen(self):
         """Generator for LIST OVERVIEW.FMT
 
-        This is not really appropriate as a generator it is just implemented in
-        this way to maintain consistency with other LIST commands.
+        See list_overview_fmt() for more information.
+
+        Yields:
+            An element in the list returned by list_overview_fmt().
         """
 
         code, message = self.__command("LIST OVERVIEW.FMT")
@@ -644,38 +772,28 @@ class Reader(object):
 
         return [x for x in self.list_extensions_gen()]
 
-    def list_gen(self, keyword=None, pattern=None):
+    def list_gen(self, keyword=None, arg=None):
         """Generator for LIST command.
 
-        For each element in the list a result is yielded. The format of this
-        result is determined by the keyword that is used. For more details on
-        the return formats see the direct call version of the keyword you are
-        using.
+        See list() for more information.
 
-        Args:
-            keyword: Information requested.
-            pattern: Pattern to match group or keyword specific argument.
-
-        Note: Keywords supported by this function are include ACTIVE,
-            ACTIVE.TIMES, DISTRIB.PATS, HEADERS, NEWSGROUPS and OVERVIEW.FMT.
-
-        Raises:
-            NotImplementedError: For unsupported keywords.
+        Yields:
+            An element in the list returned by list().
         """
 
         if keyword:
             keyword = keyword.upper()
 
         if keyword is None or keyword == "ACTIVE":
-            return self.list_active_gen(pattern)
+            return self.list_active_gen(arg)
         if keyword == "ACTIVE.TIMES":
-            return self.list_active_times_gen(pattern)
+            return self.list_active_times_gen(arg)
         if keyword == "DISTRIB.PATS":
             return self.list_distrib_pats_gen()
         if keyword == "HEADERS":
-            return self.list_headers_gen(pattern)
+            return self.list_headers_gen(arg)
         if keyword == "NEWSGROUPS":
-            return self.list_newsgroups_gen(pattern)
+            return self.list_newsgroups_gen(arg)
         if keyword == "OVERVIEW.FMT":
             return self.list_overview_fmt_gen()
         if keyword == "EXTENSIONS":
@@ -683,11 +801,26 @@ class Reader(object):
 
         raise NotImplementedError()
 
-    def list(self, keyword=None, pattern=None):
+    def list(self, keyword=None, arg=None):
         """LIST command.
+
+        A wrapper for all of the other list commands. The output of this command
+        depends on the keyword specified. The output format for each keyword can
+        be found in the list function that corresponds to the keyword.
+
+        Args:
+            keyword: Information requested.
+            arg: Pattern or keyword specific argument.
+
+        Note: Keywords supported by this function are include ACTIVE,
+            ACTIVE.TIMES, DISTRIB.PATS, HEADERS, NEWSGROUPS, OVERVIEW.FMT and
+            EXTENSIONS.
+
+        Raises:
+            NotImplementedError: For unsupported keywords.
         """
 
-        return [x for x in self.list_gen(keyword, pattern)]
+        return [x for x in self.list_gen(keyword, arg)]
 
     def group(self, name):
 
@@ -738,11 +871,11 @@ class Reader(object):
 
         return article, ident
 
-    def article(self, ident=None):
+    def article(self, msgid_article=None):
 
-        args = ident
-        if isinstance(args, int):
-            args = str(args)
+        args = None
+        if msgid_article is not None:
+            args = self.__parse_msgid_article(msgid_article)
 
         code, message = self.__command("ARTICLE", args)
         if code != 221:
@@ -750,11 +883,11 @@ class Reader(object):
 
         return self.__info()
 
-    def head(self, ident=None):
+    def head(self, msgid_article=None):
 
-        args = ident
-        if isinstance(args, int):
-            args = str(args)
+        args = None
+        if msgid_article is not None:
+            args = self.__parse_msgid_article(msgid_article)
 
         code, message = self.__command("HEAD", args)
         if code != 221:
@@ -772,15 +905,11 @@ class Reader(object):
 
         return self.__info()
 
-    def xhdr(self, header, first=None, last=None):
+    def xhdr(self, header, msgid_range=None):
 
         args = header
-        if isinstance(first, (int, long)):
-            args += " " + str(first) + "-"
-            if last is not None:
-                args += str(last)
-        elif isinstance(first, str):
-            args += " " + first
+        if range is not None:
+            args += " " + self.__parse_msgid_range(msgid_range)
 
         code, message = self.__command("XHDR", args)
         if code != 221:
@@ -788,23 +917,28 @@ class Reader(object):
 
         return self.__info()
     
-    def xzhdr(self, header, first=None, last=None):
+    def xzhdr(self, header, msgid_range=None):
+        """XZHDR command.
+
+        Args:
+            msgid_range: A message-id as a string, or an article number as an
+                integer, or a tuple of specifying a range of article numbers in
+                the form (first, [last]) - if last is omitted then all articles
+                after first are included. A msgid_range of None (the default)
+                uses the current article.
+        """
 
         args = header
-        if isinstance(first, (int, long)):
-            args += " " + str(first) + "-"
-            if last is not None:
-                args += str(last)
-        elif isinstance(first, str):
-            args += " " + first
+        if msgid_range is not None:
+            args += " " + self.__parse_msgid_range(msgid_range)
 
         code, message = self.__command("XZHDR", args)
         if code != 221:
             raise NNTPReplyError(code, message)
 
-        return self.__info_compressed()
+        return self.__info_compressed(code, message)
 
-    def xover_gen(self, first=None, last=None):
+    def xover_gen(self, range=None):
         """Generator for the XOVER command.
 
         The XOVER command returns information from the overview database for
@@ -813,10 +947,10 @@ class Reader(object):
         <http://tools.ietf.org/html/rfc2980#section-2.8>
 
         Args:
-            first (int): First article number in range. If not supplied the
-                current article is retrieved.
-            last (int): Last article number in range. If not supplied all
-                articles following the specified first article are retrieved.
+            range: An article number as an integer, or a tuple of specifying a
+                range of article numbers in the form (first, [last]). If last is
+                omitted then all articles after first are included. A range of
+                None (the default) uses the current article.
 
         Returns:
             A list of fields as given by the overview database for each
@@ -830,10 +964,8 @@ class Reader(object):
         """
 
         args = None
-        if first is not None:
-            args = str(first) + "-"
-            if last is not None:
-                args += str(last)
+        if range is not None:
+            args = self.__parse_range(range)
 
         code, message = self.__command("XOVER", args)
         if code != 224:
@@ -842,7 +974,7 @@ class Reader(object):
         for line in self.__info_gen():
             yield line.rstrip().split("\t")
 
-    def xover(self, first=None, last=None):
+    def xover(self, range=None):
         """The XOVER command.
 
         The XOVER command returns information from the overview database for
@@ -851,10 +983,10 @@ class Reader(object):
         <http://tools.ietf.org/html/rfc2980#section-2.8>
 
         Args:
-            first (int): First article number in range. If not supplied the
-                current article is retrieved.
-            last (int): Last article number in range. If not supplied all
-                articles following the specified first article are retrieved.
+            range: An article number as an integer, or a tuple of specifying a
+                range of article numbers in the form (first, [last]). If last is
+                omitted then all articles after first are included. A range of
+                None (the default) uses the current article.
 
         Returns:
             A table (list of lists) of articles and their fields as given by the
@@ -867,9 +999,9 @@ class Reader(object):
                 newsgroup is invalid.
         """
 
-        return [x for x in self.xover_gen(first, last)]
+        return [x for x in self.xover_gen(range)]
 
-    def xzver_gen(self, first=None, last=None):
+    def xzver_gen(self, range=None):
         """Generator for the XZVER command.
 
         The XZVER command returns information from the overview database for
@@ -880,10 +1012,10 @@ class Reader(object):
         <http://helpdesk.astraweb.com/index.php?_m=news&_a=viewnews&newsid=9>
 
         Args:
-            first (int): First article number in range. If not supplied the
-                current article is retrieved.
-            last (int): Last article number in range. If not supplied all
-                articles following the specified first article are retrieved.
+            range: An article number as an integer, or a tuple of specifying a
+                range of article numbers in the form (first, [last]). If last is
+                omitted then all articles after first are included. A range of
+                None (the default) uses the current article.
 
         Returns:
             A list of fields as given by the overview database for each
@@ -898,21 +1030,63 @@ class Reader(object):
         """
 
         args = None
-        if first is not None:
-            args = str(first) + "-"
-            if last is not None:
-                args += str(last)
+        if range is not None:
+            args = self.__parse_range(range)
 
         code, message = self.__command("XZVER", args)
         if code != 224:
             raise NNTPReplyError(code, message)
 
-        for line in self.__info_compressed_gen():
+        for line in self.__info_compressed_gen(code, message):
             yield line.split("\t")
 
-    def xzver(self, first=None, last=None):
+    def xzver(self, range=None):
+        """XZVER command.
 
-        return [x for x in self.xzver_gen(first, last)]
+        The XZVER command returns information from the overview database for
+        the article(s) specified. It is part of the compressed headers
+        extensions that are supported by some usenet servers. It is the
+        compressed version of the XOVER command.
+
+        <http://helpdesk.astraweb.com/index.php?_m=news&_a=viewnews&newsid=9>
+
+        Args:
+            range: An article number as an integer, or a tuple of specifying a
+                range of article numbers in the form (first, [last]). If last is
+                omitted then all articles after first are included. A range of
+                None (the default) uses the current article.
+
+        Returns:
+            A list of fields as given by the overview database for each
+            available article in the specified range. The fields that are
+            returned can be determined using the LIST OVERVIEW.FMT command if
+            the server supports it.
+
+        Raises:
+            NNTPTemporaryError: If no such article exists or the currently
+                selected newsgroup is invalid.
+            NNTPDataError: If the compressed response cannot be decoded.
+        """
+
+        return [x for x in self.xzver_gen(range)]
+
+    def xpat_gen(self, header, msgid_range, *pattern):
+
+        args = " ".join(
+            [header, self.__parse_msgid_range(msgid_range)] + list(pattern)
+        )
+
+        code, message = self.__command("XPAT", args)
+        if code != 221:
+            raise NNTPReplyError(code, message)
+
+        for line in self.__info_gen():
+            yield line.strip()
+
+    def xpat(self, header, id_range, *pattern):
+
+        return [x for x in self.xpat_gen(header, id_range, *pattern)]
+
         
 if __name__ == "__main__":
 
@@ -942,15 +1116,19 @@ if __name__ == "__main__":
     print r.newgroups(datetime.datetime.utcnow() - datetime.timedelta(days=50))
     print
 
-    print "LIST"
-    print "LIST", len(r.list())
-    print "LIST ACTIVE", len(r.list("ACTIVE"))
-    print "LIST ACTIVE alt.binaries.*", len(r.list("ACTIVE", "alt.binaries.*"))
-    print "LIST NEWSGROUPS", len(r.list("NEWSGROUPS"))
-    print "LIST NEWSGROUPS alt.binaries.*", len(r.list("NEWSGROUPS", "alt.binaries.*"))
-    print "LIST OVERVIEW.FMT", len(r.list("OVERVIEW.FMT"))
-    print "LIST EXTENSIONS", r.list("EXTENSIONS")
-    print
+    #print "NEWNEWS"
+    #print r.newnews("alt.binaries.*", datetime.datetime.utcnow() - datetime.timedelta(minutes=1))
+    #print
+
+    #print "LIST"
+    #print "LIST", len(r.list())
+    #print "LIST ACTIVE", len(r.list("ACTIVE"))
+    #print "LIST ACTIVE alt.binaries.*", len(r.list("ACTIVE", "alt.binaries.*"))
+    #print "LIST NEWSGROUPS", len(r.list("NEWSGROUPS"))
+    #print "LIST NEWSGROUPS alt.binaries.*", len(r.list("NEWSGROUPS", "alt.binaries.*"))
+    #print "LIST OVERVIEW.FMT", len(r.list("OVERVIEW.FMT"))
+    #print "LIST EXTENSIONS", r.list("EXTENSIONS")
+    #print
 
     #print "CAPABILITIES"
     #print r.capabilities()
@@ -966,17 +1144,21 @@ if __name__ == "__main__":
     print
 
     print "XHDR Date", "%d-%d" % (first, first + 10)
-    print r.xhdr("Date", first, first + 10)
+    print r.xhdr("Date", (first, first + 10))
     print
 
     print "XZHDR Date", "%d-%d" % (first, first + 10)
-    print r.xzhdr("Date", first, first + 10)
+    print r.xzhdr("Date", (first, first + 10))
     print
 
-    print "XOVER" , "%d-%d" % (first, first + 10)
-    print r.xover(first, first + 10)
+    print "XOVER" , "%d-" % (last - 10,)
+    print r.xover((last - 10,))
     print
 
-    print "XZVER" , "%d-%d" % (first, first + 10)
-    print r.xzver(first, first + 10)
+    print "XZVER" , "%d-" % (last - 10,)
+    print r.xzver((last - 10,))
+    print
+
+    print "XPAT"
+    print r.xpat("Subject", last, "*big.bang*")
     print
