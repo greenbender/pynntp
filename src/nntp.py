@@ -17,42 +17,67 @@ You should have received a copy of the GNU General Public License
 along with this program.  If not, see <http://www.gnu.org/licenses/>.
 """
 
-#NOTE: docstrings beed to be added
-
-import re
 import ssl
 import zlib
-import shlex
 import socket
 import datetime
 import iodict
 import fifo
 import yenc
-import tz
+import date
+
 
 class NNTPError(Exception):
+    """Base class for all NNTP errors.
+    """
     pass
 
 class NNTPReplyError(NNTPError):
+    """NNTP response status errors.
+    """
     def __init__(self, code, message):
         NNTPError.__init__(self, code, message)
+
     def code(self):
+        """The response status code.
+        """
         return self.args[0]
+
     def message(self):
+        """The response message.
+        """
         return self.args[1]
+
     def __str__(self):
         return "%d: %s" % self.args
 
 class NNTPTemporaryError(NNTPReplyError):
+    """NNTP temporary errors.
+
+    Temporary errors have response codes from 400 to 499.
+    """
     pass
 
 class NNTPPermanentError(NNTPReplyError):
+    """NNTP permanent errors.
+
+    Permanent errors have response codes from 500 to 599.
+    """
     pass
 
+# TODO: Add the status line as a parameter ?
 class NNTPProtocolError(NNTPError):
+    """NNTP protocol error.
+
+    Protcol errors are raised when the response status is invalid.
+    """
     pass
 
 class NNTPDataError(NNTPError):
+    """NNTP data error.
+
+    Data errors are raised when the content of a response cannot be parsed.
+    """
     pass
 
 
@@ -98,11 +123,10 @@ class Reader(object):
                 socket and ssl modules for further details.
             NNTPReplyError: On bad response code from server.
         """
-
         self.socket = socket.socket()
-        self.socket.settimeout(timeout)
         if use_ssl:
             self.socket = ssl.wrap_socket(self.socket)
+        self.socket.settimeout(timeout)
 
         self.__buffer = fifo.Fifo()
 
@@ -133,7 +157,6 @@ class Reader(object):
         If there is a line begining with an 'escaped' period then the extra
         period is trimmed. 
         """
-
         while True:
             line = self.__buffer.readline()
             if not line:
@@ -145,24 +168,26 @@ class Reader(object):
                 yield line[1:]
             yield line
 
-    def __buf_gen(self):
-        """Generator that reads a line of data from the server.
+    def __buf_gen(self, length=0):
+        """Generator that reads a block of data from the server.
 
         It first attempts to read from the internal buffer. If there is not
-        enough data to read a line it then requests more data from the server
-        and adds it to the buffer. This process repeats until a line of data
-        can be read from the internal buffer. When a line of data is read
-        it is yielded.
+        enough data in the internal buffer it then requests more data from the
+        server and adds it to the buffer. This process repeats until a line of
+        unitl there is enough data at which point the data is yielded.
 
-        A terminating line (line containing single period) is received the
-        generator exits.
+        Args:
+            length: An optional amount of data to retrieve. A length of 0 (the
+                default) will retrieve a least one buffer of data.
 
-        If there is a line begining with an 'escaped' period then the extra
-        period is trimmed. 
+        Note:
+            If a length of 0 is supplied then the size of the yielded buffer can
+            vary. If there is data in the internal buffer it will yield all of
+            that data otherwise it will yield the the data returned by a recv
+            on the socket.
         """
-
         while True:
-            buf = self.__buffer.read()
+            buf = self.__buffer.read(length)
             if not buf:
                 self.__buffer.write(self.socket.recv(4096))
                 continue
@@ -171,7 +196,6 @@ class Reader(object):
     def __drain(self):
         """Reads lines until a termiating line is recieved.
         """
-
         for line in self.__line_gen():
             pass
 
@@ -189,7 +213,6 @@ class Reader(object):
         Returns:
             A tuple of status code (as an integer) and status message.
         """
-
         line = next(self.__line_gen()).rstrip()
         parts = line.split(None, 1)
 
@@ -212,30 +235,6 @@ class Reader(object):
 
         return code, message
 
-    def __info_gen(self):
-        """Generator for the lines of an info (textual) response.
-
-        For commands that can yield large amounts of data this should be used in
-        preference to __info() so that memory use can be minimised and that the
-        data can be processed in parallel to being received.
-
-        This is equivient to the __line_gen() generator.
-        """
-
-        return self.__line_gen()
-
-    def __info(self):
-        """The complete content of an info (textual) response.
-
-        This should only used for commands that return small or known amounts of
-        data.
-
-        Returns:
-            A the complete content of a textual response.
-        """
-
-        return "".join([x for x in self.__info_gen()])
-    
     def __info_compressed_yenc_zlib_gen(self):
         """Generator for the lines of a compressed info (textual) response.
 
@@ -255,7 +254,6 @@ class Reader(object):
             NNTPDataError: When there is an error parsing the yEnc header or
                 trailer or if the CRC check fails.
         """
-
         escape = 0
         dcrc32 = 0
         inflate = zlib.decompressobj(-15)
@@ -298,63 +296,98 @@ class Reader(object):
 
         Compressed responses are an extension to the NNTP protocol supported by
         some usenet servers to reduce the bandwidth of heavily used range style
-        commands that can return large amounts of textual data. The server
-        returns that same data as it would for the uncompressed versions of the
-        command the difference being that the data is gzip compressed.
+        commands that can return large amounts of textual data.
 
-        This function will produce that same output as the __info_gen()
+        This function handles gzip compressed responses that have the
+        terminating line inside or outside the compressed data. From experience
+        if the 'XFEATURE COMPRESS GZIP' command causes the terminating '.\\r\\n'
+        to follow the compressed data and 'XFEATURE COMPRESS GZIP TERMINATOR'
+        causes the terminator to be the last part of the compressed data (i.e
+        the reply the gzipped version of the original reply - terminating line
+        included)
+
+        This function will produce that same output as the __info_plain_gen()
         function. In other words it takes care of decoding and decompression.
 
-        The usaged principles for the __info_gen() function also apply here.
+        The usaged principles for the __info_plain_gen() function also apply here.
         """
-
         inflate = zlib.decompressobj(15+32)
 
         # data
         buf = fifo.Fifo()
+        unused = ""
         for data in self.__buf_gen():
             data = inflate.decompress(data)
-            if not data:
-                continue
-            buf.write(data)
-            for line in buf:
-                if line == ".\r\n":
-                    return
-                if line.startswith(".."):
-                    yield line[1:]
-                yield line
+            unused += inflate.unused_data
+            if data:
+                buf.write(data)
+                for line in buf:
+                    if line == ".\r\n":
+                        return
+                    if line.startswith(".."):
+                        yield line[1:]
+                    yield line
+            if unused == ".\r\n":
+                return
 
-    def __info_compressed_gen(self, code, message):
-        """Determine the decompression method.
+    def __info_plain_gen(self):
+        """Generator for the lines of an info (textual) response.
+
+        For commands that can yield large amounts of data this should be used in
+        preference to __info_plain() so that memory use can be minimised and that
+        the data can be processed in parallel to being received.
+
+        This is equivient to the __line_gen() generator.
         """
+        return self.__line_gen()
 
-        # eweka use this format
-        if message.endswith("[COMPRESS=GZIP]"):
-            return self.__info_compressed_gzip_gen()
-
-        # default format used by astraweb
-        return self.__info_compressed_yenc_zlib_gen()
-
-    def __info_compressed(self, code, message):
-        """The complete content of a compressed info (textual) response.
-
-        See the __info_compressed_gen() function for further information
-        regarding compressed commands and responses.
+    def __info_plain(self):
+        """The complete content of an info (textual) response.
 
         This should only used for commands that return small or known amounts of
         data.
 
         Returns:
-            A the complete content of a compressed textual response.
+            A the complete content of a textual response.
         """
+        return "".join([x for x in self.__info_plain()])
+   
+    def __info_gen(self, code, message, compressed=False):
+        """Dispatcher for the info generators.
 
-        return "".join([x for x in self.__info_compressed_gen(code, message)])
+        Determines which __info_*_gen() should be used based on the supplied
+        parameters.
 
+        Args:
+            code: The status code for the command response.
+            message: The status message for the command reponse.
+            compressed: Force decompression. Useful for xz* commands.
+
+        Returns:
+            An info generator.
+        """
+        if "COMPRESS=GZIP" in message:
+            return self.__info_compressed_gzip_gen()
+        if compressed:
+            return self.__info_compressed_yenc_zlib_gen()
+        return self.__info_plain_gen()
+
+    def __info(self, code, message, compressed=False):
+        """The complete content of an info response.
+
+        This should only used for commands that return small or known amounts of
+        data.
+
+        Returns:
+            A the complete content of a textual response.
+        """
+        return "".join([x for x in self.__info_gen(code, message, compressed)])
+ 
     def __command(self, verb, args=None):
         """Call a command on the server.
 
         If the user has not authenticated then authentication will be done
-        as part of making calling the command on the server.
+        as part of calling the command on the server.
 
         For commands that don't return a status message the status message
         will default to an empty string.
@@ -366,7 +399,6 @@ class Reader(object):
         Returns:
             A tuple of status code (as an integer) and status message.
         """
-
         cmd = verb
         if args:
             cmd += " " + args
@@ -393,12 +425,14 @@ class Reader(object):
 
     @staticmethod
     def __parse_msgid_article(obj):
-
+        """Parse a message-id or article number argument.
+        """
         return str(obj)
 
     @staticmethod
     def __parse_range(obj):
-        
+        """Parse a range argument.
+        """
         if isinstance(obj, (int, long)):
             return str(obj)
 
@@ -412,7 +446,8 @@ class Reader(object):
 
     @staticmethod
     def __parse_msgid_range(obj):
-
+        """Parse a message-id or range argument.
+        """
         if isinstance(obj, basestring):
             return obj
 
@@ -420,6 +455,8 @@ class Reader(object):
 
     @staticmethod
     def __parse_newsgroup(line):
+        """Parse a newsgroup info line to python types.
+        """
         parts = line.split()
         try:
             group = parts[0]
@@ -452,14 +489,13 @@ class Reader(object):
             A list of capabilities supported by the server. The VERSION
             capability is the first capability in the list.
         """
-
         args = keyword
 
         code, message = self.__command("CAPABILITIES", args)
         if code != 101:
             raise NNTPReplyError(code, message)
 
-        return [x.strip() for x in self.__info_gen()]
+        return [x.strip() for x in self.__info_gen(code, message)]
 
     def mode_reader(self):
         """MODE READER command.
@@ -471,7 +507,6 @@ class Reader(object):
         Returns:
             Boolean value indicating whether posting is allowed or not.
         """
-
         code, message = self.__command("MODE READER")
         if not code in [200, 201]:
             raise NNTPReplyError(code, message)
@@ -482,15 +517,14 @@ class Reader(object):
         """QUIT command.
 
         Tells the server to close the connection. After the server acknowledges
-        the request to quit the connection is closed both at the server and by
-        this function.
+        the request to quit the connection is closed both at the server and
+        client.
 
         Once this method has been called, no other methods of the Reader object
         should be called.
 
         See <http://tools.ietf.org/html/rfc3977#section-5.4>
         """
-
         code, message = self.__command("QUIT")
         if code != 205:
             raise NNTPReplyError(code, message)
@@ -515,7 +549,6 @@ class Reader(object):
         Raises:
             NNTPDataError: If the timestamp can't be parsed.
         """
-    
         code, message = self.__command("DATE")
         if code != 111:
             raise NNTPReplyError(code, message)
@@ -525,7 +558,7 @@ class Reader(object):
         except TypeError:
             raise NNTPDataError("Bad timestamp")
 
-        return ts.replace(tzinfo=tz.GMT)
+        return ts.replace(tzinfo=date.TZ_GMT)
 
     def help(self):
         """HELP command.
@@ -538,36 +571,38 @@ class Reader(object):
         Returns:
             The help text from the server.
         """
-
         code, message = self.__command("HELP")
         if code != 100:
             raise NNTPReplyError(code, message)
         
-        return self.__info()
+        return self.__info(code, message)
 
     def newgroups_gen(self, timestamp):
         """Generator for the NEWGROUPS command.
 
-        Yields a tuple containing the name, low water mark, high water mark,
-        and status of the next newsgroup that was created on the server since
-        the specified timestamp.
-
-        See the newsgroup() function for more detailed information.
+        Generates a list of newsgroups created on the server since the specified
+        timestamp.
 
         See <http://tools.ietf.org/html/rfc3977#section-7.3>
 
         Args:
-            timestamp: Datetime object giving create-after datetime.
+            timestamp: Datetime object giving 'created since' datetime.
+
+        Yields:
+            A tuple containing the name, low water mark, high water mark,
+            and status for each newsgroup.
+
+        Note: For more detail on the status field see the list_active() command
+            which has the same return format.
 
         Note: If the datetime object supplied as the timestamp is naive (tzinfo
             is None) then it is assumed to be given as GMT. If tzinfo is set
-            then it will be converted to GMT by this function.
+            then it will be converted to GMT.
         """
-
         if timestamp.tzinfo:
-            ts = timestamp.asttimezone(tz.GMT)
+            ts = timestamp.asttimezone(date.TZ_GMT)
         else:
-            ts = timestamp.replace(tzinfo=tz.GMT)
+            ts = timestamp.replace(tzinfo=date.TZ_GMT)
 
         args = ts.strftime("%Y%m%d %H%M%S %Z")
 
@@ -575,55 +610,48 @@ class Reader(object):
         if code != 231:
             raise NNTPReplyError(code, message)
         
-        for line in self.__info_gen():
+        for line in self.__info_gen(code, message):
             yield self.__parse_newsgroup(line)
     
     def newgroups(self, timestamp):
         """NEWGROUPS command.
 
         Retreives a list of newsgroups created on the server since the specified
-        timestamp. The timestamp will be converted to GMT.
+        timestamp. See newgroups_gen() for more details.
 
         See <http://tools.ietf.org/html/rfc3977#section-7.3>
 
         Args:
-            timestamp: Datetime object giving create-after datetime.
+            timestamp: Datetime object giving 'created since' datetime.
 
         Returns:
-            A list of newsgroups created after the specified timestamp, each
-            entry in the list is a tuple containing the newgroups name,
-            highwater mark (as an integer), low water mark (as an integer) and
-            status.
-
-        Note: More more detail on the status field see the list_active() command
-            which has the same return format.
+            A list of tuples in the format given by newgroups_gen()
         """
-
         return [x for x in self.newgroups_gen(timestamp)]
 
     def newnews_gen(self, pattern, timestamp):
         """Generator for the NEWNEWS command.
 
-        Yields the next message-id in the newsgroups whose names match the
-        pattern, since the specified timestamp.
-
-        See the newnews() function for more detailed information.
+        Generates a list of message-ids for articles created since the specified
+        timestamp for newsgroups with names that match the given pattern.
 
         See <http://tools.ietf.org/html/rfc3977#section-7.4>
 
         Args:
-            pattern: glob matching newsgroups of intrest.
-            timestamp: Datetime object giving create-after datetime.
+            pattern: Glob matching newsgroups of intrest.
+            timestamp: Datetime object giving 'created since' datetime.
+
+        Yields:
+            A message-id as string.
 
         Note: If the datetime object supplied as the timestamp is naive (tzinfo
             is None) then it is assumed to be given as GMT. If tzinfo is set
             then it will be converted to GMT by this function.
         """
-
         if timestamp.tzinfo:
-            ts = timestamp.asttimezone(tz.GMT)
+            ts = timestamp.asttimezone(date.TZ_GMT)
         else:
-            ts = timestamp.replace(tzinfo=tz.GMT)
+            ts = timestamp.replace(tzinfo=date.TZ_GMT)
 
         args = pattern
         args += " " + ts.strftime("%Y%m%d %H%M%S %Z")
@@ -632,28 +660,25 @@ class Reader(object):
         if code != 230:
             raise NNTPReplyError(code, message)
         
-        for line in self.__info_gen():
+        for line in self.__info_gen(code, message):
             yield line.strip()
 
     def newnews(self, pattern, timestamp):
         """NEWNEWS command.
 
-        Retrieves a list of message-ids from the newsgroups whose names match
-        the pattern, that where created since the specified timestamp.
-
-        Not all usenet server implement this command.
+        Retrieves a list of message-ids for articles created since the specified
+        timestamp for newsgroups with names that match the given pattern. See
+        newnews_gen() for more details.
 
         See <http://tools.ietf.org/html/rfc3977#section-7.4>
 
         Args:
-            pattern: glob matching newsgroups of intrest.
-            timestamp: Datetime object giving create-after datetime.
+            pattern: Glob matching newsgroups of intrest.
+            timestamp: Datetime object giving 'created since' datetime.
 
-        Note: If the datetime object supplied as the timestamp is naive (tzinfo
-            is None) then it is assumed to be given as GMT. If tzinfo is set
-            then it will be converted to GMT by this function.
+        Returns:
+            A list of message-ids as given by newnews_gen()
         """
-
         return [x for x in self.newnews_gen(pattern, timestamp)]
 
 
@@ -667,7 +692,6 @@ class Reader(object):
         Yields:
             An element in the list returned by list_active().
         """
-
         args = pattern
 
         if args is None:
@@ -679,65 +703,73 @@ class Reader(object):
         if code != 215:
             raise NNTPReplyError(code, message)
         
-        for line in self.__info_gen():
+        for line in self.__info_gen(code, message):
             yield self.__parse_newsgroup(line)
 
     def list_active(self, pattern=None):
-
-        return [x for x in self.list_active_gen()]
+        """LIST ACTIVE command.
+        """
+        return [x for x in self.list_active_gen(pattern)]
 
     def list_active_times_gen(self, pattern=None):
-    
+        """Generator for the LIST ACTIVE TIMES command.
+        """
         raise NotImplementedError()
  
     def list_active_times(self, pattern=None):
-
+        """LIST ACTIVE TIMES command.
+        """
         return [x for x in self.list_active_times_gen(pattern)]
 
     def list_distrib_pats_gen(self):
-
+        """Generator for the LIST DISTRIB.PATS command.
+        """
         raise NotImplementedError()
 
     def list_distrib_pats(self):
-
+        """LIST DISTRIB.PATS command.
+        """
         return [x for x in self.list_distrib_pats_gen()]
 
     def list_headers_gen(self, arg=None):
-
+        """Generator for the LIST HEADERS command.
+        """
         raise NotImplementedError()
 
     def list_headers(self, arg=None):
-
+        """LIST HEADERS command.
+        """
         return [x for x in self.list_headers_gen(arg)]
 
     def list_newsgroups_gen(self, pattern=None):
-
+        """Generator for the LIST NEWSGROUPS command.
+        """
         args = pattern
 
         code, message = self.__command("LIST NEWSGROUPS", args)
         if code != 215:
             raise NNTPReplyError(code, message)
 
-        return self.__info_gen()
+        return self.__info_gen(code, message)
     
     def list_newsgroups(self, pattern=None):
-
+        """LIST NEWSGROUPS command.
+        """
         return [x for x in self.list_newsgroups_gen(pattern)]
 
     def list_overview_fmt_gen(self):
-        """Generator for LIST OVERVIEW.FMT
+        """Generator for the LIST OVERVIEW.FMT
 
         See list_overview_fmt() for more information.
 
         Yields:
             An element in the list returned by list_overview_fmt().
         """
-
         code, message = self.__command("LIST OVERVIEW.FMT")
         if code != 215:
             raise NNTPReplyError(code, message)
 
-        for line in self.__info_gen():
+        for line in self.__info_gen(code, message):
             try:
                 name, suffix = line.rstrip().split(":")
             except ValueError:
@@ -751,20 +783,21 @@ class Reader(object):
     def list_overview_fmt(self):
         """LIST OVERVIEW.FMT command.
         """
-
         return [x for x in self.list_overview_fmt_gen()]
 
     def list_extensions_gen(self):
-
+        """Generator for the LIST EXTENSIONS command.
+        """
         code, message = self.__command("LIST EXTENSIONS")
         if code != 202:
             raise NNTPReplyError(code, message)
 
-        for line in self.__info_gen():
+        for line in self.__info_gen(code, message):
             yield line.strip()
 
     def list_extensions(self):
-
+        """LIST EXTENSIONS command.
+        """
         return [x for x in self.list_extensions_gen()]
 
     def list_gen(self, keyword=None, arg=None):
@@ -775,7 +808,6 @@ class Reader(object):
         Yields:
             An element in the list returned by list().
         """
-
         if keyword:
             keyword = keyword.upper()
 
@@ -814,11 +846,11 @@ class Reader(object):
         Raises:
             NotImplementedError: For unsupported keywords.
         """
-
         return [x for x in self.list_gen(keyword, arg)]
 
     def group(self, name):
-
+        """GROUP command.
+        """
         args = name
 
         code, message = self.__command("GROUP", args)
@@ -837,7 +869,8 @@ class Reader(object):
         return total, first, last, group
 
     def next(self):
-
+        """NEXT command.
+        """
         code, message = self.__command("NEXT")
         if code != 223:
             raise NNTPReplyError(code, message)
@@ -852,7 +885,8 @@ class Reader(object):
         return article, ident
 
     def last(self):
-
+        """LAST command.
+        """
         code, message = self.__command("LAST")
         if code != 223:
             raise NNTPReplyError(code, message)
@@ -867,7 +901,8 @@ class Reader(object):
         return article, ident
 
     def article(self, msgid_article=None):
-
+        """ARTICLE command.
+        """
         args = None
         if msgid_article is not None:
             args = self.__parse_msgid_article(msgid_article)
@@ -876,10 +911,11 @@ class Reader(object):
         if code != 221:
             raise NNTReplyError(code, message)
 
-        return self.__info()
+        return self.__info(code, message)
 
     def head(self, msgid_article=None):
-
+        """HEAD command.
+        """
         args = None
         if msgid_article is not None:
             args = self.__parse_msgid_article(msgid_article)
@@ -888,20 +924,22 @@ class Reader(object):
         if code != 221:
             raise NNTPReplyError(code, message)
 
-        return self.__info()
+        return self.__info(code, message)
 
     def xgtitle(self, pattern=None):
-
+        """XGTITLE command.
+        """
         args = pattern
 
         code, message = self.__command("XGTITLE", args)
         if code != 282:
             raise NNTPReplyError(code, message)
 
-        return self.__info()
+        return self.__info(code, message)
 
     def xhdr(self, header, msgid_range=None):
-
+        """XHDR command.
+        """
         args = header
         if range is not None:
             args += " " + self.__parse_msgid_range(msgid_range)
@@ -910,7 +948,7 @@ class Reader(object):
         if code != 221:
             raise NNTPReplyError(code, message)
 
-        return self.__info()
+        return self.__info(code, message)
     
     def xzhdr(self, header, msgid_range=None):
         """XZHDR command.
@@ -922,7 +960,6 @@ class Reader(object):
                 after first are included. A msgid_range of None (the default)
                 uses the current article.
         """
-
         args = header
         if msgid_range is not None:
             args += " " + self.__parse_msgid_range(msgid_range)
@@ -931,7 +968,7 @@ class Reader(object):
         if code != 221:
             raise NNTPReplyError(code, message)
 
-        return self.__info_compressed(code, message)
+        return self.__info(code, message, compressed=True)
 
     def xover_gen(self, range=None):
         """Generator for the XOVER command.
@@ -957,7 +994,6 @@ class Reader(object):
             NNTPReplyError: If no such article exists or the currently selected
                 newsgroup is invalid.
         """
-
         args = None
         if range is not None:
             args = self.__parse_range(range)
@@ -966,7 +1002,7 @@ class Reader(object):
         if code != 224:
             raise NNTPReplyError(code, message)
 
-        for line in self.__info_gen():
+        for line in self.__info_gen(code, message):
             yield line.rstrip().split("\t")
 
     def xover(self, range=None):
@@ -993,7 +1029,6 @@ class Reader(object):
             NNTPReplyError: If no such article exists or the currently selected
                 newsgroup is invalid.
         """
-
         return [x for x in self.xover_gen(range)]
 
     def xzver_gen(self, range=None):
@@ -1023,7 +1058,6 @@ class Reader(object):
                 selected newsgroup is invalid.
             NNTPDataError: If the compressed response cannot be decoded.
         """
-
         args = None
         if range is not None:
             args = self.__parse_range(range)
@@ -1032,8 +1066,8 @@ class Reader(object):
         if code != 224:
             raise NNTPReplyError(code, message)
 
-        for line in self.__info_compressed_gen(code, message):
-            yield line.split("\t")
+        for line in self.__info_gen(code, message, True):
+            yield line.rstrip().split("\t")
 
     def xzver(self, range=None):
         """XZVER command.
@@ -1062,11 +1096,11 @@ class Reader(object):
                 selected newsgroup is invalid.
             NNTPDataError: If the compressed response cannot be decoded.
         """
-
         return [x for x in self.xzver_gen(range)]
 
     def xpat_gen(self, header, msgid_range, *pattern):
-
+        """Generator for the XPAT command.
+        """
         args = " ".join(
             [header, self.__parse_msgid_range(msgid_range)] + list(pattern)
         )
@@ -1075,17 +1109,29 @@ class Reader(object):
         if code != 221:
             raise NNTPReplyError(code, message)
 
-        for line in self.__info_gen():
+        for line in self.__info_gen(code, message):
             yield line.strip()
 
     def xpat(self, header, id_range, *pattern):
-
+        """XPAT command.
+        """
         return [x for x in self.xpat_gen(header, id_range, *pattern)]
+    
+    def xfeature_compress_gzip(self, terminator=False):
+        """XFEATURE COMPRESS GZIP command.
+        """
+        args = "TERMINATOR" if terminator else None
 
+        code, message = self.__command("XFEATURE COMPRESS GZIP", args)
+        if code != 290:
+            raise NNTPReplyError(code, message)
+
+        return True
         
 if __name__ == "__main__":
 
     import sys
+    import hashlib
 
     try:
         host = sys.argv[1]
@@ -1100,60 +1146,168 @@ if __name__ == "__main__":
     r = Reader(host, port, username, password, use_ssl=use_ssl)
 
     print "HELP"
-    print r.help()
+    try:
+        print r.help()
+    except NNTPReplyError as e:
+        print e
     print
 
     print "DATE"
-    print r.date()
+    try:
+        print r.date()
+    except NNTPReplyError as e:
+        print e
     print
 
     print "NEWGROUPS"
-    print r.newgroups(datetime.datetime.utcnow() - datetime.timedelta(days=50))
+    try:
+        print r.newgroups(datetime.datetime.utcnow() - datetime.timedelta(days=50))
+    except NNTPReplyError as e:
+        print e
     print
 
-    #print "NEWNEWS"
-    #print r.newnews("alt.binaries.*", datetime.datetime.utcnow() - datetime.timedelta(minutes=1))
-    #print
+    print "NEWNEWS"
+    try:
+        print r.newnews("alt.binaries.*", datetime.datetime.utcnow() - datetime.timedelta(minutes=1))
+    except NNTPReplyError as e:
+        print e
+    print
 
-    #print "LIST"
-    #print "LIST", len(r.list())
-    #print "LIST ACTIVE", len(r.list("ACTIVE"))
-    #print "LIST ACTIVE alt.binaries.*", len(r.list("ACTIVE", "alt.binaries.*"))
-    #print "LIST NEWSGROUPS", len(r.list("NEWSGROUPS"))
-    #print "LIST NEWSGROUPS alt.binaries.*", len(r.list("NEWSGROUPS", "alt.binaries.*"))
-    #print "LIST OVERVIEW.FMT", len(r.list("OVERVIEW.FMT"))
-    #print "LIST EXTENSIONS", r.list("EXTENSIONS")
-    #print
-
-    #print "CAPABILITIES"
-    #print r.capabilities()
-    #print
+    print "CAPABILITIES"
+    try:
+        print r.capabilities()
+    except NNTPReplyError as e:
+        print e
+    print
 
     print "GROUP alt.binaries.boneless"
-    total, first, last, name = r.group("alt.binaries.boneless")
-    print total, first, last, name
+    try:
+        total, first, last, name = r.group("alt.binaries.boneless")
+        print total, first, last, name
+    except NNTPReplyError as e:
+        print e
     print
 
     print "HEAD"
-    print r.head()
+    try:
+        print r.head()
+    except NNTPReplyError as e:
+        print e
     print
 
-    print "XHDR Date", "%d-%d" % (first, first + 10)
-    print r.xhdr("Date", (first, first + 10))
+    print "XHDR Date", "%d-%d" % (last-10, last)
+    try:
+        print r.xhdr("Date", (last-10, last))
+    except NNTPReplyError as e:
+        print e
     print
 
-    print "XZHDR Date", "%d-%d" % (first, first + 10)
-    print r.xzhdr("Date", (first, first + 10))
+    print "XZHDR Date", "%d-%d" % (last-10, last)
+    try:
+        print r.xzhdr("Date", (last-10, last))
+    except NNTPReplyError as e:
+        print e
     print
 
-    print "XOVER" , "%d-" % (last - 10,)
-    print r.xover((last - 10,))
+    print "XOVER" , "%d-%d" % (last-10, last)
+    try:
+        result = r.xover((last-10, last))
+        print "Entries", len(result), "Hash", hashlib.md5(
+            "".join(["".join(x) for x in result])
+        ).hexdigest()
+    except NNTPReplyError as e:
+        print e
     print
 
-    print "XZVER" , "%d-" % (last - 10,)
-    print r.xzver((last - 10,))
+    print "XZVER" , "%d-%d" % (last-10, last)
+    try:
+        result = r.xzver((last-10, last))
+        print "Entries", len(result), "Hash", hashlib.md5(
+            "".join(["".join(x) for x in result])
+        ).hexdigest()
+    except NNTPReplyError as e:
+        print e
     print
 
-    print "XPAT"
-    print r.xpat("Subject", last, "*big.bang*")
+    print "XFEATURE COMPRESS GZIP"
+    try:
+        print r.xfeature_compress_gzip()
+    except NNTPReplyError as e:
+        print e
+    print
+
+    print "XOVER" , "%d-%d" % (last-10, last)
+    try:
+        result = r.xover((last-10, last))
+        print "Entries", len(result), "Hash", hashlib.md5(
+            "".join(["".join(x) for x in result])
+        ).hexdigest()
+    except NNTPReplyError as e:
+        print e
+    print
+
+    print "XFEATURE COMPRESS GZIP TERMINATOR"
+    try:
+        print r.xfeature_compress_gzip()
+    except NNTPReplyError as e:
+        print e
+    print
+
+    print "XOVER" , "%d-%d" % (last-10, last)
+    try:
+        result = r.xover((last-10, last))
+        print "Entries", len(result), "Hash", hashlib.md5(
+            "".join(["".join(x) for x in result])
+        ).hexdigest()
+    except NNTPReplyError as e:
+        print e
+    print
+    
+    print "LIST"
+    try:
+        print "Entries", len(r.list())
+    except NNTPReplyError as e:
+        print e
+    print
+
+    print "LIST ACTIVE"
+    try:
+        print "Entries", len(r.list("ACTIVE"))
+    except NNTPReplyError as e:
+        print e
+    print
+
+    print "LIST ACTIVE alt.binaries.*"
+    try:
+        print "Entries", len(r.list("ACTIVE", "alt.binaries.*"))
+    except NNTPReplyError as e:
+        print e
+    print
+    
+    print "LIST NEWSGROUPS"
+    try:
+        print "Entries", len(r.list("NEWSGROUPS"))
+    except NNTPReplyError as e:
+        print e
+    print
+
+    print "LIST NEWSGROUPS alt.binaries.*"
+    try:
+        print "Entries", len(r.list("NEWSGROUPS", "alt.binaries.*"))
+    except NNTPReplyError as e:
+        print e
+    print
+
+    print "LIST OVERVIEW.FMT"
+    try:
+        print r.list("OVERVIEW.FMT")
+    except NNTPReplyError as e:
+        print e
+    print
+
+    print "LIST EXTENSIONS"
+    try:
+        print r.list("EXTENSIONS")
+    except NNTPReplyError as e:
+        print e
     print
