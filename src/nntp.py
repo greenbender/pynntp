@@ -104,7 +104,7 @@ class Reader(object):
     Note: All commands that use compressed responses can also raise an
         NNTPDataError.
     """
-            
+
     def __init__(self, host, port=119, username="anonymous", password="anonymous", timeout=30, use_ssl=False):
         """Constructor for NNTP Reader.
 
@@ -155,7 +155,7 @@ class Reader(object):
         generator exits.
 
         If there is a line begining with an 'escaped' period then the extra
-        period is trimmed. 
+        period is trimmed.
         """
         while True:
             line = self.__buffer.readline()
@@ -203,8 +203,8 @@ class Reader(object):
         """Reads a command response status.
 
         If there is no response message then the returned status message will
-        be an empty string. 
-        
+        be an empty string.
+
         Raises:
             NNTPProtocolError: If the status line can't be parsed.
             NNTPTemporaryError: For status code 400-499
@@ -226,7 +226,7 @@ class Reader(object):
 
         if len(parts) > 1:
             message = parts[1]
-        
+
         if 400 <= code <= 499:
             raise NNTPTemporaryError(code, message)
 
@@ -351,7 +351,7 @@ class Reader(object):
             A the complete content of a textual response.
         """
         return "".join([x for x in self.__info_plain()])
-   
+
     def __info_gen(self, code, message, compressed=False):
         """Dispatcher for the info generators.
 
@@ -382,7 +382,7 @@ class Reader(object):
             A the complete content of a textual response.
         """
         return "".join([x for x in self.__info_gen(code, message, compressed)])
- 
+
     def __command(self, verb, args=None):
         """Call a command on the server.
 
@@ -441,7 +441,7 @@ class Reader(object):
             if len(obj) > 1:
                 arg += str(obj[1])
             return arg
-        
+
         raise ValueError("Must be an integer or tuple")
 
     @staticmethod
@@ -536,7 +536,7 @@ class Reader(object):
 
     def date(self):
         """DATE command.
-        
+
         Coordinated Universal time from the perspective of the usenet server.
         It can be used to provide information that might be useful when using
         the NEWNEWS command.
@@ -545,7 +545,7 @@ class Reader(object):
 
         Returns:
             The UTC time according to the server as a datetime object.
-        
+
         Raises:
             NNTPDataError: If the timestamp can't be parsed.
         """
@@ -574,7 +574,7 @@ class Reader(object):
         code, message = self.__command("HELP")
         if code != 100:
             raise NNTPReplyError(code, message)
-        
+
         return self.__info(code, message)
 
     def newgroups_gen(self, timestamp):
@@ -609,10 +609,10 @@ class Reader(object):
         code, message = self.__command("NEWGROUPS", args)
         if code != 231:
             raise NNTPReplyError(code, message)
-        
+
         for line in self.__info_gen(code, message):
             yield self.__parse_newsgroup(line)
-    
+
     def newgroups(self, timestamp):
         """NEWGROUPS command.
 
@@ -659,7 +659,7 @@ class Reader(object):
         code, message = self.__command("NEWNEWS", args)
         if code != 230:
             raise NNTPReplyError(code, message)
-        
+
         for line in self.__info_gen(code, message):
             yield line.strip()
 
@@ -698,11 +698,11 @@ class Reader(object):
             cmd = "LIST"
         else:
             cmd = "LIST ACTIVE"
-            
+
         code, message = self.__command(cmd, args)
         if code != 215:
             raise NNTPReplyError(code, message)
-        
+
         for line in self.__info_gen(code, message):
             yield self.__parse_newsgroup(line)
 
@@ -715,7 +715,7 @@ class Reader(object):
         """Generator for the LIST ACTIVE TIMES command.
         """
         raise NotImplementedError()
- 
+
     def list_active_times(self, pattern=None):
         """LIST ACTIVE TIMES command.
         """
@@ -751,7 +751,7 @@ class Reader(object):
             raise NNTPReplyError(code, message)
 
         return self.__info_gen(code, message)
-    
+
     def list_newsgroups(self, pattern=None):
         """LIST NEWSGROUPS command.
         """
@@ -900,7 +900,8 @@ class Reader(object):
 
         return article, ident
 
-    def article(self, msgid_article=None):
+    # TODO: Validate yEnc body
+    def article(self, msgid_article=None, decode=None):
         """ARTICLE command.
         """
         args = None
@@ -908,10 +909,47 @@ class Reader(object):
             args = self.__parse_msgid_article(msgid_article)
 
         code, message = self.__command("ARTICLE", args)
-        if code != 221:
-            raise NNTReplyError(code, message)
+        if code != 220:
+            raise NNTPReplyError(code, message)
 
-        return self.__info(code, message)
+        escape = 0
+        crc32 = 0
+
+        state, headers, body = 0, iodict.IODict(), []
+        for line in self.__info_gen(code, message):
+
+            # headers
+            if state == 0:
+
+                # end of headers
+                if line == "\r\n":
+                    state = 1
+                    continue
+
+                # add header
+                try:
+                    name, value = line.split(":", 1)
+                except ValueError:
+                    raise NNTPDataError("Invalid header")
+                name, value = name.strip(), value.strip()
+                headers[name] = value
+
+                # check for yEnc encoding
+                if decode is None and name.lower() == "subject":
+                    decode = "yEnc" in value
+
+                continue
+
+            # decode body if required
+            if decode:
+                if line.startswith("=y"):
+                    continue
+                line, escape, crc32 = yenc.decode(line, escape, crc32)
+
+            # body
+            body.append(line)
+
+        return headers, "".join(body)
 
     def head(self, msgid_article=None):
         """HEAD command.
@@ -924,7 +962,50 @@ class Reader(object):
         if code != 221:
             raise NNTPReplyError(code, message)
 
-        return self.__info(code, message)
+        headers = iodict.IODict()
+        for line in self.__info_gen(code, message):
+
+            # end of headers
+            if line == "\r\n":
+                break
+
+            # add header
+            try:
+                name, value = line.split(":", 1)
+            except ValueError:
+                raise NNTPDataError("Invalid header")
+            headers[name.strip()] = value.strip()
+
+        return headers
+
+    # TODO: Support yEnc article body validation
+    def body(self, msgid_article=None, decode=False):
+        """BODY command.
+        """
+        args = None
+        if msgid_article is not None:
+            args = self.__parse_msgid_article(msgid_article)
+
+        code, message = self.__command("BODY", args)
+        if code != 222:
+            raise NNTPReplyError(code, message)
+
+        escape = 0
+        crc32 = 0
+
+        body = []
+        for line in self.__info_gen(code, message):
+
+            # decode body if required
+            if decode:
+                if line.startswith("=y"):
+                    continue
+                line, escape, crc32 = yenc.decode(line, escape, crc32)
+
+            # body
+            body.append(line)
+
+        return "".join(body)
 
     def xgtitle(self, pattern=None):
         """XGTITLE command.
@@ -949,7 +1030,7 @@ class Reader(object):
             raise NNTPReplyError(code, message)
 
         return self.__info(code, message)
-    
+
     def xzhdr(self, header, msgid_range=None):
         """XZHDR command.
 
@@ -1116,7 +1197,7 @@ class Reader(object):
         """XPAT command.
         """
         return [x for x in self.xpat_gen(header, id_range, *pattern)]
-    
+
     def xfeature_compress_gzip(self, terminator=False):
         """XFEATURE COMPRESS GZIP command.
         """
@@ -1127,7 +1208,8 @@ class Reader(object):
             raise NNTPReplyError(code, message)
 
         return True
-        
+
+# testing
 if __name__ == "__main__":
 
     import sys
@@ -1262,7 +1344,7 @@ if __name__ == "__main__":
     except NNTPReplyError as e:
         print e
     print
-    
+
     print "LIST"
     try:
         print "Entries", len(r.list())
@@ -1283,7 +1365,7 @@ if __name__ == "__main__":
     except NNTPReplyError as e:
         print e
     print
-    
+
     print "LIST NEWSGROUPS"
     try:
         print "Entries", len(r.list("NEWSGROUPS"))
