@@ -49,7 +49,7 @@ class NNTPReplyError(NNTPError):
         return self.args[1]
 
     def __str__(self):
-        return "%d: %s" % self.args
+        return "%d: %r" % self.args
 
 class NNTPTemporaryError(NNTPReplyError):
     """NNTP temporary errors.
