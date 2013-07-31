@@ -49,7 +49,7 @@ class NNTPReplyError(NNTPError):
         return self.args[1]
 
     def __str__(self):
-        return "%d: %r" % self.args
+        return "%d: %s" % self.args
 
 class NNTPTemporaryError(NNTPReplyError):
     """NNTP temporary errors.
@@ -129,6 +129,7 @@ class Reader(object):
         self.socket.settimeout(timeout)
 
         self.__buffer = fifo.Fifo()
+        self.__generating = False
 
         self.username = username
         self.password = password
@@ -150,22 +151,12 @@ class Reader(object):
         and adds it to the buffer. This process repeats until a line of data
         can be read from the internal buffer. When a line of data is read
         it is yielded.
-
-        A terminating line (line containing single period) is received the
-        generator exits.
-
-        If there is a line begining with an 'escaped' period then the extra
-        period is trimmed.
         """
         while True:
             line = self.__buffer.readline()
             if not line:
                 self.__buffer.write(self.socket.recv(4096))
                 continue
-            if line == ".\r\n":
-                return
-            if line.startswith(".."):
-                yield line[1:]
             yield line
 
     def __buf_gen(self, length=0):
@@ -173,8 +164,8 @@ class Reader(object):
 
         It first attempts to read from the internal buffer. If there is not
         enough data in the internal buffer it then requests more data from the
-        server and adds it to the buffer. This process repeats until a line of
-        unitl there is enough data at which point the data is yielded.
+        server and adds it to the buffer. This process repeats until there is
+        enough data at which point the data is yielded.
 
         Args:
             length: An optional amount of data to retrieve. A length of 0 (the
@@ -192,12 +183,6 @@ class Reader(object):
                 self.__buffer.write(self.socket.recv(4096))
                 continue
             yield buf
-
-    def __drain(self):
-        """Reads lines until a termiating line is recieved.
-        """
-        for line in self.__line_gen():
-            pass
 
     def __status(self):
         """Reads a command response status.
@@ -235,7 +220,69 @@ class Reader(object):
 
         return code, message
 
-    def __info_compressed_yenc_zlib_gen(self):
+    def __info_plain_gen(self):
+        """Generator for the lines of an info (textual) response.
+
+        When a terminating line (line containing single period) is received the
+        generator exits.
+
+        If there is a line begining with an 'escaped' period then the extra
+        period is trimmed.
+        """
+        self.__generating = True
+
+        for line in self.__line_gen():
+            if line == ".\r\n":
+                break
+            if line.startswith(".."):
+                yield line[1:]
+            yield line
+
+        self.__generating = False
+
+    def __info_gzip_gen(self):
+        """Generator for the lines of a compressed info (textual) response.
+
+        Compressed responses are an extension to the NNTP protocol supported by
+        some usenet servers to reduce the bandwidth of heavily used range style
+        commands that can return large amounts of textual data.
+
+        This function handles gzip compressed responses that have the
+        terminating line inside or outside the compressed data. From experience
+        if the 'XFEATURE COMPRESS GZIP' command causes the terminating '.\\r\\n'
+        to follow the compressed data and 'XFEATURE COMPRESS GZIP TERMINATOR'
+        causes the terminator to be the last part of the compressed data (i.e
+        the reply the gzipped version of the original reply - terminating line
+        included)
+
+        This function will produce that same output as the __info_plain_gen()
+        function. In other words it takes care of decoding and decompression.
+        """
+        self.__generating = True
+
+        inflate = zlib.decompressobj(15+32)
+
+        done, buf = False, fifo.Fifo()
+        while not done:
+            try:
+                data = inflate.decompress(next(self.__buf_gen()))
+            except zlib.error:
+                raise NNTPDataError("Decompression failed")
+            if data:
+                buf.write(data)
+            if inflate.unused_data:
+                buf.write(inflate.unused_data)
+            for line in buf:
+                if line == ".\r\n":
+                    done = True
+                    break
+                if line.startswith(".."):
+                    yield line[1:]
+                yield line
+
+        self.__generating = False
+
+    def __info_yenczlib_gen(self):
         """Generator for the lines of a compressed info (textual) response.
 
         Compressed responses are an extension to the NNTP protocol supported by
@@ -248,30 +295,33 @@ class Reader(object):
         This function will produce that same output as the __info_gen()
         function. In other words it takes care of decoding and decompression.
 
-        The usaged principles for the __info_gen() function also apply here.
-
         Raises:
             NNTPDataError: When there is an error parsing the yEnc header or
-                trailer or if the CRC check fails.
+                trailer, if the CRC check fails or decompressing data fails.
         """
+        # uses __info_plain_gen()
+        #self.__generating = True
+
         escape = 0
         dcrc32 = 0
         inflate = zlib.decompressobj(-15)
 
         # header
-        header = next(self.__line_gen())
+        header = next(self.__info_plain_gen())
         if not header.startswith("=ybegin"):
-            self.__drain()
             raise NNTPDataError("Bad yEnc header")
 
         # data
         buf, trailer = fifo.Fifo(), ""
-        for line in self.__line_gen():
+        for line in self.__info_plain_gen():
             if line.startswith("=yend"):
                 trailer = line
                 continue
             data, escape, dcrc32 = yenc.decode(line, escape, dcrc32)
-            data = inflate.decompress(data)
+            try:
+                data = inflate.decompress(data)
+            except zlib.error:
+                raise NNTPDataError("Decompression failed")
             if not data:
                 continue
             buf.write(data)
@@ -291,66 +341,8 @@ class Reader(object):
         if ecrc32 != dcrc32 & 0xffffffff:
             raise NNTPDataError("Bad yEnc CRC")
 
-    def __info_compressed_gzip_gen(self):
-        """Generator for the lines of a compressed info (textual) response.
-
-        Compressed responses are an extension to the NNTP protocol supported by
-        some usenet servers to reduce the bandwidth of heavily used range style
-        commands that can return large amounts of textual data.
-
-        This function handles gzip compressed responses that have the
-        terminating line inside or outside the compressed data. From experience
-        if the 'XFEATURE COMPRESS GZIP' command causes the terminating '.\\r\\n'
-        to follow the compressed data and 'XFEATURE COMPRESS GZIP TERMINATOR'
-        causes the terminator to be the last part of the compressed data (i.e
-        the reply the gzipped version of the original reply - terminating line
-        included)
-
-        This function will produce that same output as the __info_plain_gen()
-        function. In other words it takes care of decoding and decompression.
-
-        The usaged principles for the __info_plain_gen() function also apply here.
-        """
-        inflate = zlib.decompressobj(15+32)
-
-        # data
-        buf = fifo.Fifo()
-        unused = ""
-        for data in self.__buf_gen():
-            data = inflate.decompress(data)
-            unused += inflate.unused_data
-            if data:
-                buf.write(data)
-                for line in buf:
-                    if line == ".\r\n":
-                        return
-                    if line.startswith(".."):
-                        yield line[1:]
-                    yield line
-            if unused == ".\r\n":
-                return
-
-    def __info_plain_gen(self):
-        """Generator for the lines of an info (textual) response.
-
-        For commands that can yield large amounts of data this should be used in
-        preference to __info_plain() so that memory use can be minimised and that
-        the data can be processed in parallel to being received.
-
-        This is equivient to the __line_gen() generator.
-        """
-        return self.__line_gen()
-
-    def __info_plain(self):
-        """The complete content of an info (textual) response.
-
-        This should only used for commands that return small or known amounts of
-        data.
-
-        Returns:
-            A the complete content of a textual response.
-        """
-        return "".join([x for x in self.__info_plain()])
+        # uses __info_plain_gen()
+        #self.__generating = False
 
     def __info_gen(self, code, message, compressed=False):
         """Dispatcher for the info generators.
@@ -367,9 +359,9 @@ class Reader(object):
             An info generator.
         """
         if "COMPRESS=GZIP" in message:
-            return self.__info_compressed_gzip_gen()
+            return self.__info_gzip_gen()
         if compressed:
-            return self.__info_compressed_yenc_zlib_gen()
+            return self.__info_yenczlib_gen()
         return self.__info_plain_gen()
 
     def __info(self, code, message, compressed=False):
@@ -399,6 +391,9 @@ class Reader(object):
         Returns:
             A tuple of status code (as an integer) and status message.
         """
+        if self.__generating:
+            raise NNTPError("Command issued while a generator is active")
+
         cmd = verb
         if args:
             cmd += " " + args
@@ -518,7 +513,8 @@ class Reader(object):
 
         Tells the server to close the connection. After the server acknowledges
         the request to quit the connection is closed both at the server and
-        client.
+        client. Only useful for graceful shutdown. If you are in a generator
+        use close() instead.
 
         Once this method has been called, no other methods of the Reader object
         should be called.
@@ -530,6 +526,15 @@ class Reader(object):
             raise NNTPReplyError(code, message)
 
         self.socket.close()
+
+    def close(self):
+        """Closes the connection at the client.
+
+        Once this method has been called, no other methods of the Reader object
+        should be called.
+        """
+        self.socket.close()
+
 
 
     # information commands
@@ -553,12 +558,9 @@ class Reader(object):
         if code != 111:
             raise NNTPReplyError(code, message)
 
-        try:
-            ts = datetime.datetime.strptime(message, "%Y%m%d%H%M%S")
-        except TypeError:
-            raise NNTPDataError("Bad timestamp")
+        ts = date.datetimeobj(message, fmt="%Y%m%d%H%M%S")
 
-        return ts.replace(tzinfo=date.TZ_GMT)
+        return ts
 
     def help(self):
         """HELP command.
@@ -1227,169 +1229,181 @@ if __name__ == "__main__":
 
     r = Reader(host, port, username, password, use_ssl=use_ssl)
 
-    print "HELP"
     try:
-        print r.help()
-    except NNTPReplyError as e:
-        print e
-    print
+        print "HELP"
+        try:
+            print r.help()
+        except NNTPReplyError as e:
+            print e
+        print
 
-    print "DATE"
-    try:
-        print r.date()
-    except NNTPReplyError as e:
-        print e
-    print
+        print "DATE"
+        try:
+            print r.date()
+        except NNTPReplyError as e:
+            print e
+        print
 
-    print "NEWGROUPS"
-    try:
-        print r.newgroups(datetime.datetime.utcnow() - datetime.timedelta(days=50))
-    except NNTPReplyError as e:
-        print e
-    print
+        print "NEWGROUPS"
+        try:
+            print r.newgroups(datetime.datetime.utcnow() - datetime.timedelta(days=50))
+        except NNTPReplyError as e:
+            print e
+        print
 
-    print "NEWNEWS"
-    try:
-        print r.newnews("alt.binaries.*", datetime.datetime.utcnow() - datetime.timedelta(minutes=1))
-    except NNTPReplyError as e:
-        print e
-    print
+        print "NEWNEWS"
+        try:
+            print r.newnews("alt.binaries.*", datetime.datetime.utcnow() - datetime.timedelta(minutes=1))
+        except NNTPReplyError as e:
+            print e
+        print
 
-    print "CAPABILITIES"
-    try:
-        print r.capabilities()
-    except NNTPReplyError as e:
-        print e
-    print
+        print "CAPABILITIES"
+        try:
+            print r.capabilities()
+        except NNTPReplyError as e:
+            print e
+        print
 
-    print "GROUP alt.binaries.boneless"
-    try:
-        total, first, last, name = r.group("alt.binaries.boneless")
-        print total, first, last, name
-    except NNTPReplyError as e:
-        print e
-    print
+        print "GROUP alt.binaries.boneless"
+        try:
+            total, first, last, name = r.group("alt.binaries.boneless")
+            print total, first, last, name
+        except NNTPReplyError as e:
+            print e
+        print
 
-    print "HEAD"
-    try:
-        print r.head()
-    except NNTPReplyError as e:
-        print e
-    print
+        print "HEAD"
+        try:
+            print r.head()
+        except NNTPReplyError as e:
+            print e
+        print
 
-    print "XHDR Date", "%d-%d" % (last-10, last)
-    try:
-        print r.xhdr("Date", (last-10, last))
-    except NNTPReplyError as e:
-        print e
-    print
+        print "XHDR Date", "%d-%d" % (last-10, last)
+        try:
+            print r.xhdr("Date", (last-10, last))
+        except NNTPReplyError as e:
+            print e
+        print
 
-    print "XZHDR Date", "%d-%d" % (last-10, last)
-    try:
-        print r.xzhdr("Date", (last-10, last))
-    except NNTPReplyError as e:
-        print e
-    print
+        print "XZHDR Date", "%d-%d" % (last-10, last)
+        try:
+            print r.xzhdr("Date", (last-10, last))
+        except NNTPReplyError as e:
+            print e
+        print
 
-    print "XOVER" , "%d-%d" % (last-10, last)
-    try:
-        result = r.xover((last-10, last))
-        print "Entries", len(result), "Hash", hashlib.md5(
-            "".join(["".join(x) for x in result])
-        ).hexdigest()
-    except NNTPReplyError as e:
-        print e
-    print
+        print "XOVER" , "%d-%d" % (last-10, last)
+        try:
+            result = r.xover((last-10, last))
+            print "Entries", len(result), "Hash", hashlib.md5(
+                "".join(["".join(x) for x in result])
+            ).hexdigest()
+        except NNTPReplyError as e:
+            print e
+        print
 
-    print "XZVER" , "%d-%d" % (last-10, last)
-    try:
-        result = r.xzver((last-10, last))
-        print "Entries", len(result), "Hash", hashlib.md5(
-            "".join(["".join(x) for x in result])
-        ).hexdigest()
-    except NNTPReplyError as e:
-        print e
-    print
+        print "XZVER" , "%d-%d" % (last-10, last)
+        try:
+            result = r.xzver((last-10, last))
+            print "Entries", len(result), "Hash", hashlib.md5(
+                "".join(["".join(x) for x in result])
+            ).hexdigest()
+        except NNTPReplyError as e:
+            print e
+        print
 
-    print "XFEATURE COMPRESS GZIP"
-    try:
-        print r.xfeature_compress_gzip()
-    except NNTPReplyError as e:
-        print e
-    print
+        print "XFEATURE COMPRESS GZIP"
+        try:
+            print r.xfeature_compress_gzip()
+        except NNTPReplyError as e:
+            print e
+        print
 
-    print "XOVER" , "%d-%d" % (last-10, last)
-    try:
-        result = r.xover((last-10, last))
-        print "Entries", len(result), "Hash", hashlib.md5(
-            "".join(["".join(x) for x in result])
-        ).hexdigest()
-    except NNTPReplyError as e:
-        print e
-    print
+        print "XOVER" , "%d-%d" % (last-10, last)
+        try:
+            result = r.xover((last-10, last))
+            print "Entries", len(result), "Hash", hashlib.md5(
+                "".join(["".join(x) for x in result])
+            ).hexdigest()
+        except NNTPReplyError as e:
+            print e
+        print
 
-    print "XFEATURE COMPRESS GZIP TERMINATOR"
-    try:
-        print r.xfeature_compress_gzip()
-    except NNTPReplyError as e:
-        print e
-    print
+        print "XFEATURE COMPRESS GZIP TERMINATOR"
+        try:
+            print r.xfeature_compress_gzip()
+        except NNTPReplyError as e:
+            print e
+        print
 
-    print "XOVER" , "%d-%d" % (last-10, last)
-    try:
-        result = r.xover((last-10, last))
-        print "Entries", len(result), "Hash", hashlib.md5(
-            "".join(["".join(x) for x in result])
-        ).hexdigest()
-    except NNTPReplyError as e:
-        print e
-    print
+        print "XOVER" , "%d-%d" % (last-10, last)
+        try:
+            result = r.xover((last-10, last))
+            print "Entries", len(result), "Hash", hashlib.md5(
+                "".join(["".join(x) for x in result])
+            ).hexdigest()
+        except NNTPReplyError as e:
+            print e
+        print
 
-    print "LIST"
-    try:
-        print "Entries", len(r.list())
-    except NNTPReplyError as e:
-        print e
-    print
+        print "LIST"
+        try:
+            print "Entries", len(r.list())
+        except NNTPReplyError as e:
+            print e
+        print
 
-    print "LIST ACTIVE"
-    try:
-        print "Entries", len(r.list("ACTIVE"))
-    except NNTPReplyError as e:
-        print e
-    print
+        print "LIST ACTIVE"
+        try:
+            print "Entries", len(r.list("ACTIVE"))
+        except NNTPReplyError as e:
+            print e
+        print
 
-    print "LIST ACTIVE alt.binaries.*"
-    try:
-        print "Entries", len(r.list("ACTIVE", "alt.binaries.*"))
-    except NNTPReplyError as e:
-        print e
-    print
+        print "LIST ACTIVE alt.binaries.*"
+        try:
+            print "Entries", len(r.list("ACTIVE", "alt.binaries.*"))
+        except NNTPReplyError as e:
+            print e
+        print
 
-    print "LIST NEWSGROUPS"
-    try:
-        print "Entries", len(r.list("NEWSGROUPS"))
-    except NNTPReplyError as e:
-        print e
-    print
+        print "LIST NEWSGROUPS"
+        try:
+            print "Entries", len(r.list("NEWSGROUPS"))
+        except NNTPReplyError as e:
+            print e
+        print
 
-    print "LIST NEWSGROUPS alt.binaries.*"
-    try:
-        print "Entries", len(r.list("NEWSGROUPS", "alt.binaries.*"))
-    except NNTPReplyError as e:
-        print e
-    print
+        print "LIST NEWSGROUPS alt.binaries.*"
+        try:
+            print "Entries", len(r.list("NEWSGROUPS", "alt.binaries.*"))
+        except NNTPReplyError as e:
+            print e
+        print
 
-    print "LIST OVERVIEW.FMT"
-    try:
-        print r.list("OVERVIEW.FMT")
-    except NNTPReplyError as e:
-        print e
-    print
+        print "LIST OVERVIEW.FMT"
+        try:
+            print r.list("OVERVIEW.FMT")
+        except NNTPReplyError as e:
+            print e
+        print
 
-    print "LIST EXTENSIONS"
-    try:
-        print r.list("EXTENSIONS")
-    except NNTPReplyError as e:
-        print e
-    print
+        print "LIST EXTENSIONS"
+        try:
+            print r.list("EXTENSIONS")
+        except NNTPReplyError as e:
+            print e
+        print
+
+        print "QUIT"
+        try:
+            r.quit()
+        except NNTPReplyError as e:
+            print e
+        print
+
+    finally:
+		print "CLOSING CONNECTION"
+		r.close()
