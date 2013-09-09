@@ -1405,5 +1405,5 @@ if __name__ == "__main__":
         print
 
     finally:
-		print "CLOSING CONNECTION"
-		r.close()
+        print "CLOSING CONNECTION"
+        r.close()
