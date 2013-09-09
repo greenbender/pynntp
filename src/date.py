@@ -378,7 +378,7 @@ def datetimeobj(value, fmt=None):
     if 30 <= l <= 31:
         # '%a, %d %b %Y %H:%M:%S %z'
         try:
-            return datetimeobj_a__d_b_Y_H_M_s_z(value)
+            return datetimeobj_a__d_b_Y_H_M_S_z(value)
         except (KeyError, ValueError):
             pass
 
