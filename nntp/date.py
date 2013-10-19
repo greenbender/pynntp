@@ -399,6 +399,8 @@ if __name__ == "__main__":
     import sys
     import timeit
 
+    log = sys.stdout.write
+
     times = (
         datetime.datetime.now(TZ_UTC),
         datetime.datetime.now(TZ_GMT),
@@ -408,7 +410,7 @@ if __name__ == "__main__":
 
     # check timezones
     for t in times:
-        print t.strftime("%Y-%m-%d %H:%M:%S %Z")
+        log("%s\n" % t.strftime("%Y-%m-%d %H:%M:%S %Z"))
 
     # TODO validate values (properly)
 
@@ -469,11 +471,10 @@ if __name__ == "__main__":
     )
     iters = 100000
     for v in values:
-        print "%(name)s (%(fmt)s)" % v
+        log("%(name)s (%(fmt)s)\n" % v)
         for t in tests:
-            print "  %(name)-52s" % t,
-            sys.stdout.flush()
+            log("  %(name)-52s" % t)
             elapsed = timeit.timeit(t["test"] % v, t["setup"], number=iters)
-            print "%0.3f sec (%d loops @ %0.3f usec)" % (
+            log("%0.3f sec (%d loops @ %0.3f usec)\n" % (
                 elapsed, iters, (elapsed/iters)*1000000
-            )
+            ))

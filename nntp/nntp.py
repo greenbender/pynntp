@@ -1218,6 +1218,8 @@ if __name__ == "__main__":
     import sys
     import hashlib
 
+    log = sys.stdout.write
+
     try:
         host = sys.argv[1]
         port = int(sys.argv[2])
@@ -1225,186 +1227,178 @@ if __name__ == "__main__":
         password = sys.argv[4]
         use_ssl = int(sys.argv[5])
     except:
-        print "%s <host> <port> <username> <password> <ssl(0|1)>" % sys.argv[0]
+        log("%s <host> <port> <username> <password> <ssl(0|1)>\n" % sys.argv[0])
         sys.exit(1)
 
     nntp_client = NNTPClient(host, port, username, password, use_ssl=use_ssl)
 
     try:
-        print "HELP"
+        log("HELP\n")
         try:
-            print nntp_client.help()
+            log("%s\n" % nntp_client.help())
         except NNTPReplyError as e:
-            print e
-        print
+            log("%s\n" % e)
+        log("\n")
 
-        print "DATE"
+        log("DATE\n")
         try:
-            print nntp_client.date()
+            log("%s\n" % nntp_client.date())
         except NNTPReplyError as e:
-            print e
-        print
+            log("%s\n" % e)
+        log("\n")
 
-        print "NEWGROUPS"
+        log("NEWGROUPS\n")
         try:
-            print nntp_client.newgroups(datetime.datetime.utcnow() - datetime.timedelta(days=50))
+            log("%s\n" % nntp_client.newgroups(datetime.datetime.utcnow() - datetime.timedelta(days=50)))
         except NNTPReplyError as e:
-            print e
-        print
+            log("%s\n" % e)
+        log("\n")
 
-        print "NEWNEWS"
+        log("NEWNEWS\n")
         try:
-            print nntp_client.newnews("alt.binaries.*", datetime.datetime.utcnow() - datetime.timedelta(minutes=1))
+            log("%s\n" % nntp_client.newnews("alt.binaries.*", datetime.datetime.utcnow() - datetime.timedelta(minutes=1)))
         except NNTPReplyError as e:
-            print e
-        print
+            log("%s\n" % e)
+        log("\n")
 
-        print "CAPABILITIES"
+        log("CAPABILITIES\n")
         try:
-            print nntp_client.capabilities()
+            log("%s\n" % nntp_client.capabilities())
         except NNTPReplyError as e:
-            print e
-        print
+            log("%s\n" % e)
+        log("\n")
 
-        print "GROUP alt.binaries.boneless"
+        log("GROUP alt.binaries.boneless\n")
         try:
             total, first, last, name = nntp_client.group("alt.binaries.boneless")
-            print total, first, last, name
+            log("%d %d %d %s\n" % (total, first, last, name))
         except NNTPReplyError as e:
-            print e
-        print
+            log("%s\n" % e)
+        log("\n")
 
-        print "HEAD"
+        log("HEAD\n")
         try:
-            print nntp_client.head(last)
+            log("%s\n" % nntp_client.head(last))
         except NNTPReplyError as e:
-            print e
-        print
+            log("%s\n" % e)
+        log("\n")
 
-        print "XHDR Date", "%d-%d" % (last-10, last)
+        log("XHDR Date %d-%d\n" % (last-10, last))
         try:
-            print nntp_client.xhdr("Date", (last-10, last))
+            log("%s\n" % nntp_client.xhdr("Date", (last-10, last)))
         except NNTPReplyError as e:
-            print e
-        print
+            log("%s\n" % e)
+        log("\n")
 
-        print "XZHDR Date", "%d-%d" % (last-10, last)
+        log("XZHDR Date %d-%d\n" % (last-10, last))
         try:
-            print nntp_client.xzhdr("Date", (last-10, last))
+            log("%s\n" % nntp_client.xzhdr("Date", (last-10, last)))
         except NNTPReplyError as e:
-            print e
-        print
+            log("%s\n" % e)
+        log("\n")
 
-        print "XOVER" , "%d-%d" % (last-10, last)
+        log("XOVER %d-%d\n" % (last-10, last))
         try:
             result = nntp_client.xover((last-10, last))
-            print "Entries", len(result), "Hash", hashlib.md5(
-                "".join(["".join(x) for x in result])
-            ).hexdigest()
+            log("Entries %d Hash %s\n" % (len(result), hashlib.md5("".join(["".join(x) for x in result])).hexdigest()))
         except NNTPReplyError as e:
-            print e
-        print
+            log("%s\n" % e)
+        log("\n")
 
-        print "XZVER" , "%d-%d" % (last-10, last)
+        log("XZVER %d-%d\n" % (last-10, last))
         try:
             result = nntp_client.xzver((last-10, last))
-            print "Entries", len(result), "Hash", hashlib.md5(
-                "".join(["".join(x) for x in result])
-            ).hexdigest()
+            log("Entries %d Hash %s\n" % (len(result), hashlib.md5("".join(["".join(x) for x in result])).hexdigest()))
         except NNTPReplyError as e:
-            print e
-        print
+            log("%s\n" % e)
+        log("\n")
 
-        print "XFEATURE COMPRESS GZIP"
+        log("XFEATURE COMPRESS GZIP\n")
         try:
-            print nntp_client.xfeature_compress_gzip()
+            log("%s\n" % nntp_client.xfeature_compress_gzip())
         except NNTPReplyError as e:
-            print e
-        print
+            log("%s\n" % e)
+        log("\n")
 
-        print "XOVER" , "%d-%d" % (last-10, last)
+        log("XOVER %d-%d\n" % (last-10, last))
         try:
             result = nntp_client.xover((last-10, last))
-            print "Entries", len(result), "Hash", hashlib.md5(
-                "".join(["".join(x) for x in result])
-            ).hexdigest()
+            log("Entries %d Hash %s\n" % (len(result), hashlib.md5("".join(["".join(x) for x in result])).hexdigest()))
         except NNTPReplyError as e:
-            print e
-        print
+            log("%s\n" % e)
+        log("\n")
 
-        print "XFEATURE COMPRESS GZIP TERMINATOR"
+        log("XFEATURE COMPRESS GZIP TERMINATOR\n")
         try:
-            print nntp_client.xfeature_compress_gzip()
+            log("%s\n" % nntp_client.xfeature_compress_gzip())
         except NNTPReplyError as e:
-            print e
-        print
+            log("%s\n" % e)
+        log("\n")
 
-        print "XOVER" , "%d-%d" % (last-10, last)
+        log("XOVER %d-%d\n" % (last-10, last))
         try:
             result = nntp_client.xover((last-10, last))
-            print "Entries", len(result), "Hash", hashlib.md5(
-                "".join(["".join(x) for x in result])
-            ).hexdigest()
+            log("Entries %d Hash %s\n" % (len(result), hashlib.md5("".join(["".join(x) for x in result])).hexdigest()))
         except NNTPReplyError as e:
-            print e
-        print
+            log("%s\n" % e)
+        log("\n")
 
-        print "LIST"
+        log("LIST\n")
         try:
-            print "Entries", len(nntp_client.list())
+            log("Entries %d\n" % len(nntp_client.list()))
         except NNTPReplyError as e:
-            print e
-        print
+            log("%s\n" % e)
+        log("\n")
 
-        print "LIST ACTIVE"
+        log("LIST ACTIVE\n")
         try:
-            print "Entries", len(nntp_client.list("ACTIVE"))
+            log("Entries %d\n" % len(nntp_client.list("ACTIVE")))
         except NNTPReplyError as e:
-            print e
-        print
+            log("%s\n" % e)
+        log("\n")
 
-        print "LIST ACTIVE alt.binaries.*"
+        log("LIST ACTIVE alt.binaries.*\n")
         try:
-            print "Entries", len(nntp_client.list("ACTIVE", "alt.binaries.*"))
+            log("Entries %d\n" % len(nntp_client.list("ACTIVE", "alt.binaries.*")))
         except NNTPReplyError as e:
-            print e
-        print
+            log("%s\n" % e)
+        log("\n")
 
-        print "LIST NEWSGROUPS"
+        log("LIST NEWSGROUPS\n")
         try:
-            print "Entries", len(nntp_client.list("NEWSGROUPS"))
+            log("Entries %d\n" % len(nntp_client.list("NEWSGROUPS")))
         except NNTPReplyError as e:
-            print e
-        print
+            log("%s\n" % e)
+        log("\n")
 
-        print "LIST NEWSGROUPS alt.binaries.*"
+        log("LIST NEWSGROUPS alt.binaries.*\n")
         try:
-            print "Entries", len(nntp_client.list("NEWSGROUPS", "alt.binaries.*"))
+            log("Entries %d\n" % len(nntp_client.list("NEWSGROUPS", "alt.binaries.*")))
         except NNTPReplyError as e:
-            print e
-        print
+            log("%s\n" % e)
+        log("\n")
 
-        print "LIST OVERVIEW.FMT"
+        log("LIST OVERVIEW.FMT\n")
         try:
-            print nntp_client.list("OVERVIEW.FMT")
+            log("%s\n" % nntp_client.list("OVERVIEW.FMT"))
         except NNTPReplyError as e:
-            print e
-        print
+            log("%s\n" % e)
+        log("\n")
 
-        print "LIST EXTENSIONS"
+        log("LIST EXTENSIONS\n")
         try:
-            print nntp_client.list("EXTENSIONS")
+            log("%s\n" % nntp_client.list("EXTENSIONS"))
         except NNTPReplyError as e:
-            print e
-        print
+            log("%s\n" % e)
+        log("\n")
 
-        print "QUIT"
+        log("QUIT\n")
         try:
             nntp_client.quit()
         except NNTPReplyError as e:
-            print e
-        print
+            log("%s\n" % e)
+        log("\n")
 
     finally:
-        print "CLOSING CONNECTION"
+        log("CLOSING CONNECTION\n")
         nntp_client.close()
