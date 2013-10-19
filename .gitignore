@@ -5,4 +5,7 @@
 # python compiled
 *.pyc
 
-build
+# distutils stuff
+build/
+dist/
+MANIFEST
