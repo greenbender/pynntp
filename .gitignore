@@ -4,3 +4,5 @@
 
 # python compiled
 *.pyc
+
+build
