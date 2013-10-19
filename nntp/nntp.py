@@ -81,8 +81,8 @@ class NNTPDataError(NNTPError):
     pass
 
 
-class Reader(object):
-    """NNTP Reader.
+class NNTPClient(object):
+    """NNTP NNTPClient.
 
     Implements many of the commands that are commonly used by current usenet
     servers. Including handling commands that use compressed responses.
@@ -105,8 +105,8 @@ class Reader(object):
         NNTPDataError.
     """
 
-    def __init__(self, host, port=119, username="anonymous", password="anonymous", timeout=30, use_ssl=False):
-        """Constructor for NNTP Reader.
+    def __init__(self, host, port=119, username="anonymous", password="anonymous", timeout=30, use_ssl=False, reader=True):
+        """Constructor for NNTP NNTPClient.
 
         Connects to usenet server and enters reader mode.
 
@@ -141,7 +141,8 @@ class Reader(object):
             raise NNTPReplyError(code, message)
 
         # reader
-        self.mode_reader()
+        if reader:
+            self.mode_reader()
 
     def __line_gen(self):
         """Generator that reads a line of data from the server.
@@ -446,7 +447,7 @@ class Reader(object):
         if isinstance(obj, basestring):
             return obj
 
-        return Reader.__parse_range(obj)
+        return NNTPClient.__parse_range(obj)
 
     @staticmethod
     def __parse_newsgroup(line):
@@ -516,7 +517,7 @@ class Reader(object):
         client. Only useful for graceful shutdown. If you are in a generator
         use close() instead.
 
-        Once this method has been called, no other methods of the Reader object
+        Once this method has been called, no other methods of the NNTPClient object
         should be called.
 
         See <http://tools.ietf.org/html/rfc3977#section-5.4>
@@ -530,7 +531,7 @@ class Reader(object):
     def close(self):
         """Closes the connection at the client.
 
-        Once this method has been called, no other methods of the Reader object
+        Once this method has been called, no other methods of the NNTPClient object
         should be called.
         """
         self.socket.close()
@@ -1227,47 +1228,47 @@ if __name__ == "__main__":
         print "%s <host> <port> <username> <password> <ssl(0|1)>" % sys.argv[0]
         sys.exit(1)
 
-    r = Reader(host, port, username, password, use_ssl=use_ssl)
+    nntp_client = NNTPClient(host, port, username, password, use_ssl=use_ssl)
 
     try:
         print "HELP"
         try:
-            print r.help()
+            print nntp_client.help()
         except NNTPReplyError as e:
             print e
         print
 
         print "DATE"
         try:
-            print r.date()
+            print nntp_client.date()
         except NNTPReplyError as e:
             print e
         print
 
         print "NEWGROUPS"
         try:
-            print r.newgroups(datetime.datetime.utcnow() - datetime.timedelta(days=50))
+            print nntp_client.newgroups(datetime.datetime.utcnow() - datetime.timedelta(days=50))
         except NNTPReplyError as e:
             print e
         print
 
         print "NEWNEWS"
         try:
-            print r.newnews("alt.binaries.*", datetime.datetime.utcnow() - datetime.timedelta(minutes=1))
+            print nntp_client.newnews("alt.binaries.*", datetime.datetime.utcnow() - datetime.timedelta(minutes=1))
         except NNTPReplyError as e:
             print e
         print
 
         print "CAPABILITIES"
         try:
-            print r.capabilities()
+            print nntp_client.capabilities()
         except NNTPReplyError as e:
             print e
         print
 
         print "GROUP alt.binaries.boneless"
         try:
-            total, first, last, name = r.group("alt.binaries.boneless")
+            total, first, last, name = nntp_client.group("alt.binaries.boneless")
             print total, first, last, name
         except NNTPReplyError as e:
             print e
@@ -1275,28 +1276,28 @@ if __name__ == "__main__":
 
         print "HEAD"
         try:
-            print r.head()
+            print nntp_client.head(last)
         except NNTPReplyError as e:
             print e
         print
 
         print "XHDR Date", "%d-%d" % (last-10, last)
         try:
-            print r.xhdr("Date", (last-10, last))
+            print nntp_client.xhdr("Date", (last-10, last))
         except NNTPReplyError as e:
             print e
         print
 
         print "XZHDR Date", "%d-%d" % (last-10, last)
         try:
-            print r.xzhdr("Date", (last-10, last))
+            print nntp_client.xzhdr("Date", (last-10, last))
         except NNTPReplyError as e:
             print e
         print
 
         print "XOVER" , "%d-%d" % (last-10, last)
         try:
-            result = r.xover((last-10, last))
+            result = nntp_client.xover((last-10, last))
             print "Entries", len(result), "Hash", hashlib.md5(
                 "".join(["".join(x) for x in result])
             ).hexdigest()
@@ -1306,7 +1307,7 @@ if __name__ == "__main__":
 
         print "XZVER" , "%d-%d" % (last-10, last)
         try:
-            result = r.xzver((last-10, last))
+            result = nntp_client.xzver((last-10, last))
             print "Entries", len(result), "Hash", hashlib.md5(
                 "".join(["".join(x) for x in result])
             ).hexdigest()
@@ -1316,14 +1317,14 @@ if __name__ == "__main__":
 
         print "XFEATURE COMPRESS GZIP"
         try:
-            print r.xfeature_compress_gzip()
+            print nntp_client.xfeature_compress_gzip()
         except NNTPReplyError as e:
             print e
         print
 
         print "XOVER" , "%d-%d" % (last-10, last)
         try:
-            result = r.xover((last-10, last))
+            result = nntp_client.xover((last-10, last))
             print "Entries", len(result), "Hash", hashlib.md5(
                 "".join(["".join(x) for x in result])
             ).hexdigest()
@@ -1333,14 +1334,14 @@ if __name__ == "__main__":
 
         print "XFEATURE COMPRESS GZIP TERMINATOR"
         try:
-            print r.xfeature_compress_gzip()
+            print nntp_client.xfeature_compress_gzip()
         except NNTPReplyError as e:
             print e
         print
 
         print "XOVER" , "%d-%d" % (last-10, last)
         try:
-            result = r.xover((last-10, last))
+            result = nntp_client.xover((last-10, last))
             print "Entries", len(result), "Hash", hashlib.md5(
                 "".join(["".join(x) for x in result])
             ).hexdigest()
@@ -1350,60 +1351,60 @@ if __name__ == "__main__":
 
         print "LIST"
         try:
-            print "Entries", len(r.list())
+            print "Entries", len(nntp_client.list())
         except NNTPReplyError as e:
             print e
         print
 
         print "LIST ACTIVE"
         try:
-            print "Entries", len(r.list("ACTIVE"))
+            print "Entries", len(nntp_client.list("ACTIVE"))
         except NNTPReplyError as e:
             print e
         print
 
         print "LIST ACTIVE alt.binaries.*"
         try:
-            print "Entries", len(r.list("ACTIVE", "alt.binaries.*"))
+            print "Entries", len(nntp_client.list("ACTIVE", "alt.binaries.*"))
         except NNTPReplyError as e:
             print e
         print
 
         print "LIST NEWSGROUPS"
         try:
-            print "Entries", len(r.list("NEWSGROUPS"))
+            print "Entries", len(nntp_client.list("NEWSGROUPS"))
         except NNTPReplyError as e:
             print e
         print
 
         print "LIST NEWSGROUPS alt.binaries.*"
         try:
-            print "Entries", len(r.list("NEWSGROUPS", "alt.binaries.*"))
+            print "Entries", len(nntp_client.list("NEWSGROUPS", "alt.binaries.*"))
         except NNTPReplyError as e:
             print e
         print
 
         print "LIST OVERVIEW.FMT"
         try:
-            print r.list("OVERVIEW.FMT")
+            print nntp_client.list("OVERVIEW.FMT")
         except NNTPReplyError as e:
             print e
         print
 
         print "LIST EXTENSIONS"
         try:
-            print r.list("EXTENSIONS")
+            print nntp_client.list("EXTENSIONS")
         except NNTPReplyError as e:
             print e
         print
 
         print "QUIT"
         try:
-            r.quit()
+            nntp_client.quit()
         except NNTPReplyError as e:
             print e
         print
 
     finally:
         print "CLOSING CONNECTION"
-        r.close()
+        nntp_client.close()
