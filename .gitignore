@@ -5,7 +5,8 @@
 # python compiled
 *.pyc
 
-# distutils stuff
+# setuptools stuff
 build/
 dist/
 MANIFEST
+nntp.egg-info/

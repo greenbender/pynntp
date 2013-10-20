@@ -1,11 +1,13 @@
-from distutils.core import setup
+from setuptools import setup
 
 setup(
-    name='pynntp',
-    version='0.8.1',
+    name='nntp',
+    version='0.8.2',
     description='NNTP Library (including compressed headers)',
     author='Byron Platt',
     author_email='byron.platt@gmail.com',
+    license='GPL3',
     url='https://github.com/greenbender/pynntp',
-    packages=['nntp']
+    packages=['nntp'],
+    install_requires=['dateutils'],
 )
