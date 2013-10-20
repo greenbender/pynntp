@@ -18,12 +18,12 @@ Example
 -------
 
     >>> import nntp
-    >>> reader = nntp.Reader("usenet-host.com", 443, "user", "password", use_ssl=True)
-    >>> reader.date()
+    >>> nntp_client = nntp.NNTPClient("usenet-host.com", 443, "user", "password", use_ssl=True)
+    >>> nntp_client.date()
     datetime.datetime(2013, 10, 19, 6, 11, 41, tzinfo=_tzgmt())
-    >>> reader.xfeature_compress_gzip()
+    >>> nntp_client.xfeature_compress_gzip()
     True
-    >>> reader.date()
+    >>> nntp_client.date()
     datetime.datetime(2013, 10, 19, 6, 13, 3, tzinfo=_tzgmt())
 
 
