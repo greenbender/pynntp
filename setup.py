@@ -1,7 +1,7 @@
 from setuptools import setup
 
 setup(
-    name='nntp',
+    name='pynntp',
     version='0.8.2',
     description='NNTP Library (including compressed headers)',
     author='Byron Platt',
