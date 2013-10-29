@@ -9,4 +9,4 @@
 build/
 dist/
 MANIFEST
-nntp.egg-info/
+pynntp.egg-info/
