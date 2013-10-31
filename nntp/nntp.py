@@ -32,6 +32,14 @@ class NNTPError(Exception):
     """
     pass
 
+class NNTPSyncError(NNTPError):
+    """NNTP sync errors.
+
+    Generally raised when a command is issued while another command it still
+    active.
+    """
+    pass
+
 class NNTPReplyError(NNTPError):
     """NNTP response status errors.
     """
@@ -144,6 +152,16 @@ class NNTPClient(object):
         if reader:
             self.mode_reader()
 
+    def __recv(self, size=4096):
+        """Reads data from the socket.
+
+        Raises: NNTPError when connection times out or read from socket fails.
+        """
+        data = self.socket.recv(size)
+        if not data:
+            raise NNTPError("Failed to read from socket")
+        self.__buffer.write(data)
+
     def __line_gen(self):
         """Generator that reads a line of data from the server.
 
@@ -156,7 +174,7 @@ class NNTPClient(object):
         while True:
             line = self.__buffer.readline()
             if not line:
-                self.__buffer.write(self.socket.recv(4096))
+                self.__recv()
                 continue
             yield line
 
@@ -181,7 +199,7 @@ class NNTPClient(object):
         while True:
             buf = self.__buffer.read(length)
             if not buf:
-                self.__buffer.write(self.socket.recv(4096))
+                self.__recv()
                 continue
             yield buf
 
@@ -393,7 +411,7 @@ class NNTPClient(object):
             A tuple of status code (as an integer) and status message.
         """
         if self.__generating:
-            raise NNTPError("Command issued while a generator is active")
+            raise NNTPSyncError("Command issued while a generator is active")
 
         cmd = verb
         if args:
