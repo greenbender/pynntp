@@ -933,6 +933,13 @@ class NNTPClient(object):
         if code != 220:
             raise NNTPReplyError(code, message)
 
+        parts = message.split(None, 1)
+
+        try:
+            articleno = int(parts[0])
+        except ValueError:
+            raise NNTPProtocolError(message)
+
         escape = 0
         crc32 = 0
 
@@ -970,7 +977,7 @@ class NNTPClient(object):
             # body
             body.append(line)
 
-        return headers, "".join(body)
+        return articleno, headers, "".join(body)
 
     def head(self, msgid_article=None):
         """HEAD command.
@@ -1297,6 +1304,30 @@ if __name__ == "__main__":
         log("HEAD\n")
         try:
             log("%s\n" % nntp_client.head(last))
+        except NNTPReplyError as e:
+            log("%s\n" % e)
+        log("\n")
+
+        log("BODY\n")
+        try:
+            result = nntp_client.body(last)
+            log("Hash %s\n" % hashlib.md5(result).hexdigest())
+        except NNTPReplyError as e:
+            log("%s\n" % e)
+        log("\n")
+
+        log("ARTICLE\n")
+        try:
+            result = nntp_client.article(last, False)
+            log("%d\n%s\nHash %s\n" % (result[0], result[1], hashlib.md5(result[2]).hexdigest()))
+        except NNTPReplyError as e:
+            log("%s\n" % e)
+        log("\n")
+
+        log("ARTICLE (auto yEnc decode)\n")
+        try:
+            result = nntp_client.article(last)
+            log("%d\n%s\nHash %s\n" % (result[0], result[1], hashlib.md5(result[2]).hexdigest()))
         except NNTPReplyError as e:
             log("%s\n" % e)
         log("\n")
