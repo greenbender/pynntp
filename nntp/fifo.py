@@ -23,9 +23,10 @@ _DISCARD_SIZE = 0xffff
 
 class Fifo(object):
 
-    def __init__(self, data=""):
+    def __init__(self, data="", eol="\r\n"):
 
         self.buf = data
+        self.eol = eol
         self.buflist = []
         self.pos = 0
 
@@ -49,7 +50,7 @@ class Fifo(object):
         self.buflist = []
 
     def clear(self):
-        
+
         self.buf = ""
         self.buflist = []
         self.pos = 0
@@ -77,11 +78,11 @@ class Fifo(object):
 
         self.__append()
 
-        i = self.buf.find("\r\n", self.pos)
+        i = self.buf.find(self.eol, self.pos)
         if i < 0:
             return ""
 
-        newpos = i + 2
+        newpos = i + len(self.eol)
         data = self.buf[self.pos:newpos]
         self.pos = newpos
         self.__discard()
@@ -120,11 +121,11 @@ class Fifo(object):
 
         self.__append()
 
-        i = self.buf.find("\r\n", self.pos)
+        i = self.buf.find(self.eol, self.pos)
         if i < 0:
             return ""
 
-        newpos = i + 2
+        newpos = i + len(self.eol)
         return self.buf[self.pos:newpos]
 
     def peekuntil(self, token, size=0):

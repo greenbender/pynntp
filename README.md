@@ -39,6 +39,7 @@ NNTP commands that are currently supported include:
 * NEWGROUPS (generator)
 * NEWNEWS (generator)
 * LIST ACTIVE (generator)
+* LIST ACTIVE.TIMES (generator)
 * LIST NEWSGROUPS (generator)
 * LIST OVERVIEW.FMT (generator)
 * LIST EXTENSIONS (generator)
@@ -48,6 +49,7 @@ NNTP commands that are currently supported include:
 * ARTICLE
 * HEAD
 * BODY
+* POST
 * XGTITLE
 * XHDR
 * XZHDR

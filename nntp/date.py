@@ -168,11 +168,11 @@ def timestamp_YmdHMS(value):
 
     Returns:
         The time in seconds since epoch as an integer.
-    
+
     Raises:
         ValueError: If timestamp is invalid.
 
-    Note: The timezone is assumed to be UTC/GMT. 
+    Note: The timezone is assumed to be UTC/GMT.
     """
     i = int(value)
     S = i
@@ -212,6 +212,37 @@ def datetimeobj_YmdHMS(value):
     return datetime.datetime(
         Y % 10000, m % 100, d % 100, H % 100, M % 100, S % 100, tzinfo=TZ_GMT
     )
+
+def timestamp_epoch(value):
+    """Convert timestamp string to a datetime object.
+
+    Timestamps strings like '1383470155' are able to be converted by this
+    function.
+
+    Args:
+        value: A timestamp string as seconds since epoch.
+
+    Returns:
+        The time in seconds since epoch as an integer.
+    """
+    return int(value)
+
+def datetimeobj_epoch(value):
+    """Convert timestamp string to a datetime object.
+
+    Timestamps strings like '1383470155' are able to be converted by this
+    function.
+
+    Args:
+        value: A timestamp string as seconds since epoch.
+
+    Returns:
+        A datetime object.
+
+    Raises:
+        ValueError: If timestamp is invalid.
+    """
+    return datetime.datetime.utcfromtimestamp(int(value)).replace(tzinfo=TZ_GMT)
 
 def timestamp_fmt(value, fmt):
     """Convert timestamp string to time in seconds since epoch.
@@ -279,6 +310,7 @@ _timestamp_formats = {
     "%d %b %Y %H:%M:%S"       : timestamp_d_b_Y_H_M_S,
     "%a, %d %b %Y %H:%M:%S %z": timestamp_a__d_b_Y_H_M_S_z,
     "%Y%m%d%H%M%S"            : timestamp_YmdHMS,
+    "epoch"                   : timestamp_epoch,
 }
 
 def timestamp(value, fmt=None):
@@ -293,6 +325,7 @@ def timestamp(value, fmt=None):
         1 Feb 2010 12:00:00 GMT
         Mon, 1 Feb 2010 22:00:00 +1000
         20100201120000
+        1383470155 (seconds since epoch)
 
     See the other timestamp_*() functions for more details.
 
@@ -330,7 +363,13 @@ def timestamp(value, fmt=None):
             return timestamp_YmdHMS(value)
         except (ValueError, OverflowError):
             pass
-    
+
+    # epoch timestamp
+    try:
+        return timestamp_epoch(value)
+    except ValueError:
+        pass
+
     # slow version
     return timestamp_any(value)
 
@@ -338,6 +377,7 @@ _datetimeobj_formats = {
     "%d %b %Y %H:%M:%S"       : datetimeobj_d_b_Y_H_M_S,
     "%a, %d %b %Y %H:%M:%S %z": datetimeobj_a__d_b_Y_H_M_S_z,
     "%Y%m%d%H%M%S"            : datetimeobj_YmdHMS,
+    "epoch"                   : datetimeobj_epoch,
 }
 
 def datetimeobj(value, fmt=None):
@@ -352,6 +392,7 @@ def datetimeobj(value, fmt=None):
         1 Feb 2010 12:00:00 GMT
         Mon, 1 Feb 2010 22:00:00 +1000
         20100201120000
+        1383470155 (seconds since epoch)
 
     See the other datetimeobj_*() functions for more details.
 
@@ -388,7 +429,13 @@ def datetimeobj(value, fmt=None):
             return datetimeobj_YmdHMS(value)
         except ValueError:
             pass
-    
+
+    # epoch timestamp
+    try:
+        return datetimeobj_epoch(value)
+    except ValueError:
+        pass
+
     # slow version
     return datetimeobj_any(value)
 

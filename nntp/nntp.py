@@ -21,6 +21,7 @@ import ssl
 import zlib
 import socket
 import datetime
+import cStringIO
 import iodict
 import fifo
 import yenc
@@ -247,13 +248,16 @@ class NNTPClient(object):
 
         If there is a line begining with an 'escaped' period then the extra
         period is trimmed.
+
+        Yields:
+            A line of the info response.
         """
         self.__generating = True
 
         for line in self.__line_gen():
             if line == ".\r\n":
                 break
-            if line.startswith(".."):
+            if line.startswith("."):
                 yield line[1:]
             yield line
 
@@ -275,7 +279,10 @@ class NNTPClient(object):
         included)
 
         This function will produce that same output as the __info_plain_gen()
-        function. In other words it takes care of decoding and decompression.
+        function. In other words it takes care of decompression.
+
+        Yields:
+            A line of the info response.
         """
         self.__generating = True
 
@@ -295,7 +302,7 @@ class NNTPClient(object):
                 if line == ".\r\n":
                     done = True
                     break
-                if line.startswith(".."):
+                if line.startswith("."):
                     yield line[1:]
                 yield line
 
@@ -313,6 +320,9 @@ class NNTPClient(object):
 
         This function will produce that same output as the __info_gen()
         function. In other words it takes care of decoding and decompression.
+
+        Yields:
+            A line of the info response.
 
         Raises:
             NNTPDataError: When there is an error parsing the yEnc header or
@@ -481,6 +491,11 @@ class NNTPClient(object):
             raise NNTPDataError("Invalid newsgroup info")
         return group, low, high, status
 
+    @staticmethod
+    def __parse_headers(hdrs):
+        """Parse a dictionary of headers to a string.
+        """
+        return "\r\n".join([": ".join(nv) for nv in hdrs.items()]) + "\r\n\r\n"
 
     # session administration commands
 
@@ -535,8 +550,8 @@ class NNTPClient(object):
         client. Only useful for graceful shutdown. If you are in a generator
         use close() instead.
 
-        Once this method has been called, no other methods of the NNTPClient object
-        should be called.
+        Once this method has been called, no other methods of the NNTPClient
+        object should be called.
 
         See <http://tools.ietf.org/html/rfc3977#section-5.4>
         """
@@ -611,14 +626,10 @@ class NNTPClient(object):
 
         Yields:
             A tuple containing the name, low water mark, high water mark,
-            and status for each newsgroup.
-
-        Note: For more detail on the status field see the list_active() command
-            which has the same return format.
+            and status for the newsgroup.
 
         Note: If the datetime object supplied as the timestamp is naive (tzinfo
-            is None) then it is assumed to be given as GMT. If tzinfo is set
-            then it will be converted to GMT.
+            is None) then it is assumed to be given as GMT.
         """
         if timestamp.tzinfo:
             ts = timestamp.asttimezone(date.TZ_GMT)
@@ -708,10 +719,17 @@ class NNTPClient(object):
     def list_active_gen(self, pattern=None):
         """Generator for the LIST ACTIVE command.
 
-        See list_active() for more information.
+        Generates a list of active newsgroups that match the specified pattern.
+        If no pattern is specfied then all active groups are generated.
+
+        See <http://tools.ietf.org/html/rfc3977#section-7.6.3>
+
+        Args:
+            pattern: Glob matching newsgroups of intrest.
 
         Yields:
-            An element in the list returned by list_active().
+            A tuple containing the name, low water mark, high water mark,
+            and status for the newsgroup.
         """
         args = pattern
 
@@ -729,18 +747,58 @@ class NNTPClient(object):
 
     def list_active(self, pattern=None):
         """LIST ACTIVE command.
+
+        Retreives a list of active newsgroups that match the specified pattern.
+        See list_active_gen() for more details.
+
+        See <http://tools.ietf.org/html/rfc3977#section-7.6.3>
+
+        Args:
+            pattern: Glob matching newsgroups of intrest.
+
+        Returns:
+            A list of tuples in the format given by list_active_gen()
         """
         return [x for x in self.list_active_gen(pattern)]
 
-    def list_active_times_gen(self, pattern=None):
-        """Generator for the LIST ACTIVE TIMES command.
-        """
-        raise NotImplementedError()
+    def list_active_times_gen(self):
+        """Generator for the LIST ACTIVE.TIMES command.
 
-    def list_active_times(self, pattern=None):
-        """LIST ACTIVE TIMES command.
+        Generates a list of newsgroups including the creation time and who
+        created them.
+
+        See <http://tools.ietf.org/html/rfc3977#section-7.6.4>
+
+        Yields:
+            A tuple containing the name, creation date as a datetime object and
+            creator as a string for the newsgroup.
         """
-        return [x for x in self.list_active_times_gen(pattern)]
+        code, message = self.__command("LIST ACTIVE.TIMES")
+        if code != 215:
+            raise NNTPReplyError(code, message)
+
+        for line in self.__info_gen(code, message):
+            parts = line.split()
+            try:
+                name = parts[0]
+                timestamp = date.datetimeobj_epoch(parts[1])
+                creator = parts[2]
+            except (IndexError, ValueError):
+                raise NNTPDataError("Invalid LIST ACTIVE.TIMES")
+            yield name, timestamp, creator
+
+    def list_active_times(self):
+        """LIST ACTIVE TIMES command.
+
+        Retrieves a list of newsgroups including the creation time and who
+        created them. See list_active_times_gen() for more details.
+
+        See <http://tools.ietf.org/html/rfc3977#section-7.6.4>
+
+        Returns:
+            A list of tuples in the format given by list_active_times_gen()
+        """
+        return [x for x in self.list_active_times_gen()]
 
     def list_distrib_pats_gen(self):
         """Generator for the LIST DISTRIB.PATS command.
@@ -764,6 +822,17 @@ class NNTPClient(object):
 
     def list_newsgroups_gen(self, pattern=None):
         """Generator for the LIST NEWSGROUPS command.
+
+        Generates a list of newsgroups including the name and a short
+        description.
+
+        See <http://tools.ietf.org/html/rfc3977#section-7.6.6>
+
+        Args:
+            pattern: Glob matching newsgroups of intrest.
+
+        Yields:
+            A tuple containing the name, and description for the newsgroup.
         """
         args = pattern
 
@@ -771,10 +840,26 @@ class NNTPClient(object):
         if code != 215:
             raise NNTPReplyError(code, message)
 
-        return self.__info_gen(code, message)
+        for line in self.__info_gen(code, message):
+            parts = line.strip().split()
+            name, description = parts[0], ""
+            if len(parts) > 1:
+                description = parts[1]
+            yield name, description
 
     def list_newsgroups(self, pattern=None):
         """LIST NEWSGROUPS command.
+
+        Retrieves a list of newsgroups including the name and a short
+        description. See list_newsgroups_gen() for more details.
+
+        See <http://tools.ietf.org/html/rfc3977#section-7.6.6>
+
+        Args:
+            pattern: Glob matching newsgroups of intrest.
+
+        Returns:
+            A list of tuples in the format given by list_newsgroups_gen()
         """
         return [x for x in self.list_newsgroups_gen(pattern)]
 
@@ -835,7 +920,7 @@ class NNTPClient(object):
         if keyword is None or keyword == "ACTIVE":
             return self.list_active_gen(arg)
         if keyword == "ACTIVE.TIMES":
-            return self.list_active_times_gen(arg)
+            return self.list_active_times_gen()
         if keyword == "DISTRIB.PATS":
             return self.list_distrib_pats_gen()
         if keyword == "HEADERS":
@@ -1237,6 +1322,84 @@ class NNTPClient(object):
 
         return True
 
+    def post(self, headers={}, body=""):
+        """POST command.
+
+        Args:
+            headers: A dictionary of headers.
+            body: A string or file like object containing the post content.
+
+        Raises:
+            NNTPDataError: If binary characters are detected in the message
+                body.
+
+        Returns:
+            A value that evaluates to true if posting the message succeeded.
+            (See note for further details)
+
+        Note:
+            '\\n' line terminators are converted to '\\r\\n'
+
+        Note:
+            Though not part of any specification it is common for usenet servers
+            to return the message-id for a successfully posted message. If a
+            message-id is identified in the response from the server then that
+            message-id will be returned by the function, otherwise True will be
+            returned.
+
+        Note:
+            Due to protocol issues if illegal characters are found in the body
+            the message will still be posted but will be truncated as soon as
+            an illegal character is detected. No illegal characters will be sent
+            to the server. For information illegal characters include embedded
+            carriage returns '\\r' and null characters '\\0' (because this
+            function converts line feeds to CRLF, embedded line feeds are not an
+            issue)
+        """
+        code, message = self.__command("POST")
+        if code != 340:
+            raise NNTPReplyError(code, message)
+
+        # send headers
+        hdrs = self.__parse_headers(headers)
+        self.socket.sendall(hdrs)
+
+        if isinstance(body, basestring):
+            body = cStringIO.StringIO(body)
+
+        # send body
+        illegal = False
+        for line in body:
+            if line.startswith("."):
+                line = "." + line
+            if line.endswith("\r\n"):
+                line = line[:-2]
+            elif line.endswith("\n"):
+                line = line[:-1]
+            if any(c in line for c in "\0\r"):
+                illegal = True
+                break
+            self.socket.sendall(line + "\r\n")
+        self.socket.sendall(".\r\n")
+
+        # get status
+        code, message = self.__status()
+
+        # check if illegal characters were detected
+        if illegal:
+            raise NNTPDataError("Illegal characters found")
+
+        # check status
+        if code != 240:
+            raise NNTPReplyError(code, message)
+
+        # return message-id possible
+        message_id = message.split(None, 1)[0]
+        if message_id.startswith("<") and message_id.endswith(">"):
+            return message_id
+
+        return True
+
 # testing
 if __name__ == "__main__":
 
@@ -1255,64 +1418,63 @@ if __name__ == "__main__":
         log("%s <host> <port> <username> <password> <ssl(0|1)>\n" % sys.argv[0])
         sys.exit(1)
 
-    nntp_client = NNTPClient(host, port, username, password, use_ssl=use_ssl)
+    nntp_client = NNTPClient(host, port, username, password, use_ssl=use_ssl, reader=False)
 
     try:
         log("HELP\n")
         try:
             log("%s\n" % nntp_client.help())
-        except NNTPReplyError as e:
+        except NNTPError as e:
             log("%s\n" % e)
         log("\n")
 
         log("DATE\n")
         try:
             log("%s\n" % nntp_client.date())
-        except NNTPReplyError as e:
+        except NNTPError as e:
             log("%s\n" % e)
         log("\n")
 
         log("NEWGROUPS\n")
         try:
             log("%s\n" % nntp_client.newgroups(datetime.datetime.utcnow() - datetime.timedelta(days=50)))
-        except NNTPReplyError as e:
+        except NNTPError as e:
             log("%s\n" % e)
         log("\n")
 
         log("NEWNEWS\n")
         try:
             log("%s\n" % nntp_client.newnews("alt.binaries.*", datetime.datetime.utcnow() - datetime.timedelta(minutes=1)))
-        except NNTPReplyError as e:
+        except NNTPError as e:
             log("%s\n" % e)
         log("\n")
 
         log("CAPABILITIES\n")
         try:
             log("%s\n" % nntp_client.capabilities())
-        except NNTPReplyError as e:
+        except NNTPError as e:
             log("%s\n" % e)
         log("\n")
 
-        log("GROUP alt.binaries.boneless\n")
+        log("GROUP misc.test\n")
         try:
-            total, first, last, name = nntp_client.group("alt.binaries.boneless")
+            total, first, last, name = nntp_client.group("misc.test")
             log("%d %d %d %s\n" % (total, first, last, name))
-        except NNTPReplyError as e:
+        except NNTPError as e:
             log("%s\n" % e)
         log("\n")
 
         log("HEAD\n")
         try:
-            log("%s\n" % nntp_client.head(last))
-        except NNTPReplyError as e:
+            log("%r\n" % nntp_client.head(last))
+        except NNTPError as e:
             log("%s\n" % e)
         log("\n")
 
         log("BODY\n")
         try:
-            result = nntp_client.body(last)
-            log("Hash %s\n" % hashlib.md5(result).hexdigest())
-        except NNTPReplyError as e:
+            log("%r\n" % nntp_client.body(last))
+        except NNTPError as e:
             log("%s\n" % e)
         log("\n")
 
@@ -1320,7 +1482,7 @@ if __name__ == "__main__":
         try:
             result = nntp_client.article(last, False)
             log("%d\n%s\nHash %s\n" % (result[0], result[1], hashlib.md5(result[2]).hexdigest()))
-        except NNTPReplyError as e:
+        except NNTPError as e:
             log("%s\n" % e)
         log("\n")
 
@@ -1328,21 +1490,21 @@ if __name__ == "__main__":
         try:
             result = nntp_client.article(last)
             log("%d\n%s\nHash %s\n" % (result[0], result[1], hashlib.md5(result[2]).hexdigest()))
-        except NNTPReplyError as e:
+        except NNTPError as e:
             log("%s\n" % e)
         log("\n")
 
         log("XHDR Date %d-%d\n" % (last-10, last))
         try:
             log("%s\n" % nntp_client.xhdr("Date", (last-10, last)))
-        except NNTPReplyError as e:
+        except NNTPError as e:
             log("%s\n" % e)
         log("\n")
 
         log("XZHDR Date %d-%d\n" % (last-10, last))
         try:
             log("%s\n" % nntp_client.xzhdr("Date", (last-10, last)))
-        except NNTPReplyError as e:
+        except NNTPError as e:
             log("%s\n" % e)
         log("\n")
 
@@ -1350,7 +1512,7 @@ if __name__ == "__main__":
         try:
             result = nntp_client.xover((last-10, last))
             log("Entries %d Hash %s\n" % (len(result), hashlib.md5("".join(["".join(x) for x in result])).hexdigest()))
-        except NNTPReplyError as e:
+        except NNTPError as e:
             log("%s\n" % e)
         log("\n")
 
@@ -1358,14 +1520,14 @@ if __name__ == "__main__":
         try:
             result = nntp_client.xzver((last-10, last))
             log("Entries %d Hash %s\n" % (len(result), hashlib.md5("".join(["".join(x) for x in result])).hexdigest()))
-        except NNTPReplyError as e:
+        except NNTPError as e:
             log("%s\n" % e)
         log("\n")
 
         log("XFEATURE COMPRESS GZIP\n")
         try:
             log("%s\n" % nntp_client.xfeature_compress_gzip())
-        except NNTPReplyError as e:
+        except NNTPError as e:
             log("%s\n" % e)
         log("\n")
 
@@ -1373,14 +1535,14 @@ if __name__ == "__main__":
         try:
             result = nntp_client.xover((last-10, last))
             log("Entries %d Hash %s\n" % (len(result), hashlib.md5("".join(["".join(x) for x in result])).hexdigest()))
-        except NNTPReplyError as e:
+        except NNTPError as e:
             log("%s\n" % e)
         log("\n")
 
         log("XFEATURE COMPRESS GZIP TERMINATOR\n")
         try:
             log("%s\n" % nntp_client.xfeature_compress_gzip())
-        except NNTPReplyError as e:
+        except NNTPError as e:
             log("%s\n" % e)
         log("\n")
 
@@ -1388,63 +1550,100 @@ if __name__ == "__main__":
         try:
             result = nntp_client.xover((last-10, last))
             log("Entries %d Hash %s\n" % (len(result), hashlib.md5("".join(["".join(x) for x in result])).hexdigest()))
-        except NNTPReplyError as e:
+        except NNTPError as e:
             log("%s\n" % e)
         log("\n")
 
         log("LIST\n")
         try:
             log("Entries %d\n" % len(nntp_client.list()))
-        except NNTPReplyError as e:
+        except NNTPError as e:
             log("%s\n" % e)
         log("\n")
 
         log("LIST ACTIVE\n")
         try:
             log("Entries %d\n" % len(nntp_client.list("ACTIVE")))
-        except NNTPReplyError as e:
+        except NNTPError as e:
             log("%s\n" % e)
         log("\n")
 
         log("LIST ACTIVE alt.binaries.*\n")
         try:
             log("Entries %d\n" % len(nntp_client.list("ACTIVE", "alt.binaries.*")))
-        except NNTPReplyError as e:
+        except NNTPError as e:
+            log("%s\n" % e)
+        log("\n")
+
+        log("LIST ACTIVE.TIMES\n")
+        try:
+            log("Entries %d\n" % len(nntp_client.list("ACTIVE.TIMES")))
+        except NNTPError as e:
             log("%s\n" % e)
         log("\n")
 
         log("LIST NEWSGROUPS\n")
         try:
             log("Entries %d\n" % len(nntp_client.list("NEWSGROUPS")))
-        except NNTPReplyError as e:
+        except NNTPError as e:
             log("%s\n" % e)
         log("\n")
 
         log("LIST NEWSGROUPS alt.binaries.*\n")
         try:
             log("Entries %d\n" % len(nntp_client.list("NEWSGROUPS", "alt.binaries.*")))
-        except NNTPReplyError as e:
+        except NNTPError as e:
             log("%s\n" % e)
         log("\n")
 
         log("LIST OVERVIEW.FMT\n")
         try:
             log("%s\n" % nntp_client.list("OVERVIEW.FMT"))
-        except NNTPReplyError as e:
+        except NNTPError as e:
             log("%s\n" % e)
         log("\n")
 
         log("LIST EXTENSIONS\n")
         try:
             log("%s\n" % nntp_client.list("EXTENSIONS"))
-        except NNTPReplyError as e:
+        except NNTPError as e:
+            log("%s\n" % e)
+        log("\n")
+
+        log("POST (with illegal characters)\n")
+        try:
+            log("%s\n" % nntp_client.post(
+                iodict.IODict({
+                    "From": "\"pynntp\" <pynntp@not.a.real.doma.in>",
+                    "Newsgroups": "misc.test",
+                    "Subject": "pynntp test article",
+                    "Organization": "pynntp",
+                }),
+                "pip install pynntp\r\nthis\0contains\rillegal\ncharacters"
+            ))
+        except NNTPError as e:
+            log("%s\n" % e)
+        log("\n")
+
+        log("POST\n")
+        try:
+            log("%s\n" % nntp_client.post(
+                iodict.IODict({
+                    "From": "\"pynntp\" <pynntp@not.a.real.doma.in>",
+                    "Newsgroups": "misc.test",
+                    "Subject": "pynntp test article",
+                    "Organization": "pynntp",
+                }),
+                "pip install pynntp"
+            ))
+        except NNTPError as e:
             log("%s\n" % e)
         log("\n")
 
         log("QUIT\n")
         try:
             nntp_client.quit()
-        except NNTPReplyError as e:
+        except NNTPError as e:
             log("%s\n" % e)
         log("\n")
 
