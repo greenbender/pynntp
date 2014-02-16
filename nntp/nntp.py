@@ -22,6 +22,7 @@ import zlib
 import socket
 import datetime
 import cStringIO
+import utils
 import iodict
 import fifo
 import yenc
@@ -90,32 +91,14 @@ class NNTPDataError(NNTPError):
     pass
 
 
-class NNTPClient(object):
-    """NNTP NNTPClient.
+class BaseNNTPClient(object):
+    """NNTP BaseNNTPClient.
 
-    Implements many of the commands that are commonly used by current usenet
-    servers. Including handling commands that use compressed responses.
-
-    Implements generators for commands for which generators are likely to
-    yield (bad pun warning) perfomance gains. These gains will be in the form
-    of lower memory consumption and the added ability to process and receive
-    data in parallel. If you are using commands that can take a range as an
-    argument or can return large amounts of data there should be a _gen()
-    version of the command and it should be used in preference to the standard
-    version.
-
-    Note: All commands can raise the following exceptions:
-            NNTPProtocolError
-            NNTPPermanentError
-            NNTPReplyError
-            IOError (socket.error)
-
-    Note: All commands that use compressed responses can also raise an
-        NNTPDataError.
+    Base class for NNTP clients implements the basic command interface and
+    transparently handles compressed replies.
     """
-
-    def __init__(self, host, port=119, username="anonymous", password="anonymous", timeout=30, use_ssl=False, reader=True):
-        """Constructor for NNTP NNTPClient.
+    def __init__(self, host, port=119, username="", password="", timeout=30, use_ssl=False):
+        """Constructor for BasicNNTPClient.
 
         Connects to usenet server and enters reader mode.
 
@@ -128,8 +111,8 @@ class NNTPClient(object):
             use_ssl: Should we use ssl (default False)
 
         Raises:
-            socket.error: On error in underlying socket and/or ssl wrapper. See
-                socket and ssl modules for further details.
+            IOError (socket.error): On error in underlying socket and/or ssl
+                wrapper. See socket and ssl modules for further details.
             NNTPReplyError: On bad response code from server.
         """
         self.socket = socket.socket()
@@ -145,18 +128,15 @@ class NNTPClient(object):
 
         # connect
         self.socket.connect((host, port))
-        code, message = self.__status()
+        code, message = self.status()
         if not code in [200, 201]:
             raise NNTPReplyError(code, message)
-
-        # reader
-        if reader:
-            self.mode_reader()
 
     def __recv(self, size=4096):
         """Reads data from the socket.
 
-        Raises: NNTPError when connection times out or read from socket fails.
+        Raises:
+            NNTPError: When connection times out or read from socket fails.
         """
         data = self.socket.recv(size)
         if not data:
@@ -169,8 +149,10 @@ class NNTPClient(object):
         It first attempts to read from the internal buffer. If there is not
         enough data to read a line it then requests more data from the server
         and adds it to the buffer. This process repeats until a line of data
-        can be read from the internal buffer. When a line of data is read
-        it is yielded.
+        can be read from the internal buffer.
+
+        Yields:
+            A line of data when it becomes available.
         """
         while True:
             line = self.__buffer.readline()
@@ -184,12 +166,14 @@ class NNTPClient(object):
 
         It first attempts to read from the internal buffer. If there is not
         enough data in the internal buffer it then requests more data from the
-        server and adds it to the buffer. This process repeats until there is
-        enough data at which point the data is yielded.
+        server and adds it to the buffer.
 
         Args:
             length: An optional amount of data to retrieve. A length of 0 (the
                 default) will retrieve a least one buffer of data.
+
+        Yields:
+            A block of data when enough data becomes available.
 
         Note:
             If a length of 0 is supplied then the size of the yielded buffer can
@@ -204,13 +188,14 @@ class NNTPClient(object):
                 continue
             yield buf
 
-    def __status(self):
+    def status(self):
         """Reads a command response status.
 
         If there is no response message then the returned status message will
         be an empty string.
 
         Raises:
+            NNTPError: If data is required to be read from the socket and fails.
             NNTPProtocolError: If the status line can't be parsed.
             NNTPTemporaryError: For status code 400-499
             NNTPPermanentError: For status code 500-599
@@ -251,6 +236,9 @@ class NNTPClient(object):
 
         Yields:
             A line of the info response.
+
+        Raises:
+            NNTPError: If data is required to be read from the socket and fails.
         """
         self.__generating = True
 
@@ -283,6 +271,10 @@ class NNTPClient(object):
 
         Yields:
             A line of the info response.
+
+        Raises:
+            NNTPError: If data is required to be read from the socket and fails.
+            NNTPDataError: If decompression fails.
         """
         self.__generating = True
 
@@ -318,18 +310,17 @@ class NNTPClient(object):
         command the difference being that the data is zlib deflated and then
         yEnc encoded.
 
-        This function will produce that same output as the __info_gen()
+        This function will produce that same output as the info_gen()
         function. In other words it takes care of decoding and decompression.
 
         Yields:
             A line of the info response.
 
         Raises:
+            NNTPError: If data is required to be read from the socket and fails.
             NNTPDataError: When there is an error parsing the yEnc header or
                 trailer, if the CRC check fails or decompressing data fails.
         """
-        # uses __info_plain_gen()
-        #self.__generating = True
 
         escape = 0
         dcrc32 = 0
@@ -370,10 +361,7 @@ class NNTPClient(object):
         if ecrc32 != dcrc32 & 0xffffffff:
             raise NNTPDataError("Bad yEnc CRC")
 
-        # uses __info_plain_gen()
-        #self.__generating = False
-
-    def __info_gen(self, code, message, compressed=False):
+    def info_gen(self, code, message, compressed=False):
         """Dispatcher for the info generators.
 
         Determines which __info_*_gen() should be used based on the supplied
@@ -393,7 +381,7 @@ class NNTPClient(object):
             return self.__info_yenczlib_gen()
         return self.__info_plain_gen()
 
-    def __info(self, code, message, compressed=False):
+    def info(self, code, message, compressed=False):
         """The complete content of an info response.
 
         This should only used for commands that return small or known amounts of
@@ -402,9 +390,9 @@ class NNTPClient(object):
         Returns:
             A the complete content of a textual response.
         """
-        return "".join([x for x in self.__info_gen(code, message, compressed)])
+        return "".join([x for x in self.info_gen(code, message, compressed)])
 
-    def __command(self, verb, args=None):
+    def comand(self, verb, args=None):
         """Call a command on the server.
 
         If the user has not authenticated then authentication will be done
@@ -419,6 +407,14 @@ class NNTPClient(object):
 
         Returns:
             A tuple of status code (as an integer) and status message.
+
+        Note:
+            You can run raw commands by supplying the full command (including
+            args) in the verb.
+
+        Note: Although it is possible you shouldn't issue more than one command
+            at a time by adding newlines to the verb as it will most likely lead
+            to undesirable results.
         """
         if self.__generating:
             raise NNTPSyncError("Command issued while a generator is active")
@@ -431,71 +427,69 @@ class NNTPClient(object):
         self.socket.sendall(cmd)
 
         try:
-            code, message = self.__status()
+            code, message = self.status()
         except NNTPTemporaryError as e:
             if e.code() != 480:
                 raise e
-            code, message = self.__command("AUTHINFO USER", self.username)
+            code, message = self.comand("AUTHINFO USER", self.username)
             if code == 381:
-                code, message = self.__command("AUTHINFO PASS", self.password)
+                code, message = self.comand("AUTHINFO PASS", self.password)
             if code != 281:
                 raise NNTPReplyError(code, message)
-            code, message = self.__command(verb, args)
+            code, message = self.comand(verb, args)
 
         return code, message
 
+class NNTPClient(BaseNNTPClient):
+    """NNTP NNTPClient.
 
-    # helpers
+    Implements many of the commands that are commonly used by current usenet
+    servers. Including handling commands that use compressed responses.
 
-    @staticmethod
-    def __parse_msgid_article(obj):
-        """Parse a message-id or article number argument.
+    Implements generators for commands for which generators are likely to
+    yield (bad pun warning) perfomance gains. These gains will be in the form
+    of lower memory consumption and the added ability to process and receive
+    data in parallel. If you are using commands that can take a range as an
+    argument or can return large amounts of data there should be a _gen()
+    version of the command and it should be used in preference to the standard
+    version.
+
+    Note: All commands can raise the following exceptions:
+            NNTPError
+            NNTPProtocolError
+            NNTPPermanentError
+            NNTPReplyError
+            IOError (socket.error)
+
+    Note: All commands that use compressed responses can also raise an
+        NNTPDataError.
+    """
+
+    def __init__(self, host, port=119, username="", password="", timeout=30, use_ssl=False, reader=True):
+        """Constructor for NNTP NNTPClient.
+
+        Connects to usenet server..
+
+        Args:
+            host: Hostname for usenet server.
+            port: Port for usenet server.
+            username: Username for usenet account (default "")
+            password: Password for usenet account (default "")
+            timeout: Connection timeout (default 30 seconds)
+            use_ssl: Should we use ssl (default False)
+            reader: Use reader mode
+
+        Raises:
+            socket.error: On error in underlying socket and/or ssl wrapper. See
+                socket and ssl modules for further details.
+            NNTPReplyError: On bad response code from server.
         """
-        return str(obj)
+        super(NNTPClient, self).__init__(host, port, username, password, timeout, use_ssl)
 
-    @staticmethod
-    def __parse_range(obj):
-        """Parse a range argument.
-        """
-        if isinstance(obj, (int, long)):
-            return str(obj)
+        # reader
+        if reader:
+            self.mode_reader()
 
-        if isinstance(obj, tuple):
-            arg = str(obj[0]) + "-"
-            if len(obj) > 1:
-                arg += str(obj[1])
-            return arg
-
-        raise ValueError("Must be an integer or tuple")
-
-    @staticmethod
-    def __parse_msgid_range(obj):
-        """Parse a message-id or range argument.
-        """
-        if isinstance(obj, basestring):
-            return obj
-
-        return NNTPClient.__parse_range(obj)
-
-    @staticmethod
-    def __parse_newsgroup(line):
-        """Parse a newsgroup info line to python types.
-        """
-        parts = line.split()
-        try:
-            group = parts[0]
-            low = int(parts[1])
-            high = int(parts[2])
-            status = parts[3]
-        except (IndexError, ValueError):
-            raise NNTPDataError("Invalid newsgroup info")
-        return group, low, high, status
-
-    @staticmethod
-    def __parse_headers(hdrs):
-        """Parse a dictionary of headers to a string.
-        """
-        return "\r\n".join([": ".join(nv) for nv in hdrs.items()]) + "\r\n\r\n"
 
     # session administration commands
 
@@ -520,11 +514,11 @@ class NNTPClient(object):
         """
         args = keyword
 
-        code, message = self.__command("CAPABILITIES", args)
+        code, message = self.comand("CAPABILITIES", args)
         if code != 101:
             raise NNTPReplyError(code, message)
 
-        return [x.strip() for x in self.__info_gen(code, message)]
+        return [x.strip() for x in self.info_gen(code, message)]
 
     def mode_reader(self):
         """MODE READER command.
@@ -536,7 +530,7 @@ class NNTPClient(object):
         Returns:
             Boolean value indicating whether posting is allowed or not.
         """
-        code, message = self.__command("MODE READER")
+        code, message = self.comand("MODE READER")
         if not code in [200, 201]:
             raise NNTPReplyError(code, message)
 
@@ -555,7 +549,7 @@ class NNTPClient(object):
 
         See <http://tools.ietf.org/html/rfc3977#section-5.4>
         """
-        code, message = self.__command("QUIT")
+        code, message = self.comand("QUIT")
         if code != 205:
             raise NNTPReplyError(code, message)
 
@@ -568,7 +562,6 @@ class NNTPClient(object):
         should be called.
         """
         self.socket.close()
-
 
 
     # information commands
@@ -588,7 +581,7 @@ class NNTPClient(object):
         Raises:
             NNTPDataError: If the timestamp can't be parsed.
         """
-        code, message = self.__command("DATE")
+        code, message = self.comand("DATE")
         if code != 111:
             raise NNTPReplyError(code, message)
 
@@ -607,11 +600,11 @@ class NNTPClient(object):
         Returns:
             The help text from the server.
         """
-        code, message = self.__command("HELP")
+        code, message = self.comand("HELP")
         if code != 100:
             raise NNTPReplyError(code, message)
 
-        return self.__info(code, message)
+        return self.info(code, message)
 
     def newgroups_gen(self, timestamp):
         """Generator for the NEWGROUPS command.
@@ -638,12 +631,12 @@ class NNTPClient(object):
 
         args = ts.strftime("%Y%m%d %H%M%S %Z")
 
-        code, message = self.__command("NEWGROUPS", args)
+        code, message = self.comand("NEWGROUPS", args)
         if code != 231:
             raise NNTPReplyError(code, message)
 
-        for line in self.__info_gen(code, message):
-            yield self.__parse_newsgroup(line)
+        for line in self.info_gen(code, message):
+            yield utils.parse_newsgroup(line)
 
     def newgroups(self, timestamp):
         """NEWGROUPS command.
@@ -688,11 +681,11 @@ class NNTPClient(object):
         args = pattern
         args += " " + ts.strftime("%Y%m%d %H%M%S %Z")
 
-        code, message = self.__command("NEWNEWS", args)
+        code, message = self.comand("NEWNEWS", args)
         if code != 230:
             raise NNTPReplyError(code, message)
 
-        for line in self.__info_gen(code, message):
+        for line in self.info_gen(code, message):
             yield line.strip()
 
     def newnews(self, pattern, timestamp):
@@ -738,12 +731,12 @@ class NNTPClient(object):
         else:
             cmd = "LIST ACTIVE"
 
-        code, message = self.__command(cmd, args)
+        code, message = self.comand(cmd, args)
         if code != 215:
             raise NNTPReplyError(code, message)
 
-        for line in self.__info_gen(code, message):
-            yield self.__parse_newsgroup(line)
+        for line in self.info_gen(code, message):
+            yield utils.parse_newsgroup(line)
 
     def list_active(self, pattern=None):
         """LIST ACTIVE command.
@@ -773,11 +766,11 @@ class NNTPClient(object):
             A tuple containing the name, creation date as a datetime object and
             creator as a string for the newsgroup.
         """
-        code, message = self.__command("LIST ACTIVE.TIMES")
+        code, message = self.comand("LIST ACTIVE.TIMES")
         if code != 215:
             raise NNTPReplyError(code, message)
 
-        for line in self.__info_gen(code, message):
+        for line in self.info_gen(code, message):
             parts = line.split()
             try:
                 name = parts[0]
@@ -836,11 +829,11 @@ class NNTPClient(object):
         """
         args = pattern
 
-        code, message = self.__command("LIST NEWSGROUPS", args)
+        code, message = self.comand("LIST NEWSGROUPS", args)
         if code != 215:
             raise NNTPReplyError(code, message)
 
-        for line in self.__info_gen(code, message):
+        for line in self.info_gen(code, message):
             parts = line.strip().split()
             name, description = parts[0], ""
             if len(parts) > 1:
@@ -871,11 +864,11 @@ class NNTPClient(object):
         Yields:
             An element in the list returned by list_overview_fmt().
         """
-        code, message = self.__command("LIST OVERVIEW.FMT")
+        code, message = self.comand("LIST OVERVIEW.FMT")
         if code != 215:
             raise NNTPReplyError(code, message)
 
-        for line in self.__info_gen(code, message):
+        for line in self.info_gen(code, message):
             try:
                 name, suffix = line.rstrip().split(":")
             except ValueError:
@@ -894,11 +887,11 @@ class NNTPClient(object):
     def list_extensions_gen(self):
         """Generator for the LIST EXTENSIONS command.
         """
-        code, message = self.__command("LIST EXTENSIONS")
+        code, message = self.comand("LIST EXTENSIONS")
         if code != 202:
             raise NNTPReplyError(code, message)
 
-        for line in self.__info_gen(code, message):
+        for line in self.info_gen(code, message):
             yield line.strip()
 
     def list_extensions(self):
@@ -959,7 +952,7 @@ class NNTPClient(object):
         """
         args = name
 
-        code, message = self.__command("GROUP", args)
+        code, message = self.comand("GROUP", args)
         if code != 211:
             raise NNTPReplyError(code, message)
 
@@ -977,7 +970,7 @@ class NNTPClient(object):
     def next(self):
         """NEXT command.
         """
-        code, message = self.__command("NEXT")
+        code, message = self.comand("NEXT")
         if code != 223:
             raise NNTPReplyError(code, message)
 
@@ -993,7 +986,7 @@ class NNTPClient(object):
     def last(self):
         """LAST command.
         """
-        code, message = self.__command("LAST")
+        code, message = self.comand("LAST")
         if code != 223:
             raise NNTPReplyError(code, message)
 
@@ -1012,9 +1005,9 @@ class NNTPClient(object):
         """
         args = None
         if msgid_article is not None:
-            args = self.__parse_msgid_article(msgid_article)
+            args = utils.unparse_msgid_article(msgid_article)
 
-        code, message = self.__command("ARTICLE", args)
+        code, message = self.comand("ARTICLE", args)
         if code != 220:
             raise NNTPReplyError(code, message)
 
@@ -1025,33 +1018,17 @@ class NNTPClient(object):
         except ValueError:
             raise NNTPProtocolError(message)
 
+        # headers
+        headers = utils.parse_headers(self.info_gen(code, message))
+
+        # decoding setup
+        decode = "yEnc" in headers.get("subject", "")
         escape = 0
         crc32 = 0
 
-        state, headers, body = 0, iodict.IODict(), []
-        for line in self.__info_gen(code, message):
-
-            # headers
-            if state == 0:
-
-                # end of headers
-                if line == "\r\n":
-                    state = 1
-                    continue
-
-                # add header
-                try:
-                    name, value = line.split(":", 1)
-                except ValueError:
-                    raise NNTPDataError("Invalid header")
-                name, value = name.strip(), value.strip()
-                headers[name] = value
-
-                # check for yEnc encoding
-                if decode is None and name.lower() == "subject":
-                    decode = "yEnc" in value
-
-                continue
+        # body
+        body = []
+        for line in self.info_gen(code, message):
 
             # decode body if required
             if decode:
@@ -1059,7 +1036,6 @@ class NNTPClient(object):
                     continue
                 line, escape, crc32 = yenc.decode(line, escape, crc32)
 
-            # body
             body.append(line)
 
         return articleno, headers, "".join(body)
@@ -1069,27 +1045,13 @@ class NNTPClient(object):
         """
         args = None
         if msgid_article is not None:
-            args = self.__parse_msgid_article(msgid_article)
+            args = utils.unparse_msgid_article(msgid_article)
 
-        code, message = self.__command("HEAD", args)
+        code, message = self.comand("HEAD", args)
         if code != 221:
             raise NNTPReplyError(code, message)
 
-        headers = iodict.IODict()
-        for line in self.__info_gen(code, message):
-
-            # end of headers
-            if line == "\r\n":
-                break
-
-            # add header
-            try:
-                name, value = line.split(":", 1)
-            except ValueError:
-                raise NNTPDataError("Invalid header")
-            headers[name.strip()] = value.strip()
-
-        return headers
+        return utils.parse_headers(self.info_gen(code, message))
 
     # TODO: Support yEnc article body validation
     def body(self, msgid_article=None, decode=False):
@@ -1097,9 +1059,9 @@ class NNTPClient(object):
         """
         args = None
         if msgid_article is not None:
-            args = self.__parse_msgid_article(msgid_article)
+            args = utils.unparse_msgid_article(msgid_article)
 
-        code, message = self.__command("BODY", args)
+        code, message = self.comand("BODY", args)
         if code != 222:
             raise NNTPReplyError(code, message)
 
@@ -1107,7 +1069,7 @@ class NNTPClient(object):
         crc32 = 0
 
         body = []
-        for line in self.__info_gen(code, message):
+        for line in self.info_gen(code, message):
 
             # decode body if required
             if decode:
@@ -1125,24 +1087,24 @@ class NNTPClient(object):
         """
         args = pattern
 
-        code, message = self.__command("XGTITLE", args)
+        code, message = self.comand("XGTITLE", args)
         if code != 282:
             raise NNTPReplyError(code, message)
 
-        return self.__info(code, message)
+        return self.info(code, message)
 
     def xhdr(self, header, msgid_range=None):
         """XHDR command.
         """
         args = header
         if range is not None:
-            args += " " + self.__parse_msgid_range(msgid_range)
+            args += " " + utils.unparse_msgid_range(msgid_range)
 
-        code, message = self.__command("XHDR", args)
+        code, message = self.comand("XHDR", args)
         if code != 221:
             raise NNTPReplyError(code, message)
 
-        return self.__info(code, message)
+        return self.info(code, message)
 
     def xzhdr(self, header, msgid_range=None):
         """XZHDR command.
@@ -1156,13 +1118,13 @@ class NNTPClient(object):
         """
         args = header
         if msgid_range is not None:
-            args += " " + self.__parse_msgid_range(msgid_range)
+            args += " " + utils.unparse_msgid_range(msgid_range)
 
-        code, message = self.__command("XZHDR", args)
+        code, message = self.comand("XZHDR", args)
         if code != 221:
             raise NNTPReplyError(code, message)
 
-        return self.__info(code, message, compressed=True)
+        return self.info(code, message, compressed=True)
 
     def xover_gen(self, range=None):
         """Generator for the XOVER command.
@@ -1190,13 +1152,13 @@ class NNTPClient(object):
         """
         args = None
         if range is not None:
-            args = self.__parse_range(range)
+            args = utils.unparse_range(range)
 
-        code, message = self.__command("XOVER", args)
+        code, message = self.comand("XOVER", args)
         if code != 224:
             raise NNTPReplyError(code, message)
 
-        for line in self.__info_gen(code, message):
+        for line in self.info_gen(code, message):
             yield line.rstrip().split("\t")
 
     def xover(self, range=None):
@@ -1254,13 +1216,13 @@ class NNTPClient(object):
         """
         args = None
         if range is not None:
-            args = self.__parse_range(range)
+            args = utils.unparse_range(range)
 
-        code, message = self.__command("XZVER", args)
+        code, message = self.comand("XZVER", args)
         if code != 224:
             raise NNTPReplyError(code, message)
 
-        for line in self.__info_gen(code, message, True):
+        for line in self.info_gen(code, message, True):
             yield line.rstrip().split("\t")
 
     def xzver(self, range=None):
@@ -1296,14 +1258,14 @@ class NNTPClient(object):
         """Generator for the XPAT command.
         """
         args = " ".join(
-            [header, self.__parse_msgid_range(msgid_range)] + list(pattern)
+            [header, utils.unparse_msgid_range(msgid_range)] + list(pattern)
         )
 
-        code, message = self.__command("XPAT", args)
+        code, message = self.comand("XPAT", args)
         if code != 221:
             raise NNTPReplyError(code, message)
 
-        for line in self.__info_gen(code, message):
+        for line in self.info_gen(code, message):
             yield line.strip()
 
     def xpat(self, header, id_range, *pattern):
@@ -1316,7 +1278,7 @@ class NNTPClient(object):
         """
         args = "TERMINATOR" if terminator else None
 
-        code, message = self.__command("XFEATURE COMPRESS GZIP", args)
+        code, message = self.comand("XFEATURE COMPRESS GZIP", args)
         if code != 290:
             raise NNTPReplyError(code, message)
 
@@ -1356,12 +1318,12 @@ class NNTPClient(object):
             function converts line feeds to CRLF, embedded line feeds are not an
             issue)
         """
-        code, message = self.__command("POST")
+        code, message = self.comand("POST")
         if code != 340:
             raise NNTPReplyError(code, message)
 
         # send headers
-        hdrs = self.__parse_headers(headers)
+        hdrs = utils.unparse_headers(headers)
         self.socket.sendall(hdrs)
 
         if isinstance(body, basestring):
@@ -1383,7 +1345,7 @@ class NNTPClient(object):
         self.socket.sendall(".\r\n")
 
         # get status
-        code, message = self.__status()
+        code, message = self.status()
 
         # check if illegal characters were detected
         if illegal:
@@ -1481,7 +1443,7 @@ if __name__ == "__main__":
         log("ARTICLE\n")
         try:
             result = nntp_client.article(last, False)
-            log("%d\n%s\nHash %s\n" % (result[0], result[1], hashlib.md5(result[2]).hexdigest()))
+            log("%d\n%s\n%r\n" % (result[0], result[1], result[2]))
         except NNTPError as e:
             log("%s\n" % e)
         log("\n")
@@ -1489,7 +1451,7 @@ if __name__ == "__main__":
         log("ARTICLE (auto yEnc decode)\n")
         try:
             result = nntp_client.article(last)
-            log("%d\n%s\nHash %s\n" % (result[0], result[1], hashlib.md5(result[2]).hexdigest()))
+            log("%d\n%s\n%r\n" % (result[0], result[1], result[2]))
         except NNTPError as e:
             log("%s\n" % e)
         log("\n")
