@@ -392,7 +392,7 @@ class BaseNNTPClient(object):
         """
         return "".join([x for x in self.info_gen(code, message, compressed)])
 
-    def comand(self, verb, args=None):
+    def command(self, verb, args=None):
         """Call a command on the server.
 
         If the user has not authenticated then authentication will be done
@@ -431,14 +431,23 @@ class BaseNNTPClient(object):
         except NNTPTemporaryError as e:
             if e.code() != 480:
                 raise e
-            code, message = self.comand("AUTHINFO USER", self.username)
+            code, message = self.command("AUTHINFO USER", self.username)
             if code == 381:
-                code, message = self.comand("AUTHINFO PASS", self.password)
+                code, message = self.command("AUTHINFO PASS", self.password)
             if code != 281:
                 raise NNTPReplyError(code, message)
-            code, message = self.comand(verb, args)
+            code, message = self.command(verb, args)
 
         return code, message
+
+    def close(self):
+        """Closes the connection at the client.
+
+        Once this method has been called, no other methods of the NNTPClient object
+        should be called.
+        """
+        self.socket.close()
+
 
 class NNTPClient(BaseNNTPClient):
     """NNTP NNTPClient.
@@ -514,7 +523,7 @@ class NNTPClient(BaseNNTPClient):
         """
         args = keyword
 
-        code, message = self.comand("CAPABILITIES", args)
+        code, message = self.command("CAPABILITIES", args)
         if code != 101:
             raise NNTPReplyError(code, message)
 
@@ -530,7 +539,7 @@ class NNTPClient(BaseNNTPClient):
         Returns:
             Boolean value indicating whether posting is allowed or not.
         """
-        code, message = self.comand("MODE READER")
+        code, message = self.command("MODE READER")
         if not code in [200, 201]:
             raise NNTPReplyError(code, message)
 
@@ -549,18 +558,10 @@ class NNTPClient(BaseNNTPClient):
 
         See <http://tools.ietf.org/html/rfc3977#section-5.4>
         """
-        code, message = self.comand("QUIT")
+        code, message = self.command("QUIT")
         if code != 205:
             raise NNTPReplyError(code, message)
 
-        self.socket.close()
-
-    def close(self):
-        """Closes the connection at the client.
-
-        Once this method has been called, no other methods of the NNTPClient object
-        should be called.
-        """
         self.socket.close()
 
 
@@ -581,7 +582,7 @@ class NNTPClient(BaseNNTPClient):
         Raises:
             NNTPDataError: If the timestamp can't be parsed.
         """
-        code, message = self.comand("DATE")
+        code, message = self.command("DATE")
         if code != 111:
             raise NNTPReplyError(code, message)
 
@@ -600,7 +601,7 @@ class NNTPClient(BaseNNTPClient):
         Returns:
             The help text from the server.
         """
-        code, message = self.comand("HELP")
+        code, message = self.command("HELP")
         if code != 100:
             raise NNTPReplyError(code, message)
 
@@ -631,7 +632,7 @@ class NNTPClient(BaseNNTPClient):
 
         args = ts.strftime("%Y%m%d %H%M%S %Z")
 
-        code, message = self.comand("NEWGROUPS", args)
+        code, message = self.command("NEWGROUPS", args)
         if code != 231:
             raise NNTPReplyError(code, message)
 
@@ -681,7 +682,7 @@ class NNTPClient(BaseNNTPClient):
         args = pattern
         args += " " + ts.strftime("%Y%m%d %H%M%S %Z")
 
-        code, message = self.comand("NEWNEWS", args)
+        code, message = self.command("NEWNEWS", args)
         if code != 230:
             raise NNTPReplyError(code, message)
 
@@ -731,7 +732,7 @@ class NNTPClient(BaseNNTPClient):
         else:
             cmd = "LIST ACTIVE"
 
-        code, message = self.comand(cmd, args)
+        code, message = self.command(cmd, args)
         if code != 215:
             raise NNTPReplyError(code, message)
 
@@ -766,7 +767,7 @@ class NNTPClient(BaseNNTPClient):
             A tuple containing the name, creation date as a datetime object and
             creator as a string for the newsgroup.
         """
-        code, message = self.comand("LIST ACTIVE.TIMES")
+        code, message = self.command("LIST ACTIVE.TIMES")
         if code != 215:
             raise NNTPReplyError(code, message)
 
@@ -829,7 +830,7 @@ class NNTPClient(BaseNNTPClient):
         """
         args = pattern
 
-        code, message = self.comand("LIST NEWSGROUPS", args)
+        code, message = self.command("LIST NEWSGROUPS", args)
         if code != 215:
             raise NNTPReplyError(code, message)
 
@@ -864,7 +865,7 @@ class NNTPClient(BaseNNTPClient):
         Yields:
             An element in the list returned by list_overview_fmt().
         """
-        code, message = self.comand("LIST OVERVIEW.FMT")
+        code, message = self.command("LIST OVERVIEW.FMT")
         if code != 215:
             raise NNTPReplyError(code, message)
 
@@ -887,7 +888,7 @@ class NNTPClient(BaseNNTPClient):
     def list_extensions_gen(self):
         """Generator for the LIST EXTENSIONS command.
         """
-        code, message = self.comand("LIST EXTENSIONS")
+        code, message = self.command("LIST EXTENSIONS")
         if code != 202:
             raise NNTPReplyError(code, message)
 
@@ -952,7 +953,7 @@ class NNTPClient(BaseNNTPClient):
         """
         args = name
 
-        code, message = self.comand("GROUP", args)
+        code, message = self.command("GROUP", args)
         if code != 211:
             raise NNTPReplyError(code, message)
 
@@ -970,7 +971,7 @@ class NNTPClient(BaseNNTPClient):
     def next(self):
         """NEXT command.
         """
-        code, message = self.comand("NEXT")
+        code, message = self.command("NEXT")
         if code != 223:
             raise NNTPReplyError(code, message)
 
@@ -986,7 +987,7 @@ class NNTPClient(BaseNNTPClient):
     def last(self):
         """LAST command.
         """
-        code, message = self.comand("LAST")
+        code, message = self.command("LAST")
         if code != 223:
             raise NNTPReplyError(code, message)
 
@@ -1007,7 +1008,7 @@ class NNTPClient(BaseNNTPClient):
         if msgid_article is not None:
             args = utils.unparse_msgid_article(msgid_article)
 
-        code, message = self.comand("ARTICLE", args)
+        code, message = self.command("ARTICLE", args)
         if code != 220:
             raise NNTPReplyError(code, message)
 
@@ -1047,7 +1048,7 @@ class NNTPClient(BaseNNTPClient):
         if msgid_article is not None:
             args = utils.unparse_msgid_article(msgid_article)
 
-        code, message = self.comand("HEAD", args)
+        code, message = self.command("HEAD", args)
         if code != 221:
             raise NNTPReplyError(code, message)
 
@@ -1061,7 +1062,7 @@ class NNTPClient(BaseNNTPClient):
         if msgid_article is not None:
             args = utils.unparse_msgid_article(msgid_article)
 
-        code, message = self.comand("BODY", args)
+        code, message = self.command("BODY", args)
         if code != 222:
             raise NNTPReplyError(code, message)
 
@@ -1087,7 +1088,7 @@ class NNTPClient(BaseNNTPClient):
         """
         args = pattern
 
-        code, message = self.comand("XGTITLE", args)
+        code, message = self.command("XGTITLE", args)
         if code != 282:
             raise NNTPReplyError(code, message)
 
@@ -1100,7 +1101,7 @@ class NNTPClient(BaseNNTPClient):
         if range is not None:
             args += " " + utils.unparse_msgid_range(msgid_range)
 
-        code, message = self.comand("XHDR", args)
+        code, message = self.command("XHDR", args)
         if code != 221:
             raise NNTPReplyError(code, message)
 
@@ -1120,7 +1121,7 @@ class NNTPClient(BaseNNTPClient):
         if msgid_range is not None:
             args += " " + utils.unparse_msgid_range(msgid_range)
 
-        code, message = self.comand("XZHDR", args)
+        code, message = self.command("XZHDR", args)
         if code != 221:
             raise NNTPReplyError(code, message)
 
@@ -1154,7 +1155,7 @@ class NNTPClient(BaseNNTPClient):
         if range is not None:
             args = utils.unparse_range(range)
 
-        code, message = self.comand("XOVER", args)
+        code, message = self.command("XOVER", args)
         if code != 224:
             raise NNTPReplyError(code, message)
 
@@ -1218,7 +1219,7 @@ class NNTPClient(BaseNNTPClient):
         if range is not None:
             args = utils.unparse_range(range)
 
-        code, message = self.comand("XZVER", args)
+        code, message = self.command("XZVER", args)
         if code != 224:
             raise NNTPReplyError(code, message)
 
@@ -1261,7 +1262,7 @@ class NNTPClient(BaseNNTPClient):
             [header, utils.unparse_msgid_range(msgid_range)] + list(pattern)
         )
 
-        code, message = self.comand("XPAT", args)
+        code, message = self.command("XPAT", args)
         if code != 221:
             raise NNTPReplyError(code, message)
 
@@ -1278,7 +1279,7 @@ class NNTPClient(BaseNNTPClient):
         """
         args = "TERMINATOR" if terminator else None
 
-        code, message = self.comand("XFEATURE COMPRESS GZIP", args)
+        code, message = self.command("XFEATURE COMPRESS GZIP", args)
         if code != 290:
             raise NNTPReplyError(code, message)
 
@@ -1318,7 +1319,7 @@ class NNTPClient(BaseNNTPClient):
             function converts line feeds to CRLF, embedded line feeds are not an
             issue)
         """
-        code, message = self.comand("POST")
+        code, message = self.command("POST")
         if code != 340:
             raise NNTPReplyError(code, message)
 

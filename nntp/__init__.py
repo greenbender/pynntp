@@ -5,5 +5,6 @@ from nntp import (
     NNTPPermanentError,
     NNTPProtocolError,
     NNTPDataError,
+    BaseNNTPClient,
     NNTPClient,
 )
