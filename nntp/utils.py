@@ -1,7 +1,7 @@
 #!/usr/bin/python
 """
 An NNTP library - a bit more useful than the nntplib one (hopefully).
-Copyright (C) 2013  Byron Platt
+Copyright (C) 2013-2020  Byron Platt
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -17,8 +17,14 @@ You should have received a copy of the GNU General Public License
 along with this program.  If not, see <http://www.gnu.org/licenses/>.
 """
 
-import cStringIO
-import iodict
+
+import io
+from . import iodict
+try:
+    basestring
+except NameError:
+    basestring = str
+
 
 def unparse_msgid_article(obj):
     """Unparse a message-id or article number argument.
@@ -30,6 +36,7 @@ def unparse_msgid_article(obj):
         The message id or article number as a string.
     """
     return str(obj)
+
 
 def parse_msgid_article(obj):
     """Parse a message-id or article number argument.
@@ -45,6 +52,7 @@ def parse_msgid_article(obj):
     except ValueError:
         pass
     return obj
+
 
 def unparse_range(obj):
     """Unparse a range argument.
@@ -66,45 +74,17 @@ def unparse_range(obj):
         (4245,)
         (4245, 5234)
     """
-    if isinstance(obj, (int, long)):
+    if isinstance(obj, int):
         return str(obj)
 
     if isinstance(obj, tuple):
-        arg = str(obj[0]) + "-"
+        arg = str(obj[0]) + '-'
         if len(obj) > 1:
             arg += str(obj[1])
         return arg
 
-    raise ValueError("Must be an integer or tuple")
+    raise ValueError('Must be an integer or tuple')
 
-def parse_range(obj):
-    """Parse a range argument.
-
-    Args:
-        obj: An article range as a string.
-
-    Returns:
-        The range as a string that can be used by an NNTP command.
-
-    Raises:
-        ValueError: If obj is not a valid range format.
-
-    Note: Sample valid formats.
-        4678
-        (,5234)
-        (4245,)
-        (4245, 5234)
-    """
-    if isinstance(obj, (int, long)):
-        return str(obj)
-
-    if isinstance(obj, tuple):
-        arg = str(obj[0]) + "-"
-        if len(obj) > 1:
-            arg += str(obj[1])
-        return arg
-
-    raise ValueError("Must be an integer or tuple")
 
 def unparse_msgid_range(obj):
     """Unparse a message-id or range argument.
@@ -124,6 +104,7 @@ def unparse_msgid_range(obj):
         return obj
 
     return unparse_range(obj)
+
 
 def parse_newsgroup(line):
     """Parse a newsgroup info line to python types.
@@ -151,8 +132,9 @@ def parse_newsgroup(line):
         high = int(parts[2])
         status = parts[3]
     except (IndexError, ValueError):
-        raise ValueError("Invalid newsgroup info")
+        raise ValueError('Invalid newsgroup info')
     return group, low, high, status
+
 
 def parse_header(line):
     """Parse a header line.
@@ -162,18 +144,19 @@ def parse_header(line):
 
     Returns:
         None if end of headers is found. A string giving the continuation line
-        if a continuation is found. A tuple of name, value when a header line is
-        found.
+        if a continuation is found. A tuple of name, value when a header line
+        is found.
 
     Raises:
         ValueError: If the line cannot be parsed as a header.
     """
-    if not line or line == "\r\n":
+    if not line or line == '\r\n':
         return None
-    if line[0] in " \t":
+    if line[0] in ' \t':
         return line[1:].rstrip()
-    name, value = line.split(":", 1)
-    return (name.strip(), value.strip())
+    name, value = line.split(':', 1)
+    return name.strip(), value.strip()
+
 
 def parse_headers(obj):
     """Parse a string a iterable object (including file like objects) to a
@@ -191,7 +174,7 @@ def parse_headers(obj):
             cannot be parsed.
     """
     if isinstance(obj, basestring):
-        obj = cStringIO.StringIO(obj)
+        obj = io.StringIO(obj)
     hdrs = []
     for line in obj:
         hdr = parse_header(line)
@@ -199,11 +182,12 @@ def parse_headers(obj):
             break
         if isinstance(hdr, basestring):
             if not hdrs:
-                raise ValueError("First header is a continuation")
-            hdrs[-1] = (hdrs[-1][0], hdrs[-1][1] + hdr)
+                raise ValueError('First header is a continuation')
+            hdrs[-1] = hdrs[-1][0], hdrs[-1][1] + hdr
             continue
         hdrs.append(hdr)
     return iodict.IODict(hdrs)
+
 
 def unparse_header(name, value):
     """Parse a name value tuple to a header string.
@@ -215,7 +199,8 @@ def unparse_header(name, value):
     Returns:
         The header as a string.
     """
-    return ": ".join([name, value]) + "\r\n"
+    return ': '.join([name, value]) + '\r\n'
+
 
 def unparse_headers(hdrs):
     """Parse a dictionary of headers to a string.
@@ -226,4 +211,4 @@ def unparse_headers(hdrs):
     Returns:
         The headers as a string that can be used in an NNTP POST.
     """
-    return "".join([unparse_header(n, v) for n, v in hdrs.items()]) + "\r\n"
+    return ''.join([unparse_header(n, v) for n, v in hdrs.items()]) + '\r\n'

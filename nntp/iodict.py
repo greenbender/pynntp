@@ -1,7 +1,6 @@
-#!/usr/bin/python
 """
 Case-insentitive ordered dictionary (useful for headers).
-Copyright (C) 2013  Byron Platt
+Copyright (C) 2013-2020  Byron Platt
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -17,86 +16,109 @@ You should have received a copy of the GNU General Public License
 along with this program.  If not, see <http://www.gnu.org/licenses/>.
 """
 
-#NOTE: docstrings beed to be added
 
-from collections import OrderedDict
-
-def _lower(v):
-    """assumes that classes that inherit list, tuple or dict have a constructor
-    that is compatible with those base classes. If you are using classes that
-    don't satisfy this requirement you can subclass them and add a lower()
-    method for the class"""
-    if hasattr(v, "lower"):
-        return v.lower()
-    if isinstance(v, (list, tuple)):
-        return v.__class__(_lower(x) for x in v)
-    if isinstance(v, dict):
-        return v.__class__(_lower(v.items()))
-    return v
+from collections import OrderedDict, namedtuple
+try:
+    from collections.abc import MutableMapping, Mapping
+except ImportError:
+    from collections import MutableMapping, Mapping
+try:
+    from functools import cached_property
+except ImportError:
+    cached_property = property
 
 
-# NOTE: This class makes assumptions about the OrderedDict class that it
-# inherits from -- this a a bad idea. If The OrderedDict Class were to change
-# behaviour it could break this class.
-class IODict(OrderedDict):
+__all__ = ['IODict']
+
+
+class IKey(namedtuple('IKey', ['orig'])):
+
+    @classmethod
+    def _uncase(cls, value):
+        if hasattr(value, 'casefold'):
+            return value.casefold()
+        if hasattr(value, 'lower'):
+            return value.lower()
+        if isinstance(value, tuple):
+            return tuple(cls._uncase(v) for v in value)
+        return value
+
+    @cached_property
+    def value(self):
+        return self._uncase(self.orig)
+
+    def __hash__(self):
+        return hash(self.value)
+
+    def __eq__(self, other):
+        if not isinstance(other, IKey):
+            return self == IKey(other)
+        return self.value == other.value
+
+    def __repr__(self):
+        return repr(self.orig)
+
+
+class IODict(MutableMapping):
     """Case in-sensitive ordered dictionary.
     >>> iod = IODict([('ABC', 1), ('DeF', 'A'), (('gHi', 'jkl', 20), 'b')])
-    >>> iod
-    IODict([('ABC', 1), ('DeF', 'A'), (('gHi', 'jkl', 20), 'b')])
     >>> iod['ABC'], iod['abc'], iod['aBc']
     (1, 1, 1)
     >>> iod['DeF'], iod['def'], iod['dEf']
     ('A', 'A', 'A')
     >>> iod[('gHi', 'jkl', 20)], iod[('ghi', 'jKL', 20)]
     ('b', 'b')
-    >>> iod == {"aBc": 1, "deF": 'A', ('Ghi', 'JKL', 20): 'b'}
+    >>> iod == {'aBc': 1, 'deF': 'A', ('Ghi', 'JKL', 20): 'b'}
     True
     >>> iod.popitem()
     (('gHi', 'jkl', 20), 'b')
     """
-    
-    def __init__(self, *args, **kwds):
-        self.__map = {}
-        OrderedDict.__init__(self, *args, **kwds)
 
-    def __setitem__(self, key, *args, **kwds):
-        l = _lower(key)
-        OrderedDict.__setitem__(self, l, *args, **kwds)
-        self.__map[l] = key
+    def __init__(self, *args, **kwargs):
+        self.__proxy = OrderedDict()
+        for arg in args:
+            self.update(arg)
+        self.update(kwargs)
 
-    def __getitem__(self, key, *args, **kwds):
-        l = _lower(key)
-        return OrderedDict.__getitem__(self, l, *args, **kwds)
+    def __getitem__(self, key):
+        return self.__proxy[IKey(key)]
 
-    def __delitem__(self, key, *args, **kwds):
-        l = _lower(key)
-        OrderedDict.__delitem__(self, l, *args, **kwds)
-        del self.__map[l]
+    def __setitem__(self, key, value):
+        self.__proxy[IKey(key)] = value
 
-    def __contains__(self, key):
-        l = _lower(key)
-        return OrderedDict.__contains__(self, l)
+    def __delitem__(self, key):
+        del self.__proxy[IKey(key)]
 
     def __iter__(self):
-        for k in OrderedDict.__iter__(self):
-            yield self.__map[k]
+        for key in self.__proxy:
+            yield key.orig
 
-    def __reversed__(self):
-        for k in OrderedDict.__reversed__(self):
-            yield self.__map[k]
+    def __len__(self):
+        return len(self.__proxy)
 
-    def clear(self):
-        OrderedDict.clear(self)
-        self.__map.clear()
-    
     def __eq__(self, other):
-        """assumes that classes that inherit dict have a constructor that is
-        compatible with the dict class."""
-        if len(self) != len(other) or not isinstance(other, dict):
-            return False
-        so = OrderedDict(zip(_lower(self.keys()), self.values()))
-        oo = other.__class__(zip(_lower(other.keys()), other.values()))
-        return so == oo
+        if not isinstance(other, Mapping):
+            return NotImplemented
+        if not isinstance(other, IODict):
+            return self == IODict(other)
+        return self.__proxy == other.__proxy
+
+    def __repr__(self):
+        clsname = type(self).__name__
+        return '%s(%r)' % (clsname, list(self.__proxy.items()))
+
+    def keys(self):
+        for key in self.__proxy:
+            yield key.orig
+
+    def items(self):
+        for key in self.__proxy:
+            yield key.orig, self[key.orig]
+
+    def popitem(self):
+        key, value = self.__proxy.popitem()
+        return key.orig, value
+
 
 if __name__ == "__main__":
     import doctest

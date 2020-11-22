@@ -1,7 +1,6 @@
-#!/usr/bin/python
 """
 Basic yEnc decoder.
-Copyright (C) 2013  Byron Platt
+Copyright (C) 2013-2020  Byron Platt
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -17,7 +16,6 @@ You should have received a copy of the GNU General Public License
 along with this program.  If not, see <http://www.gnu.org/licenses/>.
 """
 
-#NOTE: docstrings beed to be added
 
 import re
 import zlib
@@ -25,37 +23,32 @@ import struct
 import binascii
 
 
-_crc32_re = re.compile(r"\s+crc(?:32)?=([0-9a-fA-F]{8})")
+_crc32_re = re.compile(b'\\s+crc(?:32)?=([0-9a-fA-F]{8})')
+
 
 def crc32(trailer):
-
     match = _crc32_re.search(trailer)
     if not match:
         return None
-
     buf = binascii.unhexlify(match.group(1))
+    return struct.unpack('>I', buf)[0]
 
-    return struct.unpack(">I", buf)[0]
 
-
-def decode(buff, escape=0, crc32=0):
-
-    decoded = ""
-
-    for c in buff:
-        byte = ord(c)
+def decode(buf, escape=0, crc32=0):
+    decoded = bytearray()
+    if isinstance(buf, str):
+        buf = bytearray(buf)
+    for b in buf:
         if escape:
-            byte = (byte - 106) & 0xff
+            b = (b - 106) & 0xff
             escape = 0
-        elif byte == 0x3d:
+        elif b == 0x3d:
             escape = 1
             continue
-        elif byte == 0x0d or byte == 0x0a:
+        elif b == 0x0d or b == 0x0a:
             continue
         else:
-            byte = (byte - 42) & 0xff
-        decoded += chr(byte)
-
+            b = (b - 42) & 0xff
+        decoded.append(b)
     crc32 = zlib.crc32(decoded, crc32)
-
     return decoded, escape, crc32

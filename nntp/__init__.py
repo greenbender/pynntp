@@ -1,4 +1,5 @@
-from nntp import (
+# flake8: noqa
+from .nntp import (
     NNTPError,
     NNTPReplyError,
     NNTPTemporaryError,
