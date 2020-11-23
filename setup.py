@@ -3,7 +3,7 @@ from setuptools import setup
 
 setup(
     name='pynntp',
-    version='1.0.0',
+    version='1.0.1',
     description='NNTP Library (including compressed headers)',
     author='Byron Platt',
     author_email='byron.platt@gmail.com',

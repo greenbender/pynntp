@@ -18,7 +18,7 @@ Example
 -------
 
     >>> import nntp
-    >>> nntp_client = nntp.NNTPClient("usenet-host.com", 443, 'user', 'password', use_ssl=True)
+    >>> nntp_client = nntp.NNTPClient('usenet-host.com', 443, 'user', 'password', use_ssl=True)
     >>> nntp_client.date()
     datetime.datetime(2013, 10, 19, 6, 11, 41, tzinfo=_tzgmt())
     >>> nntp_client.xfeature_compress_gzip()
@@ -31,29 +31,30 @@ Supported Commands
 ------------------
 
 NNTP commands that are currently supported include:
-* CAPABILITIES
-* MODE READER
-* QUIT
-* DATE
-* HELP
-* NEWGROUPS (generator)
-* NEWNEWS (generator)
-* LIST ACTIVE (generator)
-* LIST ACTIVE.TIMES (generator)
-* LIST NEWSGROUPS (generator)
-* LIST OVERVIEW.FMT (generator)
-* LIST EXTENSIONS (generator)
-* GROUP
-* NEXT
-* LAST
-* ARTICLE
-* HEAD
-* BODY
-* POST
-* XGTITLE
-* XHDR
-* XZHDR
-* XOVER (generator)
-* XZVER (generator)
-* XPAT (generator)
-* XFEATURE COMPRESS GZIP
+
+ * CAPABILITIES
+ * MODE READER
+ * QUIT
+ * DATE
+ * HELP
+ * NEWGROUPS
+ * NEWNEWS
+ * LIST ACTIVE
+ * LIST ACTIVE.TIMES
+ * LIST NEWSGROUPS
+ * LIST OVERVIEW.FMT
+ * LIST EXTENSIONS
+ * GROUP
+ * NEXT
+ * LAST
+ * ARTICLE
+ * HEAD
+ * BODY
+ * POST
+ * XHDR
+ * XZHDR
+ * XOVER
+ * XZVER
+ * XPAT
+ * XFEATURE COMPRESS GZIP
+ * POST
