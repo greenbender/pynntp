@@ -22,16 +22,16 @@ try:
     from collections.abc import MutableMapping, Mapping
 except ImportError:
     from collections import MutableMapping, Mapping
-try:
-    from functools import cached_property
-except ImportError:
-    cached_property = property
+from .polyfill import cached_property
 
 
 __all__ = ['IODict']
 
 
-class IKey(namedtuple('IKey', ['orig'])):
+class IKey(object):
+
+    def __init__(self, orig):
+        self.orig = orig
 
     @classmethod
     def _uncase(cls, value):
@@ -57,6 +57,9 @@ class IKey(namedtuple('IKey', ['orig'])):
 
     def __repr__(self):
         return repr(self.orig)
+
+    def __str__(self):
+        return str(self.orig)
 
 
 class IODict(MutableMapping):

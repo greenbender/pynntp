@@ -18,6 +18,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 
 import re
+import sys
 import zlib
 import struct
 import binascii
@@ -34,10 +35,8 @@ def crc32(trailer):
     return struct.unpack('>I', buf)[0]
 
 
-def decode(buf, escape=0, crc32=0):
+def _decode(buf, escape):
     decoded = bytearray()
-    if isinstance(buf, str):
-        buf = bytearray(buf)
     for b in buf:
         if escape:
             b = (b - 106) & 0xff
@@ -50,5 +49,21 @@ def decode(buf, escape=0, crc32=0):
         else:
             b = (b - 42) & 0xff
         decoded.append(b)
+    return decoded, escape
+
+
+def _decode3(buf, escape=0, crc32=0):
+    decoded, escape = _decode(buf, escape)
     crc32 = zlib.crc32(decoded, crc32)
     return decoded, escape, crc32
+
+
+def _decode2(buf, escape=0, crc32=0):
+    buf = bytearray(buf)
+    decoded, escape = _decode(buf, escape)
+    decoded = bytes(decoded)
+    crc32 = zlib.crc32(decoded, crc32)
+    return decoded, escape, crc32
+
+
+decode = _decode3 if sys.version_info[0] >= 3 else _decode2

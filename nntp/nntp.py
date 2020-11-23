@@ -23,6 +23,7 @@ import zlib
 import socket
 import datetime
 from . import utils, iodict, fifo, date, yenc
+from .polyfill import cached_property
 
 
 __all__ = [
@@ -141,8 +142,8 @@ class BaseNNTPClient(object):
             self.socket = ssl.wrap_socket(self.socket)
         self.socket.settimeout(timeout)
 
-        self.__buffer = fifo.Fifo()
-        self.__generating = False
+        self._buffer = fifo.Fifo()
+        self._generating = False
 
         self.username = username
         self.password = password
@@ -153,7 +154,7 @@ class BaseNNTPClient(object):
         if code not in (200, 201):
             raise NNTPReplyError(code, message)
 
-    def __recv(self, size=4096):
+    def _recv(self, size=4096):
         """Reads data from the socket.
 
         Raises:
@@ -162,9 +163,9 @@ class BaseNNTPClient(object):
         data = self.socket.recv(size)
         if not data:
             raise NNTPError("Failed to read from socket")
-        self.__buffer.write(data)
+        self._buffer.write(data)
 
-    def __line_gen(self):
+    def _line(self):
         """Generator that reads a line of data from the server.
 
         It first attempts to read from the internal buffer. If there is not
@@ -176,13 +177,13 @@ class BaseNNTPClient(object):
             A line of data when it becomes available.
         """
         while True:
-            line = self.__buffer.readline()
+            line = self._buffer.readline()
             if not line:
-                self.__recv()
+                self._recv()
                 continue
             yield line
 
-    def __buf_gen(self, length=0):
+    def _buf(self, length=0):
         """Generator that reads a block of data from the server.
 
         It first attempts to read from the internal buffer. If there is not
@@ -203,9 +204,9 @@ class BaseNNTPClient(object):
             recv on the socket.
         """
         while True:
-            buf = self.__buffer.read(length)
+            buf = self._buffer.read(length)
             if not buf:
-                self.__recv()
+                self._recv()
                 continue
             yield buf
 
@@ -225,7 +226,7 @@ class BaseNNTPClient(object):
         Returns:
             A tuple of status code (as an integer) and status message.
         """
-        line = next(self.__line_gen()).rstrip()
+        line = next(self._line()).rstrip()
         parts = line.split(None, 1)
 
         try:
@@ -249,7 +250,7 @@ class BaseNNTPClient(object):
 
         return code, message
 
-    def __info_plain_gen(self):
+    def _info_plain(self):
         """Generator for the lines of an info (textual) response.
 
         When a terminating line (line containing single period) is received the
@@ -265,18 +266,18 @@ class BaseNNTPClient(object):
             NNTPError: If data is required to be read from the socket and
                 fails.
         """
-        self.__generating = True
+        self._generating = True
 
-        for line in self.__line_gen():
+        for line in self._line():
             if line == b'.\r\n':
                 break
             if line.startswith(b'.'):
                 yield line[1:]
             yield line
 
-        self.__generating = False
+        self._generating = False
 
-    def __info_gzip_gen(self):
+    def _info_gzip(self):
         """Generator for the lines of a compressed info (textual) response.
 
         Compressed responses are an extension to the NNTP protocol supported by
@@ -291,7 +292,7 @@ class BaseNNTPClient(object):
         data (i.e the reply the gzipped version of the original reply -
         terminating line included)
 
-        This function will produce that same output as the __info_plain_gen()
+        This function will produce that same output as the _info_plain()
         function. In other words it takes care of decompression.
 
         Yields:
@@ -302,14 +303,14 @@ class BaseNNTPClient(object):
                 fails.
             NNTPDataError: If decompression fails.
         """
-        self.__generating = True
+        self._generating = True
 
         inflate = zlib.decompressobj(15+32)
 
         done, buf = False, fifo.Fifo()
         while not done:
             try:
-                data = inflate.decompress(next(self.__buf_gen()))
+                data = inflate.decompress(next(self._buf()))
             except zlib.error:
                 raise NNTPDataError('Decompression failed')
             if data:
@@ -324,9 +325,9 @@ class BaseNNTPClient(object):
                     yield line[1:]
                 yield line
 
-        self.__generating = False
+        self._generating = False
 
-    def __info_yenczlib_gen(self):
+    def _info_yenczlib(self):
         """Generator for the lines of a compressed info (textual) response.
 
         Compressed responses are an extension to the NNTP protocol supported by
@@ -336,7 +337,7 @@ class BaseNNTPClient(object):
         command the difference being that the data is zlib deflated and then
         yEnc encoded.
 
-        This function will produce that same output as the info_gen()
+        This function will produce that same output as the info()
         function. In other words it takes care of decoding and decompression.
 
         Yields:
@@ -354,13 +355,13 @@ class BaseNNTPClient(object):
         inflate = zlib.decompressobj(-15)
 
         # header
-        header = next(self.__info_plain_gen())
+        header = next(self._info_plain())
         if not header.startswith(b'=ybegin'):
             raise NNTPDataError('Bad yEnc header')
 
         # data
         buf, trailer = fifo.Fifo(), b''
-        for line in self.__info_plain_gen():
+        for line in self._info_plain():
             if line.startswith(b'=yend'):
                 trailer = line
                 continue
@@ -388,54 +389,33 @@ class BaseNNTPClient(object):
         if ecrc32 != dcrc32 & 0xffffffff:
             raise NNTPDataError('Bad yEnc CRC')
 
-    def info_gen(
-        self, code, message,
-        compressed=False,
-        encoding=encoding, errors=errors
-    ):
+    def info(self, code, message, yz=False, encoding=encoding, errors=errors):
         """Dispatcher for the info generators.
 
-        Determines which __info_*_gen() should be used based on the supplied
-        parameters.
+        Determines which _info_*() generator should be used based on the
+        supplied parameters.
 
         Args:
             code: The status code for the command response.
             message: The status message for the command reponse.
-            compressed: Force decompression. Useful for xz* commands.
+            yz: Use yenzlib decompression. Useful for xz* commands.
             encoding: Encoding to use. None means bytes are yielded.
             errors: Error handling for encoding.
 
-        Returns:
-            An info generator.
+        Yields:
+            Chunks of the info (textual) response in the requested encoding
+            until the entire response has been yielded.
         """
         if 'COMPRESS=GZIP' in message:
-            gen = self.__info_gzip_gen()
-        elif compressed:
-            gen = self.__info_yenczlib_gen()
+            gen = self._info_gzip()
+        elif yz:
+            gen = self._info_yenczlib()
         else:
-            gen = self.__info_plain_gen()
+            gen = self._info_plain()
         for line in gen:
             if encoding is not None:
                 line = line.decode(encoding, errors)
             yield line
-
-    def info(
-        self, code, message,
-        compressed=False,
-        encoding=encoding, errors=errors
-    ):
-        """The complete content of an info response.
-
-        This should only used for commands that return small or known amounts
-        of data.
-
-        Returns:
-            A the complete content of a textual response.
-        """
-        j = b'' if encoding is None else ''
-        return j.join([x for x in self.info_gen(
-            code, message, compressed, encoding, errors
-        )])
 
     def command(self, verb, args=None):
         """Call a command on the server.
@@ -461,7 +441,7 @@ class BaseNNTPClient(object):
             at a time by adding newlines to the verb as it will most likely
             lead to undesirable results.
         """
-        if self.__generating:
+        if self._generating:
             raise NNTPSyncError('Command issued while a generator is active')
 
         if args:
@@ -568,9 +548,9 @@ class NNTPClient(BaseNNTPClient):
             keyword: Passed directly to the server, however, this is unused by
                 the server according to RFC3977.
 
-        Returns:
-            A list of capabilities supported by the server. The VERSION
-            capability is the first capability in the list.
+        Yields:
+            Each of the capabilities supported by the server. The VERSION
+            capability is the first capability to be yielded.
         """
         args = keyword
 
@@ -578,7 +558,8 @@ class NNTPClient(BaseNNTPClient):
         if code != 101:
             raise NNTPReplyError(code, message)
 
-        return [x.strip() for x in self.info_gen(code, message)]
+        for line in self.info(code, message):
+            yield line.strip()
 
     def mode_reader(self):
         """MODE READER command.
@@ -654,12 +635,12 @@ class NNTPClient(BaseNNTPClient):
         if code != 100:
             raise NNTPReplyError(code, message)
 
-        return self.info(code, message)
+        return ''.join(self.info(code, message))
 
-    def newgroups_gen(self, timestamp):
-        """Generator for the NEWGROUPS command.
+    def newgroups(self, timestamp):
+        """NEWGROUPS command.
 
-        Generates a list of newsgroups created on the server since the
+        Retreives a list of newsgroups created on the server since the
         specified timestamp.
 
         See <http://tools.ietf.org/html/rfc3977#section-7.3>
@@ -668,8 +649,8 @@ class NNTPClient(BaseNNTPClient):
             timestamp: Datetime object giving 'created since' datetime.
 
         Yields:
-            A tuple containing the name, low water mark, high water mark,
-            and status for the newsgroup.
+            A 4-tuple containing the name, low water mark, high water mark, and
+            status for the newsgroup, for each newsgroup.
 
         Note: If the datetime object supplied as the timestamp is naive (tzinfo
             is None) then it is assumed to be given as GMT.
@@ -685,29 +666,13 @@ class NNTPClient(BaseNNTPClient):
         if code != 231:
             raise NNTPReplyError(code, message)
 
-        for line in self.info_gen(code, message):
+        for line in self.info(code, message):
             yield utils.parse_newsgroup(line)
 
-    def newgroups(self, timestamp):
-        """NEWGROUPS command.
+    def newnews(self, pattern, timestamp):
+        """NEWNEWS command.
 
-        Retreives a list of newsgroups created on the server since the
-        specified timestamp. See newgroups_gen() for more details.
-
-        See <http://tools.ietf.org/html/rfc3977#section-7.3>
-
-        Args:
-            timestamp: Datetime object giving 'created since' datetime.
-
-        Returns:
-            A list of tuples in the format given by newgroups_gen()
-        """
-        return [x for x in self.newgroups_gen(timestamp)]
-
-    def newnews_gen(self, pattern, timestamp):
-        """Generator for the NEWNEWS command.
-
-        Generates a list of message-ids for articles created since the
+        Retrieves a list of message-ids for articles created since the
         specified timestamp for newsgroups with names that match the given
         pattern.
 
@@ -718,7 +683,7 @@ class NNTPClient(BaseNNTPClient):
             timestamp: Datetime object giving 'created since' datetime.
 
         Yields:
-            A message-id as string.
+            A message-id as string, for each article.
 
         Note: If the datetime object supplied as the timestamp is naive (tzinfo
             is None) then it is assumed to be given as GMT. If tzinfo is set
@@ -736,42 +701,23 @@ class NNTPClient(BaseNNTPClient):
         if code != 230:
             raise NNTPReplyError(code, message)
 
-        for line in self.info_gen(code, message):
+        for line in self.info(code, message):
             yield line.strip()
 
-    def newnews(self, pattern, timestamp):
-        """NEWNEWS command.
-
-        Retrieves a list of message-ids for articles created since the
-        specified timestamp for newsgroups with names that match the given
-        pattern. See newnews_gen() for more details.
-
-        See <http://tools.ietf.org/html/rfc3977#section-7.4>
-
-        Args:
-            pattern: Glob matching newsgroups of intrest.
-            timestamp: Datetime object giving 'created since' datetime.
-
-        Returns:
-            A list of message-ids as given by newnews_gen()
-        """
-        return [x for x in self.newnews_gen(pattern, timestamp)]
-
     # list commands
-    def list_active_gen(self, pattern=None):
-        """Generator for the LIST ACTIVE command.
+    def list_active(self, pattern=None):
+        """LIST ACTIVE command.
 
-        Generates a list of active newsgroups that match the specified pattern.
-        If no pattern is specfied then all active groups are generated.
+        Retrieves a list of active newsgroups that match the specified pattern.
 
         See <http://tools.ietf.org/html/rfc3977#section-7.6.3>
 
         Args:
-            pattern: Glob matching newsgroups of intrest.
+            pattern: Glob matching newsgroups of interest.
 
         Yields:
-            A tuple containing the name, low water mark, high water mark,
-            and status for the newsgroup.
+            A 4-tuple containing the name, low water mark, high water mark,
+            and status for the newsgroup, for each newsgroup.
         """
         args = pattern
 
@@ -784,42 +730,26 @@ class NNTPClient(BaseNNTPClient):
         if code != 215:
             raise NNTPReplyError(code, message)
 
-        for line in self.info_gen(code, message):
+        for line in self.info(code, message):
             yield utils.parse_newsgroup(line)
 
-    def list_active(self, pattern=None):
-        """LIST ACTIVE command.
+    def list_active_times(self):
+        """LIST ACTIVE TIMES command.
 
-        Retreives a list of active newsgroups that match the specified pattern.
-        See list_active_gen() for more details.
-
-        See <http://tools.ietf.org/html/rfc3977#section-7.6.3>
-
-        Args:
-            pattern: Glob matching newsgroups of intrest.
-
-        Returns:
-            A list of tuples in the format given by list_active_gen()
-        """
-        return [x for x in self.list_active_gen(pattern)]
-
-    def list_active_times_gen(self):
-        """Generator for the LIST ACTIVE.TIMES command.
-
-        Generates a list of newsgroups including the creation time and who
+        Retrieves a list of newsgroups including the creation time and who
         created them.
 
         See <http://tools.ietf.org/html/rfc3977#section-7.6.4>
 
         Yields:
-            A tuple containing the name, creation date as a datetime object and
-            creator as a string for the newsgroup.
+            A 3-tuple containing the name, creation date as a datetime object
+            and creator as a string for the newsgroup for each newsgroup.
         """
         code, message = self.command('LIST ACTIVE.TIMES')
         if code != 215:
             raise NNTPReplyError(code, message)
 
-        for line in self.info_gen(code, message):
+        for line in self.info(code, message):
             parts = line.split()
             try:
                 name = parts[0]
@@ -829,43 +759,34 @@ class NNTPClient(BaseNNTPClient):
                 raise NNTPDataError('Invalid LIST ACTIVE.TIMES')
             yield name, timestamp, creator
 
-    def list_active_times(self):
-        """LIST ACTIVE TIMES command.
-
-        Retrieves a list of newsgroups including the creation time and who
-        created them. See list_active_times_gen() for more details.
-
-        See <http://tools.ietf.org/html/rfc3977#section-7.6.4>
-
-        Returns:
-            A list of tuples in the format given by list_active_times_gen()
-        """
-        return [x for x in self.list_active_times_gen()]
-
-    def list_distrib_pats_gen(self):
-        """Generator for the LIST DISTRIB.PATS command.
-        """
-        raise NotImplementedError()
-
-    def list_distrib_pats(self):
-        """LIST DISTRIB.PATS command.
-        """
-        return [x for x in self.list_distrib_pats_gen()]
-
-    def list_headers_gen(self, arg=None):
-        """Generator for the LIST HEADERS command.
-        """
-        raise NotImplementedError()
-
-    def list_headers(self, arg=None):
+    def list_headers(self, variant=None):
         """LIST HEADERS command.
+
+        Returns a list of fields that may be retrieved using the HDR command.
+
+        See <https://tools.ietf.org/html/rfc3977#section-8.6>
+
+        Args:
+            variant: The string 'MSGID' or 'RANGE' or None (the default).
+                Different variants of the HDR request may return a different
+                fields. 
+
+        Yields:
+            The field name for each of the fields.
         """
-        return [x for x in self.list_headers_gen(arg)]
+        args = variant
 
-    def list_newsgroups_gen(self, pattern=None):
-        """Generator for the LIST NEWSGROUPS command.
+        code, message = self.command('LIST HEADERS', args)
+        if code != 215:
+            raise NNTPReplyError(code, message)
 
-        Generates a list of newsgroups including the name and a short
+        for line in self.info(code, message):
+            yield line.strip()
+
+    def list_newsgroups(self, pattern=None):
+        """LIST NEWSGROUPS command.
+
+        Retrieves a list of newsgroups including the name and a short
         description.
 
         See <http://tools.ietf.org/html/rfc3977#section-7.6.6>
@@ -874,7 +795,8 @@ class NNTPClient(BaseNNTPClient):
             pattern: Glob matching newsgroups of intrest.
 
         Yields:
-            A tuple containing the name, and description for the newsgroup.
+            A tuple containing the name, and description for the newsgroup, for
+            each newsgroup that matches the pattern.
         """
         args = pattern
 
@@ -882,42 +804,31 @@ class NNTPClient(BaseNNTPClient):
         if code != 215:
             raise NNTPReplyError(code, message)
 
-        for line in self.info_gen(code, message):
+        for line in self.info(code, message):
             parts = line.strip().split()
             name, description = parts[0], ''
             if len(parts) > 1:
                 description = parts[1]
             yield name, description
 
-    def list_newsgroups(self, pattern=None):
-        """LIST NEWSGROUPS command.
+    def list_overview_fmt(self):
+        """LIST OVERVIEW.FMT command.
 
-        Retrieves a list of newsgroups including the name and a short
-        description. See list_newsgroups_gen() for more details.
+        Returns a description of the fields in the database for which it is
+        consistent.
 
-        See <http://tools.ietf.org/html/rfc3977#section-7.6.6>
-
-        Args:
-            pattern: Glob matching newsgroups of intrest.
-
-        Returns:
-            A list of tuples in the format given by list_newsgroups_gen()
-        """
-        return [x for x in self.list_newsgroups_gen(pattern)]
-
-    def list_overview_fmt_gen(self):
-        """Generator for the LIST OVERVIEW.FMT
-
-        See list_overview_fmt() for more information.
+        See <https://tools.ietf.org/html/rfc3977#section-8.4>
 
         Yields:
-            An element in the list returned by list_overview_fmt().
+            A 2-tuple of the name of the field and a boolean indicating whether
+            the the field name is included in the field data, for each field in
+            the database which is consistent, fields are yielded in order.
         """
         code, message = self.command('LIST OVERVIEW.FMT')
         if code != 215:
             raise NNTPReplyError(code, message)
 
-        for line in self.info_gen(code, message):
+        for line in self.info(code, message):
             try:
                 name, suffix = line.rstrip().split(':')
             except ValueError:
@@ -928,77 +839,78 @@ class NNTPClient(BaseNNTPClient):
                 raise NNTPDataError('Invalid LIST OVERVIEW.FMT')
             yield (name, suffix == 'full')
 
-    def list_overview_fmt(self):
-        """LIST OVERVIEW.FMT command.
-        """
-        return [x for x in self.list_overview_fmt_gen()]
+    def list_extensions(self):
+        """LIST EXTENSIONS command.
 
-    def list_extensions_gen(self):
-        """Generator for the LIST EXTENSIONS command.
+        Allows a client to determine which extensions are supported by the
+        server at any given time.
+
+        See <https://tools.ietf.org/html/draft-ietf-nntpext-base-20#section-5.3>
+
+        Yields:
+            The name of the extension of each of the available extensions.
         """
         code, message = self.command('LIST EXTENSIONS')
         if code != 202:
             raise NNTPReplyError(code, message)
 
-        for line in self.info_gen(code, message):
+        for line in self.info(code, message):
             yield line.strip()
-
-    def list_extensions(self):
-        """LIST EXTENSIONS command.
-        """
-        return [x for x in self.list_extensions_gen()]
-
-    def list_gen(self, keyword=None, arg=None):
-        """Generator for LIST command.
-
-        See list() for more information.
-
-        Yields:
-            An element in the list returned by list().
-        """
-        if keyword:
-            keyword = keyword.upper()
-
-        if keyword is None or keyword == 'ACTIVE':
-            return self.list_active_gen(arg)
-        if keyword == 'ACTIVE.TIMES':
-            return self.list_active_times_gen()
-        if keyword == 'DISTRIB.PATS':
-            return self.list_distrib_pats_gen()
-        if keyword == 'HEADERS':
-            return self.list_headers_gen(arg)
-        if keyword == 'NEWSGROUPS':
-            return self.list_newsgroups_gen(arg)
-        if keyword == 'OVERVIEW.FMT':
-            return self.list_overview_fmt_gen()
-        if keyword == 'EXTENSIONS':
-            return self.list_extensions_gen()
-
-        raise NotImplementedError()
 
     def list(self, keyword=None, arg=None):
         """LIST command.
 
-        A wrapper for all of the other list commands. The output of this
-        command depends on the keyword specified. The output format for each
-        keyword can be found in the list function that corresponds to the
-        keyword.
+        A wrapper for all of the other list commands.
 
         Args:
             keyword: Information requested.
             arg: Pattern or keyword specific argument.
 
+        Yields:
+            Depends on which list command is specified by the keyword. See the
+            list function that corresponds to that keyword.
+
         Note: Keywords supported by this function are include ACTIVE,
-            ACTIVE.TIMES, DISTRIB.PATS, HEADERS, NEWSGROUPS, OVERVIEW.FMT and
-            EXTENSIONS.
+            ACTIVE.TIMES, HEADERS, NEWSGROUPS, OVERVIEW.FMT and EXTENSIONS.
 
         Raises:
             NotImplementedError: For unsupported keywords.
         """
-        return [x for x in self.list_gen(keyword, arg)]
+        if keyword:
+            keyword = keyword.upper()
+
+        if keyword is None or keyword == 'ACTIVE':
+            return self.list_active(arg)
+        if keyword == 'ACTIVE.TIMES':
+            return self.list_active_times()
+        if keyword == 'HEADERS':
+            return self.list_headers(arg)
+        if keyword == 'NEWSGROUPS':
+            return self.list_newsgroups(arg)
+        if keyword == 'OVERVIEW.FMT':
+            return self.list_overview_fmt()
+        if keyword == 'EXTENSIONS':
+            return self.list_extensions()
+
+        raise NotImplementedError()
 
     def group(self, name):
         """GROUP command.
+
+        Selects a newsgroup as the currently selected newsgroup and returns
+        summary information about it.
+
+        See <https://tools.ietf.org/html/rfc3977#section-6.1.1>
+
+        Args:
+            name: The group name.
+
+        Returns:
+            A 4-tuple of the estimated total articles in the group, the
+            articles numbers of the first and last article and the group name.
+
+        Raises:
+            NNTPReplyError: If no such newsgroup exists.
         """
         args = name
 
@@ -1019,6 +931,18 @@ class NNTPClient(BaseNNTPClient):
 
     def next(self):
         """NEXT command.
+
+        Sets the current article number to the next article in the current
+        newsgroup.
+
+        See <https://tools.ietf.org/html/rfc3977#section-6.1.4>
+
+        Returns:
+            A 2-tuple of the article number and message id.
+
+        Raises:
+            NNTPReplyError: If no such article exists or the currently selected
+                newsgroup is invalid.
         """
         code, message = self.command('NEXT')
         if code != 223:
@@ -1027,14 +951,26 @@ class NNTPClient(BaseNNTPClient):
         parts = message.split(None, 3)
         try:
             article = int(parts[0])
-            ident = parts[1]
+            msgid = parts[1]
         except (IndexError, ValueError):
             raise NNTPDataError('Invalid NEXT status')
 
-        return article, ident
+        return article, mgsid
 
     def last(self):
         """LAST command.
+
+        Sets the current article number to the previous article in the current
+        newsgroup.
+
+        See <https://tools.ietf.org/html/rfc3977#section-6.1.3>
+
+        Returns:
+            A 2-tuple of the article number and message id.
+
+        Raises:
+            NNTPReplyError: If no such article exists or the currently selected
+                newsgroup is invalid.
         """
         code, message = self.command('LAST')
         if code != 223:
@@ -1043,15 +979,61 @@ class NNTPClient(BaseNNTPClient):
         parts = message.split(None, 3)
         try:
             article = int(parts[0])
-            ident = parts[1]
+            msgid = parts[1]
         except (IndexError, ValueError):
             raise NNTPDataError('Invalid LAST status')
 
-        return article, ident
+        return article, msgid
 
-    # TODO: Validate yEnc body
+    # TODO: Validate yEnc
+    def _body(self, code, message, decode=None):
+        escape = crc32 = 0
+
+        # read the body
+        body = []
+        for line in self.info(code, message, encoding=None):
+
+            # detect yenc
+            if decode is None:
+                if line.startswith(b'=y'):
+                    decode = True
+                    del body[:]
+                elif line != b'\r\n':
+                    decode = False
+
+            # decode yenc
+            if decode:
+                if line.startswith(b'=y'):
+                    continue
+                line, escape, crc32 = yenc.decode(line, escape, crc32)
+
+            body.append(line)
+
+        return b''.join(body)
+
     def article(self, msgid_article=None, decode=None):
         """ARTICLE command.
+
+        Selects an article according to the arguments and presents the entire
+        article (that is, the headers, an empty line, and the body, in that
+        order) to the client.
+
+        See <https://tools.ietf.org/html/rfc3977#section-6.2.1>
+
+        Args:
+            msgid_article: A message-id as a string, or an article number as an
+                integer. A msgid_article of None (the default) uses the current
+                article.
+            decode: Force yenc decoding to be enabled or disabled. A value of
+                None (the default) attempts to determine this automatically.
+
+        Returns:
+            A 3-tuple of the article number, the article headers, and the
+            article body. The headers are decoded to unicode, where as the body
+            is returned as bytes.
+
+        Raises:
+            NNTPReplyError: If no such article exists.
         """
         args = None
         if msgid_article is not None:
@@ -1069,29 +1051,34 @@ class NNTPClient(BaseNNTPClient):
             raise NNTPProtocolError(message)
 
         # headers
-        headers = utils.parse_headers(self.info_gen(code, message))
+        headers = utils.parse_headers(self.info(code, message))
 
-        # decoding setup
-        decode = 'yEnc' in headers.get('subject', '')
-        escape = 0
-        crc32 = 0
+        if decode is None and 'yEnc' in headers.get('subject', ''):
+            decode = True
 
         # body
-        body = []
-        for line in self.info_gen(code, message, encoding=None):
+        body = self._body(code, message, decode=decode)
 
-            # decode body if required
-            if decode:
-                if line.startswith(b'=y'):
-                    continue
-                line, escape, crc32 = yenc.decode(line, escape, crc32)
-
-            body.append(line)
-
-        return articleno, headers, b''.join(body)
+        return articleno, headers, body
 
     def head(self, msgid_article=None):
         """HEAD command.
+
+        Identical to the ARTICLE command except that only the headers are
+        presented.
+
+        See <https://tools.ietf.org/html/rfc3977#section-6.2.2>
+
+        Args:
+            msgid_article: A message-id as a string, or an article number as an
+                integer. A msgid_article of None (the default) uses the current
+                article.
+            
+        Returns:
+            The article headers.
+            
+        Raises:
+            NNTPReplyError: If no such article exists.
         """
         args = None
         if msgid_article is not None:
@@ -1101,11 +1088,30 @@ class NNTPClient(BaseNNTPClient):
         if code != 221:
             raise NNTPReplyError(code, message)
 
-        return utils.parse_headers(self.info_gen(code, message))
+        return utils.parse_headers(self.info(code, message))
 
-    # TODO: Support yEnc article body validation
-    def body(self, msgid_article=None, decode=False):
+    def body(self, msgid_article=None, decode=None):
         """BODY command.
+
+        Identical to the ARTICLE command except that only the body is
+        presented.
+
+        See <https://tools.ietf.org/html/rfc3977#section-6.2.3>
+
+        Args:
+            msgid_article: A message-id as a string, or an article number as an
+                integer. A msgid_article of None (the default) uses the current
+                article.
+            decode: Force yenc decoding to be enabled or disabled. A value of
+                None (the default) attempts to determine this automatically.
+
+        Returns:
+            A 3-tuple of the article number, the article headers, and the
+            article body. The headers are decoded to unicode, where as the body
+            is returned as bytes.
+
+        Raises:
+            NNTPReplyError: If no such article exists.
         """
         args = None
         if msgid_article is not None:
@@ -1115,104 +1121,111 @@ class NNTPClient(BaseNNTPClient):
         if code != 222:
             raise NNTPReplyError(code, message)
 
-        escape = 0
-        crc32 = 0
+        return self._body(code, message, decode=decode)
 
-        body = []
-        for line in self.info_gen(code, message, encoding=None):
-
-            # decode body if required
-            if decode:
-                if line.startswith(b'=y'):
-                    continue
-                line, escape, crc32 = yenc.decode(line, escape, crc32)
-
-            # body
-            body.append(line)
-
-        return b''.join(body)
-
-    def xgtitle(self, pattern=None):
-        """XGTITLE command.
-        """
-        args = pattern
-
-        code, message = self.command('XGTITLE', args)
-        if code != 282:
-            raise NNTPReplyError(code, message)
-
-        return self.info(code, message)
-
-    def xhdr(self, header, msgid_range=None):
-        """XHDR command.
-        """
+    def _hdr(self, header, msgid_range=None, verb='HDR'):
         args = header
-        if range is not None:
+        if msgid_range is not None:
             args += " " + utils.unparse_msgid_range(msgid_range)
 
-        code, message = self.command('XHDR', args)
+        code, message = self.command(verb, args)
         if code != 221:
             raise NNTPReplyError(code, message)
 
-        return self.info(code, message)
+        yz = verb == 'XZHDR'
+        for line in self.info(code, message, yz=yz):
+            parts = line.split(None, 1)
+            try:
+                articleno = int(parts[0])
+                value = parts[1] if len(parts) > 1 else ''
+            except (IndexError, ValueError):
+                raise NNTPDataError('Invalid XHDR response')
+            yield articleno, value
 
-    def xzhdr(self, header, msgid_range=None):
-        """XZHDR command.
+    def hdr(self, header, msgid_range=None):
+        """HDR command.
+
+        Provides access to specific fields from an article specified by
+        message-id, or from a specified article or range of articles in the
+        currently selected newsgroup.
+
+        See <https://tools.ietf.org/html/rfc3977#section-8.5>
 
         Args:
+            header: The header field to retrieve.
             msgid_range: A message-id as a string, or an article number as an
                 integer, or a tuple of specifying a range of article numbers in
                 the form (first, [last]) - if last is omitted then all articles
                 after first are included. A msgid_range of None (the default)
                 uses the current article.
-        """
-        args = header
-        if msgid_range is not None:
-            args += ' ' + utils.unparse_msgid_range(msgid_range)
 
-        code, message = self.command('XZHDR', args)
-        if code != 221:
-            raise NNTPReplyError(code, message)
-
-        return self.info(code, message, compressed=True)
-
-    def xover_gen(self, range=None):
-        """Generator for the XOVER command.
-
-        The XOVER command returns information from the overview database for
-        the article(s) specified.
-
-        <http://tools.ietf.org/html/rfc2980#section-2.8>
-
-        Args:
-            range: An article number as an integer, or a tuple of specifying a
-                range of article numbers in the form (first, [last]). If last
-                is omitted then all articles after first are included. A range
-                of None (the default) uses the current article.
-
-        Returns:
-            A list of fields as given by the overview database for each
-            available article in the specified range. The fields that are
-            returned can be determined using the LIST OVERVIEW.FMT command if
-            the server supports it.
+        Yields:
+            A 2-tuple giving the article number and value for the provided
+            header field for each article in the given range.
 
         Raises:
-            NNTPReplyError: If no such article exists or the currently selected
-                newsgroup is invalid.
+            NNTPDataError: If the response from the server is malformed.
+            NNTPReplyError: If no such article exists.
         """
+        for entry in self._hdr(header, msgid_range):
+            yield entry
+
+    def xhdr(self, header, msgid_range=None):
+        """Generator for the XHDR command.
+
+        See hdr_gen()
+        """
+        for entry in self._hdr(header, msgid_range, verb='XHDR'):
+            yield entry
+
+    def xzhdr(self, header, msgid_range=None):
+        """Generator for the XZHDR command.
+
+        The compressed version of XHDR. See xhdr().
+        """
+        for entry in self._hdr(header, msgid_range, verb='XZHDR'):
+            yield entry
+
+    @cached_property
+    def overview_fmt(self):
+        try:
+            return tuple(name for name, opt in self.list_overview_fmt())
+        except NNTPError:
+            return (
+                'Subject',
+                'From',
+                'Date',
+                'Message-ID',
+                'References',
+                'Bytes',
+                'Lines',
+            )
+
+    def _xover(self, range=None, verb='XOVER'):
+
+        # get overview fmt before entering generator
+        fmt = self.overview_fmt
+
         args = None
         if range is not None:
             args = utils.unparse_range(range)
 
-        code, message = self.command('XOVER', args)
+        code, message = self.command(verb, args)
         if code != 224:
             raise NNTPReplyError(code, message)
 
-        for line in self.info_gen(code, message):
-            yield line.rstrip().split('\t')
+        yz = verb == 'XZVER'
+        for line in self.info(code, message, yz=yz):
+            parts = line.rstrip().split('\t')
+            try:
+                articleno = int(parts[0])
+                overview = iodict.IODict(zip(fmt, parts[1:]))
+            except (IndexError, ValueError):
+                raise NNTPDataError('Invalid %s response' % verb)
+            yield articleno, overview
 
     def xover(self, range=None):
-        """The XOVER command.
+        """XOVER command.
 
         The XOVER command returns information from the overview database for
         the article(s) specified.
@@ -1225,87 +1238,50 @@ class NNTPClient(BaseNNTPClient):
                 is omitted then all articles after first are included. A range
                 of None (the default) uses the current article.
 
-        Returns:
-            A table (list of lists) of articles and their fields as given by
-            the overview database for each available article in the specified
-            range.  The fields that are given can be determined using the LIST
-            OVERVIEW.FMT command if the server supports it.
+        Yields:
+            A 2-tuple of the article number and a dictonary of the fields as
+            given by the overview database for each available article in the
+            specified range. The names of the fields that are returned are
+            determined using the LIST OVERVIEW.FMT command if the server
+            supports it, otherwise a fallback set of 'required' headers is
+            used.
 
         Raises:
             NNTPReplyError: If no such article exists or the currently selected
                 newsgroup is invalid.
         """
-        return [x for x in self.xover_gen(range)]
-
-    def xzver_gen(self, range=None):
-        """Generator for the XZVER command.
-
-        The XZVER command returns information from the overview database for
-        the article(s) specified. It is part of the compressed headers
-        extensions that are supported by some usenet servers. It is the
-        compressed version of the XOVER command.
-
-        <http://helpdesk.astraweb.com/index.php?_m=news&_a=viewnews&newsid=9>
-
-        Args:
-            range: An article number as an integer, or a tuple of specifying a
-                range of article numbers in the form (first, [last]). If last
-                is omitted then all articles after first are included. A range
-                of None (the default) uses the current article.
-
-        Returns:
-            A list of fields as given by the overview database for each
-            available article in the specified range. The fields that are
-            returned can be determined using the LIST OVERVIEW.FMT command if
-            the server supports it.
-
-        Raises:
-            NNTPTemporaryError: If no such article exists or the currently
-                selected newsgroup is invalid.
-            NNTPDataError: If the compressed response cannot be decoded.
-        """
-        args = None
-        if range is not None:
-            args = utils.unparse_range(range)
-
-        code, message = self.command('XZVER', args)
-        if code != 224:
-            raise NNTPReplyError(code, message)
-
-        for line in self.info_gen(code, message, True):
-            yield line.rstrip().split('\t')
+        for entry in self._xover(range):
+            yield entry
 
     def xzver(self, range=None):
         """XZVER command.
 
-        The XZVER command returns information from the overview database for
-        the article(s) specified. It is part of the compressed headers
-        extensions that are supported by some usenet servers. It is the
-        compressed version of the XOVER command.
+        The compressed version of XHDR. See xover().
+        """
+        for entry in self._xover(range, verb='XZVER'):
+            yield entry
 
-        <http://helpdesk.astraweb.com/index.php?_m=news&_a=viewnews&newsid=9>
+    def xpat(self, header, msgid_range, *pattern):
+        """XPAT command.
+        
+        Used to retrieve specific headers from specific articles, based on
+        pattern matching on the contents of the header.
+
+        See <https://tools.ietf.org/html/rfc2980#section-2.9>
 
         Args:
-            range: An article number as an integer, or a tuple of specifying a
-                range of article numbers in the form (first, [last]). If last
-                is omitted then all articles after first are included. A range
-                of None (the default) uses the current article.
+            header: The header field to match against.
+            msgid_range: An article number as an integer, or a tuple of
+                specifying a range of article numbers in the form (first,
+                [last]). If last is omitted then all articles after first are
+                included.
 
-        Returns:
-            A list of fields as given by the overview database for each
-            available article in the specified range. The fields that are
-            returned can be determined using the LIST OVERVIEW.FMT command if
-            the server supports it.
+        Yields:
+            Not sure of the format but the value of the header will be part of
+            it.
 
         Raises:
-            NNTPTemporaryError: If no such article exists or the currently
-                selected newsgroup is invalid.
-            NNTPDataError: If the compressed response cannot be decoded.
-        """
-        return [x for x in self.xzver_gen(range)]
-
-    def xpat_gen(self, header, msgid_range, *pattern):
-        """Generator for the XPAT command.
+            NNTPReplyError: If no such article exists.
         """
         args = ' '.join(
             [header, utils.unparse_msgid_range(msgid_range)] + list(pattern)
@@ -1315,13 +1291,8 @@ class NNTPClient(BaseNNTPClient):
         if code != 221:
             raise NNTPReplyError(code, message)
 
-        for line in self.info_gen(code, message):
+        for line in self.info(code, message):
             yield line.strip()
-
-    def xpat(self, header, id_range, *pattern):
-        """XPAT command.
-        """
-        return [x for x in self.xpat_gen(header, id_range, *pattern)]
 
     def xfeature_compress_gzip(self, terminator=False):
         """XFEATURE COMPRESS GZIP command.
@@ -1334,7 +1305,7 @@ class NNTPClient(BaseNNTPClient):
 
         return True
 
-    def post(self, headers={}, body=""):
+    def post(self, headers=None, body=b''):
         """POST command.
 
         Args:
@@ -1372,7 +1343,10 @@ class NNTPClient(BaseNNTPClient):
         if code != 340:
             raise NNTPReplyError(code, message)
 
+        # TODO: Set some default headers? Require some headers?
+
         # send headers
+        headers = headers or {}
         hdrs = utils.unparse_headers(headers)
         hdrs = hdrs.encode(self.encoding)
         self.socket.sendall(hdrs)
@@ -1420,7 +1394,6 @@ class NNTPClient(BaseNNTPClient):
 if __name__ == "__main__":
 
     import sys
-    import hashlib
 
     log = sys.stdout.write
 
@@ -1462,21 +1435,24 @@ if __name__ == "__main__":
 
         log('NEWGROUPS\n')
         try:
-            log('%s\n' % nntp_client.newgroups(now - fiftydays))
+            for group in nntp_client.newgroups(now - fiftydays):
+                log('%s\n' % group)
         except NNTPError as e:
             log('%s\n' % e)
         log('\n')
 
         log('NEWNEWS\n')
         try:
-            log('%s\n' % nntp_client.newnews('alt.binaries.*', now - onemin))
+            for article in nntp_client.newnews('alt.binaries.*', now - onemin):
+                log('%s\n' % article)
         except NNTPError as e:
             log('%s\n' % e)
         log('\n')
 
         log('CAPABILITIES\n')
         try:
-            log('%s\n' % nntp_client.capabilities())
+            for capability in nntp_client.capabilities():
+                log('%s\n' % capability)
         except NNTPError as e:
             log('%s\n' % e)
         log('\n')
@@ -1491,7 +1467,7 @@ if __name__ == "__main__":
 
         log('HEAD\n')
         try:
-            log('%s\n' % nntp_client.head(last))
+            log('%r\n' % nntp_client.head(last))
         except NNTPError as e:
             log('%s\n' % e)
         log('\n')
@@ -1499,6 +1475,13 @@ if __name__ == "__main__":
         log('BODY\n')
         try:
             log('%r\n' % nntp_client.body(last))
+        except NNTPError as e:
+            log('%s\n' % e)
+        log('\n')
+
+        log('BODY\n')
+        try:
+            log('%r\n' % nntp_client.body(910230))
         except NNTPError as e:
             log('%s\n' % e)
         log('\n')
@@ -1513,7 +1496,7 @@ if __name__ == "__main__":
 
         log('ARTICLE (auto yEnc decode)\n')
         try:
-            result = nntp_client.article(last)
+            result = nntp_client.article(910230)
             log('%d\n%s\n%r\n' % (result[0], result[1], result[2]))
         except NNTPError as e:
             log('%s\n' % e)
@@ -1521,36 +1504,41 @@ if __name__ == "__main__":
 
         log('XHDR Date %d-%d\n' % (last-10, last))
         try:
-            log('%s\n' % nntp_client.xhdr('Date', (last-10, last)))
+            for article, datestr in nntp_client.xhdr('Date', (last-10, last)):
+                log('%d %s\n' % (article, date.datetimeobj(datestr)))
         except NNTPError as e:
             log('%s\n' % e)
         log('\n')
 
         log('XZHDR Date %d-%d\n' % (last-10, last))
         try:
-            log('%s\n' % nntp_client.xzhdr('Date', (last-10, last)))
+            for article, datestr in nntp_client.xhdr('Date', (last-10, last)):
+                log('%d %s\n' % (article, date.datetimeobj(datestr)))
         except NNTPError as e:
             log('%s\n' % e)
         log('\n')
 
         log('XOVER %d-%d\n' % (last-10, last))
         try:
-            result = nntp_client.xover((last-10, last))
-            data = ''.join([''.join(x) for x in result])
-            data = data.encode(nntp_client.encoding, nntp_client.errors)
-            digest = hashlib.md5(data).hexdigest()
-            log('Entries %d Hash %s\n' % (len(result), digest))
+            hash_ = count = 0
+            for article, overview in nntp_client.xover((last-10, last)):
+                log('%d %r\n' % (article, overview))
+                hash_ += sum(map(hash, overview.keys()))
+                hash_ += sum(map(hash, overview.values()))
+                count += 1
+            log('Entries %d Hash %s\n' % (count, hash_))
         except NNTPError as e:
             log('%s\n' % e)
         log('\n')
 
         log('XZVER %d-%d\n' % (last-10, last))
         try:
-            result = nntp_client.xzver((last-10, last))
-            data = ''.join([''.join(x) for x in result])
-            data = data.encode(nntp_client.encoding, nntp_client.errors)
-            digest = hashlib.md5(data).hexdigest()
-            log('Entries %d Hash %s\n' % (len(result), digest))
+            hash_ = count = 0
+            for article, overview in nntp_client.xzver((last-10, last)):
+                hash_ += sum(map(hash, overview.keys()))
+                hash_ += sum(map(hash, overview.values()))
+                count += 1
+            log('Entries %d Hash %s\n' % (count, hash_))
         except NNTPError as e:
             log('%s\n' % e)
         log('\n')
@@ -1564,11 +1552,12 @@ if __name__ == "__main__":
 
         log('XOVER %d-%d\n' % (last-10, last))
         try:
-            result = nntp_client.xover((last-10, last))
-            data = ''.join([''.join(x) for x in result])
-            data = data.encode(nntp_client.encoding, nntp_client.errors)
-            digest = hashlib.md5(data).hexdigest()
-            log('Entries %d Hash %s\n' % (len(result), digest))
+            hash_ = count = 0
+            for article, overview in nntp_client.xover((last-10, last)):
+                hash_ += sum(map(hash, overview.keys()))
+                hash_ += sum(map(hash, overview.values()))
+                count += 1
+            log('Entries %d Hash %s\n' % (count, hash_))
         except NNTPError as e:
             log('%s\n' % e)
         log('\n')
@@ -1582,25 +1571,26 @@ if __name__ == "__main__":
 
         log('XOVER %d-%d\n' % (last-10, last))
         try:
-            result = nntp_client.xover((last-10, last))
-            data = ''.join([''.join(x) for x in result])
-            data = data.encode(nntp_client.encoding, nntp_client.errors)
-            digest = hashlib.md5(data).hexdigest()
-            log('Entries %d Hash %s\n' % (len(result), digest))
+            hash_ = count = 0
+            for article, overview in nntp_client.xover((last-10, last)):
+                hash_ += sum(map(hash, overview.keys()))
+                hash_ += sum(map(hash, overview.values()))
+                count += 1
+            log('Entries %d Hash %s\n' % (count, hash_))
         except NNTPError as e:
             log('%s\n' % e)
         log('\n')
 
         log('LIST\n')
         try:
-            log('Entries %d\n' % len(nntp_client.list()))
+            log('Entries %d\n' % len(list(nntp_client.list())))
         except NNTPError as e:
             log('%s\n' % e)
         log('\n')
 
         log('LIST ACTIVE\n')
         try:
-            log('Entries %d\n' % len(nntp_client.list('ACTIVE')))
+            log('Entries %d\n' % len(list(nntp_client.list('ACTIVE'))))
         except NNTPError as e:
             log('%s\n' % e)
         log('\n')
@@ -1608,21 +1598,21 @@ if __name__ == "__main__":
         log('LIST ACTIVE alt.binaries.*\n')
         try:
             result = nntp_client.list('ACTIVE', 'alt.binaries.*')
-            log('Entries %d\n' % len(result))
+            log('Entries %d\n' % len(list(result)))
         except NNTPError as e:
             log('%s\n' % e)
         log('\n')
 
         log('LIST ACTIVE.TIMES\n')
         try:
-            log('Entries %d\n' % len(nntp_client.list('ACTIVE.TIMES')))
+            log('Entries %d\n' % len(list(nntp_client.list('ACTIVE.TIMES'))))
         except NNTPError as e:
             log('%s\n' % e)
         log('\n')
 
         log('LIST NEWSGROUPS\n')
         try:
-            log('Entries %d\n' % len(nntp_client.list('NEWSGROUPS')))
+            log('Entries %d\n' % len(list(nntp_client.list('NEWSGROUPS'))))
         except NNTPError as e:
             log('%s\n' % e)
         log('\n')
@@ -1630,21 +1620,28 @@ if __name__ == "__main__":
         log('LIST NEWSGROUPS alt.binaries.*\n')
         try:
             result = nntp_client.list('NEWSGROUPS', 'alt.binaries.*')
-            log('Entries %d\n' % len(result))
+            log('Entries %d\n' % len(list(result)))
         except NNTPError as e:
             log('%s\n' % e)
         log('\n')
 
         log('LIST OVERVIEW.FMT\n')
         try:
-            log('%s\n' % nntp_client.list('OVERVIEW.FMT'))
+            log('%s\n' % list(nntp_client.list('OVERVIEW.FMT')))
+        except NNTPError as e:
+            log('%s\n' % e)
+        log('\n')
+
+        log('LIST HEADERS\n')
+        try:
+            log('%s\n' % list(nntp_client.list('HEADERS')))
         except NNTPError as e:
             log('%s\n' % e)
         log('\n')
 
         log('LIST EXTENSIONS\n')
         try:
-            log('%s\n' % nntp_client.list('EXTENSIONS'))
+            log('%s\n' % list(nntp_client.list('EXTENSIONS')))
         except NNTPError as e:
             log('%s\n' % e)
         log('\n')
