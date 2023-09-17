@@ -10,7 +10,7 @@ with open(os.path.join(path, 'README.md'), encoding='utf-8') as fd:
 
 setup(
     name='pynntp',
-    version='1.0.2',
+    version='1.0.3',
     description='NNTP Library (including compressed headers)',
     long_description=long_description,
     long_description_content_type='text/markdown',
