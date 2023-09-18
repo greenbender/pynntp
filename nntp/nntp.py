@@ -153,7 +153,10 @@ class BaseNNTPClient(object):
         self.socket = socket.create_connection((host, port), timeout=timeout)
         if use_ssl:
             context = ssl.create_default_context()
-            self.socket = context.wrap_socket(self.socket)
+            self.socket = context.wrap_socket(
+                self.socket,
+                server_hostname=host,
+            )
 
         code, message = self.status()
         if code not in (200, 201):
