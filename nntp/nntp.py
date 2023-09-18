@@ -1,6 +1,6 @@
 """
 An NNTP library - a bit more useful than the nntplib one (hopefully).
-Copyright (C) 2013-2020  Byron Platt
+Copyright (C) 2013-2023  Byron Platt
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -41,6 +41,7 @@ __all__ = [
 class NNTPError(Exception):
     """Base class for all NNTP errors.
     """
+
     pass
 
 
@@ -50,6 +51,7 @@ class NNTPSyncError(NNTPError):
     Generally raised when a command is issued while another command it still
     active.
     """
+
     pass
 
 
@@ -78,6 +80,7 @@ class NNTPTemporaryError(NNTPReplyError):
 
     Temporary errors have response codes from 400 to 499.
     """
+
     pass
 
 
@@ -86,6 +89,7 @@ class NNTPPermanentError(NNTPReplyError):
 
     Permanent errors have response codes from 500 to 599.
     """
+
     pass
 
 
@@ -95,6 +99,7 @@ class NNTPProtocolError(NNTPError):
 
     Protcol errors are raised when the response status is invalid.
     """
+
     pass
 
 
@@ -103,6 +108,7 @@ class NNTPDataError(NNTPError):
 
     Data errors are raised when the content of a response cannot be parsed.
     """
+
     pass
 
 
@@ -137,11 +143,6 @@ class BaseNNTPClient(object):
                 wrapper. See socket and ssl modules for further details.
             NNTPReplyError: On bad response code from server.
         """
-        self.socket = socket.socket()
-        if use_ssl:
-            self.socket = ssl.wrap_socket(self.socket)
-        self.socket.settimeout(timeout)
-
         self._buffer = fifo.Fifo()
         self._generating = False
 
@@ -149,7 +150,11 @@ class BaseNNTPClient(object):
         self.password = password
 
         # connect
-        self.socket.connect((host, port))
+        self.socket = socket.create_connection((host, port), timeout=timeout)
+        if use_ssl:
+            context = ssl.create_default_context()
+            self.socket = context.wrap_socket(self.socket)
+
         code, message = self.status()
         if code not in (200, 201):
             raise NNTPReplyError(code, message)
@@ -769,7 +774,7 @@ class NNTPClient(BaseNNTPClient):
         Args:
             variant: The string 'MSGID' or 'RANGE' or None (the default).
                 Different variants of the HDR request may return a different
-                fields. 
+                fields.
 
         Yields:
             The field name for each of the fields.
@@ -992,7 +997,6 @@ class NNTPClient(BaseNNTPClient):
         # read the body
         body = []
         for line in self.info(code, message, encoding=None):
-
             # detect yenc
             if decode is None:
                 if line.startswith(b'=y'):
@@ -1073,10 +1077,10 @@ class NNTPClient(BaseNNTPClient):
             msgid_article: A message-id as a string, or an article number as an
                 integer. A msgid_article of None (the default) uses the current
                 article.
-            
+
         Returns:
             The article headers.
-            
+
         Raises:
             NNTPReplyError: If no such article exists.
         """
@@ -1202,7 +1206,6 @@ class NNTPClient(BaseNNTPClient):
             )
 
     def _xover(self, range=None, verb='XOVER'):
-
         # get overview fmt before entering generator
         fmt = self.overview_fmt
 
@@ -1263,7 +1266,7 @@ class NNTPClient(BaseNNTPClient):
 
     def xpat(self, header, msgid_range, *pattern):
         """XPAT command.
-        
+
         Used to retrieve specific headers from specific articles, based on
         pattern matching on the contents of the header.
 
@@ -1392,7 +1395,6 @@ class NNTPClient(BaseNNTPClient):
 
 # testing
 if __name__ == "__main__":
-
     import sys
 
     log = sys.stdout.write
