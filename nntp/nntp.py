@@ -97,7 +97,7 @@ class NNTPPermanentError(NNTPReplyError):
 class NNTPProtocolError(NNTPError):
     """NNTP protocol error.
 
-    Protcol errors are raised when the response status is invalid.
+    Protocol errors are raised when the response status is invalid.
     """
 
     pass
@@ -264,7 +264,7 @@ class BaseNNTPClient(object):
         When a terminating line (line containing single period) is received the
         generator exits.
 
-        If there is a line begining with an 'escaped' period then the extra
+        If there is a line beginning with an 'escaped' period then the extra
         period is trimmed.
 
         Yields:
@@ -405,7 +405,7 @@ class BaseNNTPClient(object):
 
         Args:
             code: The status code for the command response.
-            message: The status message for the command reponse.
+            message: The status message for the command response.
             yz: Use yenzlib decompression. Useful for xz* commands.
             encoding: Encoding to use. None means bytes are yielded.
             errors: Error handling for encoding.
@@ -490,7 +490,7 @@ class NNTPClient(BaseNNTPClient):
     servers. Including handling commands that use compressed responses.
 
     Implements generators for commands for which generators are likely to
-    yield (bad pun warning) perfomance gains. These gains will be in the form
+    yield (bad pun warning) performance gains. These gains will be in the form
     of lower memory consumption and the added ability to process and receive
     data in parallel. If you are using commands that can take a range as an
     argument or can return large amounts of data there should be a _gen()
@@ -648,7 +648,7 @@ class NNTPClient(BaseNNTPClient):
     def newgroups(self, timestamp):
         """NEWGROUPS command.
 
-        Retreives a list of newsgroups created on the server since the
+        Retrieves a list of newsgroups created on the server since the
         specified timestamp.
 
         See <http://tools.ietf.org/html/rfc3977#section-7.3>
@@ -687,7 +687,7 @@ class NNTPClient(BaseNNTPClient):
         See <http://tools.ietf.org/html/rfc3977#section-7.4>
 
         Args:
-            pattern: Glob matching newsgroups of intrest.
+            pattern: Glob matching newsgroups of interest.
             timestamp: Datetime object giving 'created since' datetime.
 
         Yields:
@@ -800,7 +800,7 @@ class NNTPClient(BaseNNTPClient):
         See <http://tools.ietf.org/html/rfc3977#section-7.6.6>
 
         Args:
-            pattern: Glob matching newsgroups of intrest.
+            pattern: Glob matching newsgroups of interest.
 
         Yields:
             A tuple containing the name, and description for the newsgroup, for
@@ -1245,7 +1245,7 @@ class NNTPClient(BaseNNTPClient):
                 of None (the default) uses the current article.
 
         Yields:
-            A 2-tuple of the article number and a dictonary of the fields as
+            A 2-tuple of the article number and a dictionary of the fields as
             given by the overview database for each available article in the
             specified range. The names of the fields that are returned are
             determined using the LIST OVERVIEW.FMT command if the server

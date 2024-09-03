@@ -5,8 +5,8 @@ Python NNTP library.
 
 This package includes advanced NNTP features, including, compressed headers.
 
-The most important (useful) feature of this package over other nntp libaries is
-the ablity to use generators to produce data. This allows for streaming download
+The most important (useful) feature of this package over other nntp libraries is
+the ability to use generators to produce data. This allows for streaming download
 of large responses to say an XOVER command (which can produce gigabytes of data)
 and allows you to process the data at the same time is is being received.
 Meaning that memory use is minimal (even for the largest responses) and that

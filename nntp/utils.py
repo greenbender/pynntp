@@ -30,7 +30,7 @@ def unparse_msgid_article(obj):
     """Unparse a message-id or article number argument.
 
     Args:
-        obj: A messsage id or an article number.
+        obj: A message id or an article number.
 
     Returns:
         The message id or article number as a string.
