@@ -963,7 +963,7 @@ class NNTPClient(BaseNNTPClient):
         except (IndexError, ValueError):
             raise NNTPDataError('Invalid NEXT status')
 
-        return article, mgsid
+        return article, msgid
 
     def last(self):
         """LAST command.
