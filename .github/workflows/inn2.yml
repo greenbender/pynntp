@@ -10,8 +10,6 @@ on:
   workflow_dispatch:
 jobs:
   inn2:
-    permissions:
-      contents: write  # More reliable on pull_request?
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
