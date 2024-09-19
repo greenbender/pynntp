@@ -1,0 +1,49 @@
+# Run pytests against the InterNetNews (INN2) server.
+# https://github.com/InterNetNews/inn
+
+name: InterNetNews2
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+jobs:
+  inn2:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: 3.13
+          allow-prereleases: true
+      - run: |
+          pip install --upgrade pip
+          pip install --editable .
+      - name: cat "localhost.localdomain" > /etc/hostname
+        run: |
+          echo "localhost.localdomain" > hostname
+          sudo mv hostname /etc/
+          cat /etc/hostname
+      - run: |
+          sudo apt-get update -qq
+          sudo apt-get install --yes inn2
+      # - run: cat /etc/news/inn.conf  # Useful for debugging
+      - run: systemctl status inn2
+      - shell: python  # Replace with real pytests...
+        run: |
+          import nntp
+
+          nntp_client = nntp.NNTPClient('localhost', 119, use_ssl=False)
+          newsgroups = set(nntp_client.list_newsgroups())
+          assert len(newsgroups) == 8
+          assert newsgroups == {
+              ('control', 'Various'),
+              ('control.cancel', 'Cancel'),
+              ('control.checkgroups', 'Hierarchy'),
+              ('control.newgroup', 'Newsgroup'),
+              ('control.rmgroup', 'Newsgroup'),
+              ('junk', 'Unfiled'),
+              ('local.general', 'Local'),
+              ('local.test', 'Local')
+          }
