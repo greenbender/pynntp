@@ -24,7 +24,7 @@ def test_nntp_client():
 
 
 def test_nntp_client_without_ssl():
-    nntp_client = nntp.NNTPClient("localhost")
+    nntp_client = nntp.NNTPClient("localhost", use_ssl=False)
     newsgroups = set(nntp_client.list_newsgroups())
     assert newsgroups == DEFAULT_NEWGROUPS
 
