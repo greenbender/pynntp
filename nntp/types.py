@@ -1,6 +1,6 @@
-from typing import NamedTuple
+from typing import NamedTuple, Union
 
-Range = int | tuple[int] | tuple[int, int]
+Range = Union[int, tuple[int], tuple[int, int]]
 
 
 class Newsgroup(NamedTuple):

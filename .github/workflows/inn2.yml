@@ -2,12 +2,14 @@
 # https://github.com/InterNetNews/inn
 
 name: InterNetNews2
+
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   pull_request:
-    branches: [ main ]
+    branches: [main]
   workflow_dispatch:
+
 jobs:
   inn2:
     runs-on: ubuntu-24.04

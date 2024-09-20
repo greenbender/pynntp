@@ -19,7 +19,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from io import StringIO
-from typing import Iterable
+from typing import Iterable, Union
 
 from .headerdict import HeaderDict
 from .types import Newsgroup, Range
@@ -56,7 +56,7 @@ def unparse_range(obj: Range) -> str:
     raise ValueError("Must be an integer or tuple")
 
 
-def unparse_msgid_range(obj: str | Range) -> str:
+def unparse_msgid_range(obj: Union[str, Range]) -> str:
     """Unparse a message-id or range argument.
 
     Args:
@@ -106,7 +106,7 @@ def parse_newsgroup(line: str) -> Newsgroup:
     return Newsgroup(name, low, high, status)
 
 
-def _parse_header(line: str) -> str | tuple[str, str] | None:
+def _parse_header(line: str) -> Union[str, tuple[str, str], None]:
     """Parse a header line.
 
     Args:
@@ -128,7 +128,7 @@ def _parse_header(line: str) -> str | tuple[str, str] | None:
     return name.strip(), value.strip()
 
 
-def parse_headers(obj: str | Iterable[str]) -> HeaderDict:
+def parse_headers(obj: Union[str, Iterable[str]]) -> HeaderDict:
     """Parse a string a iterable object (including file like objects) to a
     python dictionary.
 
