@@ -1,5 +1,4 @@
-pynntp
-======
+# pynntp
 
 Python NNTP library.
 
@@ -13,9 +12,7 @@ Meaning that memory use is minimal (even for the largest responses) and that
 cycles aren't being wasted waiting on a blocking read (even in a single threaded
 application)
 
-
-Example
--------
+## Example
 
     >>> import nntp
     >>> nntp_client = nntp.NNTPClient('usenet-host.com', 443, 'user', 'password', use_ssl=True)
@@ -26,35 +23,33 @@ Example
     >>> nntp_client.date()
     datetime.datetime(2013, 10, 19, 6, 13, 3, tzinfo=_tzgmt())
 
-
-Supported Commands
-------------------
+## Supported Commands
 
 NNTP commands that are currently supported include:
 
- * CAPABILITIES
- * MODE READER
- * QUIT
- * DATE
- * HELP
- * NEWGROUPS
- * NEWNEWS
- * LIST ACTIVE
- * LIST ACTIVE.TIMES
- * LIST NEWSGROUPS
- * LIST OVERVIEW.FMT
- * LIST EXTENSIONS
- * GROUP
- * NEXT
- * LAST
- * ARTICLE
- * HEAD
- * BODY
- * POST
- * XHDR
- * XZHDR
- * XOVER
- * XZVER
- * XPAT
- * XFEATURE COMPRESS GZIP
- * POST
+- CAPABILITIES
+- MODE READER
+- QUIT
+- DATE
+- HELP
+- NEWGROUPS
+- NEWNEWS
+- LIST ACTIVE
+- LIST ACTIVE.TIMES
+- LIST NEWSGROUPS
+- LIST OVERVIEW.FMT
+- LIST EXTENSIONS
+- GROUP
+- NEXT
+- LAST
+- ARTICLE
+- HEAD
+- BODY
+- POST
+- XHDR
+- XZHDR
+- XOVER
+- XZVER
+- XPAT
+- XFEATURE COMPRESS GZIP
+- POST

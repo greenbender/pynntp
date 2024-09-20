@@ -1,4 +1,3 @@
-#!/usr/bin/python
 """
 An NNTP library - a bit more useful than the nntplib one (hopefully).
 Copyright (C) 2013-2020  Byron Platt
@@ -17,60 +16,30 @@ You should have received a copy of the GNU General Public License
 along with this program.  If not, see <http://www.gnu.org/licenses/>.
 """
 
+from collections.abc import Mapping
+from datetime import datetime, timezone
+from io import StringIO
+from typing import Iterable
 
-import io
-from . import iodict
-try:
-    basestring
-except NameError:
-    basestring = str
-
-
-def unparse_msgid_article(obj):
-    """Unparse a message-id or article number argument.
-
-    Args:
-        obj: A message id or an article number.
-
-    Returns:
-        The message id or article number as a string.
-    """
-    return str(obj)
+from .headerdict import HeaderDict
+from .types import Newsgroup, Range
 
 
-def parse_msgid_article(obj):
-    """Parse a message-id or article number argument.
-
-    Args:
-        str: Message id or article as a string.
-
-    Returns:
-        The message id as a string or article number as an integer.
-    """
-    try:
-        return int(obj)
-    except ValueError:
-        pass
-    return obj
-
-
-def unparse_range(obj):
+def unparse_range(obj: Range) -> str:
     """Unparse a range argument.
 
     Args:
         obj: An article range. There are a number of valid formats; an integer
             specifying a single article or a tuple specifying an article range.
-            If the range doesn't give a start article then all articles up to
-            the specified last article are included. If the range doesn't
-            specify a last article then all articles from the first specified
-            article up to the current last article for the group are included.
+            If the range doesn't specify a last article then all articles from
+            the first specified article up to the current last article for the
+            group are included.
 
     Returns:
         The range as a string that can be used by an NNTP command.
 
     Note: Sample valid formats.
         4678
-        (,5234)
         (4245,)
         (4245, 5234)
     """
@@ -78,15 +47,16 @@ def unparse_range(obj):
         return str(obj)
 
     if isinstance(obj, tuple):
-        arg = str(obj[0]) + '-'
-        if len(obj) > 1:
-            arg += str(obj[1])
-        return arg
+        if len(obj) == 1:
+            return f"{obj[0]}-"
+        if len(obj) == 2:
+            return f"{obj[0]}-{obj[1]}"
+        raise ValueError("Invalid range format")
 
-    raise ValueError('Must be an integer or tuple')
+    raise ValueError("Must be an integer or tuple")
 
 
-def unparse_msgid_range(obj):
+def unparse_msgid_range(obj: str | Range) -> str:
     """Unparse a message-id or range argument.
 
     Args:
@@ -100,13 +70,13 @@ def unparse_msgid_range(obj):
     Returns:
         A message id or range as a string that can be used by an NNTP command.
     """
-    if isinstance(obj, basestring):
+    if isinstance(obj, str):
         return obj
 
     return unparse_range(obj)
 
 
-def parse_newsgroup(line):
+def parse_newsgroup(line: str) -> Newsgroup:
     """Parse a newsgroup info line to python types.
 
     Args:
@@ -127,16 +97,16 @@ def parse_newsgroup(line):
     """
     parts = line.split()
     try:
-        group = parts[0]
+        name = parts[0]
         low = int(parts[1])
         high = int(parts[2])
         status = parts[3]
     except (IndexError, ValueError):
-        raise ValueError('Invalid newsgroup info')
-    return group, low, high, status
+        raise ValueError("Invalid newsgroup info")
+    return Newsgroup(name, low, high, status)
 
 
-def parse_header(line):
+def _parse_header(line: str) -> str | tuple[str, str] | None:
     """Parse a header line.
 
     Args:
@@ -150,15 +120,15 @@ def parse_header(line):
     Raises:
         ValueError: If the line cannot be parsed as a header.
     """
-    if not line or line == '\r\n':
+    if not line or line == "\r\n":
         return None
-    if line[0] in ' \t':
+    if line[0] in " \t":
         return line[1:].rstrip()
-    name, value = line.split(':', 1)
+    name, value = line.split(":", 1)
     return name.strip(), value.strip()
 
 
-def parse_headers(obj):
+def parse_headers(obj: str | Iterable[str]) -> HeaderDict:
     """Parse a string a iterable object (including file like objects) to a
     python dictionary.
 
@@ -173,23 +143,23 @@ def parse_headers(obj):
         ValueError: If the first line is a continuation line or the headers
             cannot be parsed.
     """
-    if isinstance(obj, basestring):
-        obj = io.StringIO(obj)
-    hdrs = []
+    if isinstance(obj, str):
+        obj = StringIO(obj)
+    hdrs: list[tuple[str, str]] = []
     for line in obj:
-        hdr = parse_header(line)
+        hdr = _parse_header(line)
         if not hdr:
             break
-        if isinstance(hdr, basestring):
+        if isinstance(hdr, str):
             if not hdrs:
-                raise ValueError('First header is a continuation')
+                raise ValueError("First header is a continuation")
             hdrs[-1] = hdrs[-1][0], hdrs[-1][1] + hdr
             continue
         hdrs.append(hdr)
-    return iodict.IODict(hdrs)
+    return HeaderDict(hdrs)
 
 
-def unparse_header(name, value):
+def _unparse_header(name: str, value: str) -> str:
     """Parse a name value tuple to a header string.
 
     Args:
@@ -199,10 +169,10 @@ def unparse_header(name, value):
     Returns:
         The header as a string.
     """
-    return ': '.join([name, value]) + '\r\n'
+    return ": ".join([name, value]) + "\r\n"
 
 
-def unparse_headers(hdrs):
+def unparse_headers(hdrs: Mapping[str, str]) -> str:
     """Parse a dictionary of headers to a string.
 
     Args:
@@ -211,4 +181,40 @@ def unparse_headers(hdrs):
     Returns:
         The headers as a string that can be used in an NNTP POST.
     """
-    return ''.join([unparse_header(n, v) for n, v in hdrs.items()]) + '\r\n'
+    return "".join([_unparse_header(n, v) for n, v in hdrs.items()]) + "\r\n"
+
+
+def parse_date(value: str) -> datetime:
+    """Parse a date as returned by the `DATE` command.
+
+    Args:
+        value: A date as a string in the format `YYYYMMDDHHMMSS`.
+
+    Returns:
+        A datetime object representing the date with timezone set to UTC.
+
+    Raises:
+        ValueError: If the value cannot be parsed.
+    """
+    i = int(value)
+    M, S = divmod(i, 100)
+    H, M = divmod(M, 100)
+    d, H = divmod(M, 100)
+    m, d = divmod(d, 100)
+    Y, m = divmod(m, 100)
+    return datetime(Y % 10000, m, d, H, M, S, tzinfo=timezone.utc)
+
+
+def parse_epoch(value: str) -> datetime:
+    """Parse a date as returned by the `DATE` command.
+
+    Args:
+        line: An epoch date as a string.
+
+    Returns:
+        A datetime object representing the date with timezone set to UTC.
+
+    Raises:
+        ValueError: If the value cannot be parsed.
+    """
+    return datetime.fromtimestamp(int(value), tz=timezone.utc)
