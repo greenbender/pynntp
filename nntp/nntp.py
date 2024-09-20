@@ -659,9 +659,7 @@ class NNTPClient(BaseNNTPClient):
         if code != 111:
             raise NNTPReplyError(code, message)
 
-        ts = utils.parse_date(message)
-
-        return ts
+        return utils.parse_date(message)
 
     def help(self) -> str:
         """HELP command.

@@ -23,7 +23,7 @@ from typing import Any, Iterable, Iterator, Union
 __all__ = ["HeaderDict"]
 
 
-class HeaderName(str):
+class HeaderName(str):  # noqa: SLOT000
     def __eq__(self, other: object) -> bool:
         return isinstance(other, str) and self.casefold() == other.casefold()
 
