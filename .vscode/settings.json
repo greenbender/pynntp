@@ -16,4 +16,5 @@
 	"mypy-type-checker.importStrategy": "fromEnvironment",
 	"mypy-type-checker.preferDaemon": true,
 	"explorer.excludeGitIgnore": true,
+	"files.insertFinalNewline": true,
 }
