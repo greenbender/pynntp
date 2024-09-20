@@ -552,6 +552,18 @@ class NNTPClient(BaseNNTPClient):
         super().__init__(host, port, username, password, timeout, use_ssl)
         if reader:
             self.mode_reader()
+    
+    def __enter__(self):
+        """Support for the 'with' context manager statement."""
+        return self
+
+    def __exit__(self, *args):
+        """Support for the 'with' context manager statement."""
+        try:
+            self.quit()
+        except NNTPError:
+            self.close()
+            raise
 
     # session administration commands
     def capabilities(self, keyword: str | None = None) -> Iterator[str]:
