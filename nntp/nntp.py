@@ -23,13 +23,17 @@ import zlib
 from collections.abc import Iterator, Mapping
 from datetime import datetime, timezone
 from functools import cached_property
-from typing import Any, Iterable, Literal, overload
+from types import TracebackType
+from typing import TYPE_CHECKING, Any, Iterable, Literal, Type, Union, overload
 
 from . import utils
 from .fifo import BytesFifo
 from .headerdict import HeaderDict
 from .types import Newsgroup, Range
 from .yenc import YEnc, trailer_crc32
+
+if TYPE_CHECKING:
+    from typing_extensions import Self
 
 __all__ = [
     "BaseNNTPClient",
@@ -439,7 +443,7 @@ class BaseNNTPClient:
         for line in self._info(code, message, yz):
             yield line.decode(self.encoding, self.errors)
 
-    def command(self, verb: str, args: str | None = None) -> tuple[int, str]:
+    def command(self, verb: str, args: Union[str, None] = None) -> tuple[int, str]:
         """Call a command on the server.
 
         If the user has not authenticated then authentication will be done
@@ -552,21 +556,27 @@ class NNTPClient(BaseNNTPClient):
         super().__init__(host, port, username, password, timeout, use_ssl)
         if reader:
             self.mode_reader()
-    
-    def __enter__(self):
+
+    def __enter__(self) -> "Self":
         """Support for the 'with' context manager statement."""
         return self
 
-    def __exit__(self, *args):
+    def __exit__(
+        self,
+        exc_type: Union[Type[BaseException], None],
+        exc_val: Union[BaseException, None],
+        exc_tb: Union[TracebackType, None],
+    ) -> Literal[False]:
         """Support for the 'with' context manager statement."""
         try:
             self.quit()
         except NNTPError:
             self.close()
             raise
+        return False
 
     # session administration commands
-    def capabilities(self, keyword: str | None = None) -> Iterator[str]:
+    def capabilities(self, keyword: Union[str, None] = None) -> Iterator[str]:
         """CAPABILITIES command.
 
         Determines the capabilities of the server.
@@ -738,7 +748,7 @@ class NNTPClient(BaseNNTPClient):
             yield line.strip()
 
     # list commands
-    def list_active(self, pattern: str | None = None) -> Iterator[Newsgroup]:
+    def list_active(self, pattern: Union[str, None] = None) -> Iterator[Newsgroup]:
         """LIST ACTIVE command.
 
         Retrieves a list of active newsgroups that match the specified pattern.
@@ -818,7 +828,10 @@ class NNTPClient(BaseNNTPClient):
         for line in self.info(code, message):
             yield line.strip()
 
-    def list_newsgroups(self, pattern: str | None = None) -> Iterator[tuple[str, str]]:
+    def list_newsgroups(
+        self,
+        pattern: Union[str, None] = None,
+    ) -> Iterator[tuple[str, str]]:
         """LIST NEWSGROUPS command.
 
         Retrieves a list of newsgroups including the name and a short
@@ -896,7 +909,7 @@ class NNTPClient(BaseNNTPClient):
     def list(
         self,
         keyword: Literal["ACTIVE", None] = None,
-        arg: str | None = None,
+        arg: Union[str, None] = None,
     ) -> Iterator[Newsgroup]: ...
 
     @overload
@@ -916,7 +929,7 @@ class NNTPClient(BaseNNTPClient):
     def list(
         self,
         keyword: Literal["NEWSGROUPS"],
-        arg: str | None = None,
+        arg: Union[str, None] = None,
     ) -> Iterator[tuple[str, str]]: ...
 
     @overload
@@ -931,7 +944,11 @@ class NNTPClient(BaseNNTPClient):
         keyword: Literal["EXTENSIONS"],
     ) -> Iterator[str]: ...
 
-    def list(self, keyword: str | None = None, arg: str | None = None) -> Any:
+    def list(
+        self,
+        keyword: Union[str, None] = None,
+        arg: Union[str, None] = None,
+    ) -> Any:
         """LIST command.
 
         A wrapper for all of the other list commands.
@@ -1060,7 +1077,7 @@ class NNTPClient(BaseNNTPClient):
         return article, msgid
 
     # TODO: Validate yEnc
-    def _body(self, code: int, message: str, decode: bool | None = None) -> bytes:
+    def _body(self, code: int, message: str, decode: Union[bool, None] = None) -> bytes:
         decoder = YEnc()
 
         # read the body
@@ -1086,8 +1103,8 @@ class NNTPClient(BaseNNTPClient):
 
     def article(
         self,
-        msgid_article: str | int | None = None,
-        decode: bool | None = None,
+        msgid_article: Union[str, int, None] = None,
+        decode: Union[bool, None] = None,
     ) -> tuple[int, HeaderDict, bytes]:
         """ARTICLE command.
 
@@ -1138,7 +1155,7 @@ class NNTPClient(BaseNNTPClient):
 
         return articleno, headers, body
 
-    def head(self, msgid_article: str | int | None = None) -> HeaderDict:
+    def head(self, msgid_article: Union[str, int, None] = None) -> HeaderDict:
         """HEAD command.
 
         Identical to the ARTICLE command except that only the headers are
@@ -1169,8 +1186,8 @@ class NNTPClient(BaseNNTPClient):
 
     def body(
         self,
-        msgid_article: str | int | None = None,
-        decode: bool | None = None,
+        msgid_article: Union[str, int, None] = None,
+        decode: Union[bool, None] = None,
     ) -> bytes:
         """BODY command.
 
@@ -1205,7 +1222,7 @@ class NNTPClient(BaseNNTPClient):
     def _hdr(
         self,
         header: str,
-        msgid_range: str | Range | None = None,
+        msgid_range: Union[str, Range, None] = None,
         verb: str = "HDR",
     ) -> Iterator[tuple[int, str]]:
         args = header
@@ -1229,7 +1246,7 @@ class NNTPClient(BaseNNTPClient):
     def hdr(
         self,
         header: str,
-        msgid_range: str | Range | None = None,
+        msgid_range: Union[str, Range, None] = None,
     ) -> Iterator[tuple[int, str]]:
         """HDR command.
 
@@ -1260,7 +1277,7 @@ class NNTPClient(BaseNNTPClient):
     def xhdr(
         self,
         header: str,
-        msgid_range: str | Range | None = None,
+        msgid_range: Union[str, Range, None] = None,
     ) -> Iterator[tuple[int, str]]:
         """Generator for the XHDR command.
 
@@ -1271,7 +1288,7 @@ class NNTPClient(BaseNNTPClient):
     def xzhdr(
         self,
         header: str,
-        msgid_range: str | Range | None = None,
+        msgid_range: Union[str, Range, None] = None,
     ) -> Iterator[tuple[int, str]]:
         """Generator for the XZHDR command.
 
@@ -1296,7 +1313,7 @@ class NNTPClient(BaseNNTPClient):
 
     def _xover(
         self,
-        range: Range | None = None,
+        range: Union[Range, None] = None,
         verb: str = "XOVER",
     ) -> Iterator[tuple[int, HeaderDict]]:
         # get overview fmt before entering generator
@@ -1320,7 +1337,10 @@ class NNTPClient(BaseNNTPClient):
                 raise NNTPDataError("Invalid %s response" % verb)
             yield articleno, overview
 
-    def xover(self, range: Range | None = None) -> Iterator[tuple[int, HeaderDict]]:
+    def xover(
+        self,
+        range: Union[Range, None] = None,
+    ) -> Iterator[tuple[int, HeaderDict]]:
         """XOVER command.
 
         The XOVER command returns information from the overview database for
@@ -1348,7 +1368,10 @@ class NNTPClient(BaseNNTPClient):
         """
         return self._xover(range)
 
-    def xzver(self, range: Range | None = None) -> Iterator[tuple[int, HeaderDict]]:
+    def xzver(
+        self,
+        range: Union[Range, None] = None,
+    ) -> Iterator[tuple[int, HeaderDict]]:
         """XZVER command.
 
         The compressed version of XHDR. See xover().
@@ -1356,7 +1379,10 @@ class NNTPClient(BaseNNTPClient):
         return self._xover(range, verb="XZVER")
 
     def xpat(
-        self, header: str, msgid_range: str | Range, *pattern: str
+        self,
+        header: str,
+        msgid_range: Union[str, Range],
+        *pattern: str,
     ) -> Iterator[str]:
         """XPAT command.
 
@@ -1402,9 +1428,9 @@ class NNTPClient(BaseNNTPClient):
 
     def post(
         self,
-        headers: Mapping[str, str] | None = None,
-        body: str | bytes | Iterable[bytes] = b"",
-    ) -> str | bool:
+        headers: Union[Mapping[str, str], None] = None,
+        body: Union[str, bytes, Iterable[bytes]] = b"",
+    ) -> Union[str, bool]:
         """POST command.
 
         Args:

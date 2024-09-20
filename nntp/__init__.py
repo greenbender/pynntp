@@ -1,4 +1,3 @@
-# flake8: noqa
 from .nntp import (
     BaseNNTPClient,
     NNTPClient,
@@ -9,3 +8,14 @@ from .nntp import (
     NNTPReplyError,
     NNTPTemporaryError,
 )
+
+__all__ = [
+    "BaseNNTPClient",
+    "NNTPClient",
+    "NNTPDataError",
+    "NNTPError",
+    "NNTPPermanentError",
+    "NNTPProtocolError",
+    "NNTPReplyError",
+    "NNTPTemporaryError",
+]

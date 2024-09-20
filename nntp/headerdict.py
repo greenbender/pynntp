@@ -18,7 +18,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 from collections import OrderedDict
 from collections.abc import Mapping, MutableMapping
-from typing import Any, Iterable, Iterator
+from typing import Any, Iterable, Iterator, Union
 
 __all__ = ["HeaderDict"]
 
@@ -34,7 +34,7 @@ class HeaderName(str):
 class HeaderDict(MutableMapping[str, str]):
     def __init__(
         self,
-        other: Mapping[str, str] | Iterable[tuple[str, str]] | None = None,
+        other: Union[Mapping[str, str], Iterable[tuple[str, str]], None] = None,
         **kwargs: str,
     ) -> None:
         if other is None:
