@@ -11,7 +11,7 @@ DEFAULT_NEWGROUPS = {
     ("control.newgroup", "Newsgroup creation control messages (no posting)"),
     ("control.rmgroup", "Newsgroup removal control messages (no posting)"),
     ("junk", "Unfiled articles (no posting)"),
-    ("local.general", "Local general discussion group"),
+    ("local.general", "Local general group"),
     ("local.test", "Local test group"),
 }
 
