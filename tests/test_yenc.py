@@ -13,12 +13,12 @@ def fixture_dir() -> Path:
 
 @pytest.fixture
 def yenc1_encoded(fixture_dir: Path) -> bytes:
-    return open(fixture_dir / "yenc1.encoded", "rb").read()
+    return (fixture_dir / "yenc1.encoded").read_bytes()
 
 
 @pytest.fixture
 def yenc1_plain(fixture_dir: Path) -> bytes:
-    return open(fixture_dir / "yenc1.plain", "rb").read()
+    return (fixture_dir / "yenc1.plain").read_bytes()
 
 
 def test_crc32() -> None:
