@@ -1,0 +1,19 @@
+{
+	"[python]": {
+		"editor.tabSize": 4,
+		"editor.insertSpaces": true,
+		"editor.detectIndentation": false,
+		"editor.defaultFormatter": "charliermarsh.ruff",
+	},
+	"[yaml]": {
+		"editor.defaultFormatter": "esbenp.prettier-vscode",
+	},
+	"[markdown]": {
+		"editor.defaultFormatter": "esbenp.prettier-vscode",
+	},
+	"ruff.importStrategy": "fromEnvironment",
+	"python.testing.pytestEnabled": true,
+	"mypy-type-checker.importStrategy": "fromEnvironment",
+	"mypy-type-checker.preferDaemon": true,
+	"explorer.excludeGitIgnore": true,
+}

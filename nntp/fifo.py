@@ -16,122 +16,125 @@ You should have received a copy of the GNU General Public License
 along with this program.  If not, see <http://www.gnu.org/licenses/>.
 """
 
-
-__all__ = ['TextFifo', 'BytesFifo', 'Fifo']
-
-
-_DISCARD_SIZE = 0xffff
+__all__ = ["TextFifo", "BytesFifo", "Fifo"]
 
 
-class TextFifo(object):
-    empty = ''
-    eol = '\r\n'
+from typing import Generic, Self, TypeVar
 
-    def __init__(self, data=None):
-        self.buf = data or self.empty
-        self.buflist = []
+_DISCARD_SIZE = 0xFFFF
+
+
+T = TypeVar("T", str, bytes)
+
+
+class Fifo(Generic[T]):
+    empty: T
+    eol: T
+
+    def __init__(self, data: T | None = None) -> None:
+        self.buf: T = data or self.empty
+        self.buflist: list[T] = []
         self.pos = 0
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self.buf) - self.pos
 
-    def __iter__(self):
+    def __iter__(self) -> Self:
         return self
 
-    def __discard(self):
-        if self.pos > _DISCARD_SIZE:
-            self.buf = self.buf[self.pos:]
-            self.pos = 0
-
-    def __append(self):
-        self.buf += self.empty.join(self.buflist)
-        self.buflist = []
-
-    def clear(self):
-        self.buf = self.empty
-        self.buflist = []
-        self.pos = 0
-
-    def write(self, data):
-        self.buflist.append(data)
-
-    def read(self, length=0):
-        self.__append()
-        if 0 < length < len(self):
-            newpos = self.pos + length
-            data = self.buf[self.pos:newpos]
-            self.pos = newpos
-            self.__discard()
-            return data
-        data = self.buf[self.pos:]
-        self.clear()
-        return data
-
-    def readline(self):
-        self.__append()
-        i = self.buf.find(self.eol, self.pos)
-        if i < 0:
-            return self.empty
-        newpos = i + len(self.eol)
-        data = self.buf[self.pos:newpos]
-        self.pos = newpos
-        self.__discard()
-        return data
-
-    def readuntil(self, token, size=0):
-        self.__append()
-        i = self.buf.find(token, self.pos)
-        if i < 0:
-            index = max(len(token) - 1, size)
-            newpos = max(len(self.buf) - index, self.pos)
-            data = self.buf[self.pos:newpos]
-            self.pos = newpos
-            self.__discard()
-            return False, data
-        newpos = i + len(token)
-        data = self.buf[self.pos:newpos]
-        self.pos = newpos
-        self.__discard()
-        return True, data
-
-    def peek(self, length=0):
-        self.__append()
-        if 0 < length < len(self):
-            newpos = self.pos + length
-            return self.buf[self.pos:newpos]
-        return self.buf[self.pos:]
-
-    def peekline(self):
-        self.__append()
-        i = self.buf.find(self.eol, self.pos)
-        if i < 0:
-            return self.empty
-        newpos = i + len(self.eol)
-        return self.buf[self.pos:newpos]
-
-    def peekuntil(self, token, size=0):
-        self.__append()
-        i = self.buf.find(token, self.pos)
-        if i < 0:
-            index = max(len(token) - 1, size)
-            newpos = max(len(self.buf) - index, self.pos)
-            return False, self.buf[self.pos:newpos]
-        newpos = i + len(token)
-        return True, self.buf[self.pos:newpos]
-
-    def next(self):
+    def __next__(self) -> T:
         line = self.readline()
         if not line:
             raise StopIteration()
         return line
 
-    __next__ = next
+    def __discard(self) -> None:
+        if self.pos > _DISCARD_SIZE:
+            self.buf = self.buf[self.pos :]
+            self.pos = 0
+
+    def __append(self) -> None:
+        self.buf += self.empty.join(self.buflist)
+        self.buflist = []
+
+    def clear(self) -> None:
+        self.buf = self.empty
+        self.buflist = []
+        self.pos = 0
+
+    def write(self, data: T) -> None:
+        self.buflist.append(data)
+
+    def read(self, length: int = 0) -> T:
+        self.__append()
+        if 0 < length < len(self):
+            newpos = self.pos + length
+            data = self.buf[self.pos : newpos]
+            self.pos = newpos
+            self.__discard()
+            return data
+        data = self.buf[self.pos :]
+        self.clear()
+        return data
+
+    def readline(self) -> T:
+        self.__append()
+        i = self.buf.find(self.eol, self.pos)
+        if i < 0:
+            return self.empty
+        newpos = i + len(self.eol)
+        data = self.buf[self.pos : newpos]
+        self.pos = newpos
+        self.__discard()
+        return data
+
+    def readuntil(self, token: T, size: int = 0) -> tuple[bool, T]:
+        self.__append()
+        i = self.buf.find(token, self.pos)
+        if i < 0:
+            index = max(len(token) - 1, size)
+            newpos = max(len(self.buf) - index, self.pos)
+            data = self.buf[self.pos : newpos]
+            self.pos = newpos
+            self.__discard()
+            return False, data
+        newpos = i + len(token)
+        data = self.buf[self.pos : newpos]
+        self.pos = newpos
+        self.__discard()
+        return True, data
+
+    def peek(self, length: int = 0) -> T:
+        self.__append()
+        if 0 < length < len(self):
+            newpos = self.pos + length
+            return self.buf[self.pos : newpos]
+        return self.buf[self.pos :]
+
+    def peekline(self) -> T:
+        self.__append()
+        i = self.buf.find(self.eol, self.pos)
+        if i < 0:
+            return self.empty
+        newpos = i + len(self.eol)
+        return self.buf[self.pos : newpos]
+
+    def peekuntil(self, token: T, size: int = 0) -> tuple[bool, T]:
+        self.__append()
+        i = self.buf.find(token, self.pos)
+        if i < 0:
+            index = max(len(token) - 1, size)
+            newpos = max(len(self.buf) - index, self.pos)
+            return False, self.buf[self.pos : newpos]
+        newpos = i + len(token)
+        return True, self.buf[self.pos : newpos]
 
 
-class BytesFifo(TextFifo):
-    empty = b''
-    eol = b'\r\n'
+class TextFifo(Fifo[str]):
+    empty = ""
+    eol = "\r\n"
 
 
-Fifo = BytesFifo
-"""Backwards compatibility"""
+class BytesFifo(Fifo[bytes]):
+    empty = b""
+    eol = b"\r\n"

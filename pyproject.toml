@@ -1,22 +1,29 @@
-[build-system]
-requires = ["setuptools>=61.0"]
-build-backend = "setuptools.build_meta"
-
-[project]
+[tool.poetry]
 name = "pynntp"
 version = "1.0.4"
-authors = [
-  { name="Byron Platt", email="byron.platt@gmail.com" },
-]
 description = "NNTP Library (including compressed headers)"
+authors = ["Byron Platt <byron.platt@gmail.com>"]
+license = "GPL-3.0-or-later"
 readme = "README.md"
-requires-python = ">=3.9"
-dependencies = [
-    "python-dateutil",
-]
+packages = [{ include = "nntp" }]
 classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
     "Operating System :: OS Independent",
     "Topic :: Communications :: Usenet News",
 ]
+
+[tool.poetry.dependencies]
+python = ">=3.9"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.3.2"
+ruff = "^0.6.3"
+pre-commit = "^3.8.0"
+mypy = "^1.11.2"
+pytest-benchmark = "^4.0.0"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

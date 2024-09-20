@@ -16,54 +16,47 @@ You should have received a copy of the GNU General Public License
 along with this program.  If not, see <http://www.gnu.org/licenses/>.
 """
 
-
-import re
-import sys
-import zlib
-import struct
 import binascii
+import re
+import struct
+import zlib
+
+_crc32_re = re.compile(b"\\s+crc(?:32)?=([0-9a-fA-F]{8})")
 
 
-_crc32_re = re.compile(b'\\s+crc(?:32)?=([0-9a-fA-F]{8})')
-
-
-def crc32(trailer):
+def trailer_crc32(trailer: bytes) -> int | None:
+    """Extract the CRC32 value from a yEnc trailer."""
     match = _crc32_re.search(trailer)
     if not match:
         return None
     buf = binascii.unhexlify(match.group(1))
-    return struct.unpack('>I', buf)[0]
+    return struct.unpack(">I", buf)[0]  # type: ignore
 
 
-def _decode(buf, escape):
-    decoded = bytearray()
-    for b in buf:
-        if escape:
-            b = (b - 106) & 0xff
-            escape = 0
-        elif b == 0x3d:
-            escape = 1
-            continue
-        elif b == 0x0d or b == 0x0a:
-            continue
-        else:
-            b = (b - 42) & 0xff
-        decoded.append(b)
-    return decoded, escape
+class YEnc:
+    """A basic yEnc decoder.
 
+    Keeps track of the CRC32 value as data is decoded.
+    """
 
-def _decode3(buf, escape=0, crc32=0):
-    decoded, escape = _decode(buf, escape)
-    crc32 = zlib.crc32(decoded, crc32)
-    return decoded, escape, crc32
+    def __init__(self) -> None:
+        self.crc32 = 0
+        self._escape = 0
 
-
-def _decode2(buf, escape=0, crc32=0):
-    buf = bytearray(buf)
-    decoded, escape = _decode(buf, escape)
-    decoded = bytes(decoded)
-    crc32 = zlib.crc32(decoded, crc32)
-    return decoded, escape, crc32
-
-
-decode = _decode3 if sys.version_info[0] >= 3 else _decode2
+    def decode(self, buf: bytes) -> bytes:
+        data = bytearray()
+        for b in buf:
+            if self._escape:
+                b = (b - 106) & 0xFF
+                self._escape = 0
+            elif b == 0x3D:
+                self._escape = 1
+                continue
+            elif b == 0x0D or b == 0x0A:
+                continue
+            else:
+                b = (b - 42) & 0xFF
+            data.append(b)
+        decoded = bytes(data)
+        self.crc32 = zlib.crc32(decoded, self.crc32)
+        return decoded

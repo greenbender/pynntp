@@ -1,12 +1,13 @@
 # temp files
 ~*
-.*.swp
+.*.sw?
 
-# python compiled
-*.pyc
+# venv
+.venv/
 
-# setuptools stuff
-build/
-dist/
-MANIFEST
-pynntp.egg-info/
+# caches
+__pycache__/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.benchmarks/

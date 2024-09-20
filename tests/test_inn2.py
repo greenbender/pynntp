@@ -4,16 +4,15 @@ import pytest
 
 import nntp
 
-
 DEFAULT_NEWGROUPS = {
-    ("control", "Various"),
-    ("control.cancel", "Cancel"),
-    ("control.checkgroups", "Hierarchy"),
-    ("control.newgroup", "Newsgroup"),
-    ("control.rmgroup", "Newsgroup"),
-    ("junk", "Unfiled"),
-    ("local.general", "Local"),
-    ("local.test", "Local"),
+    ("control", "Various control messages (no posting)."),
+    ("control.cancel", "Cancel messages (no posting)."),
+    ("control.checkgroups", "Hierarchy check control messages (no posting)."),
+    ("control.newgroup", "Newsgroup creation control messages (no posting)."),
+    ("control.rmgroup", "Newsgroup removal control messages (no posting)."),
+    ("junk", "Unfiled articles (no posting)."),
+    ("local.general", "Local general discussion group."),
+    ("local.test", "Local test group."),
 }
 
 
