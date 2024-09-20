@@ -1391,13 +1391,14 @@ class NNTPClient(BaseNNTPClient):
     def post(
         self,
         headers: Mapping[str, str] | None = None,
-        body: bytes | Iterable[bytes] = b"",
+        body: str | bytes | Iterable[bytes] = b"",
     ) -> str | bool:
         """POST command.
 
         Args:
             headers: A dictionary of headers.
-            body: A string or file like object containing the post content.
+            body: A string, bytes or binary file-like object containing the post
+                content.
 
         Raises:
             NNTPDataError: If binary characters are detected in the message
@@ -1437,6 +1438,8 @@ class NNTPClient(BaseNNTPClient):
         hdrs = utils.unparse_headers(headers)
         self.socket.sendall(hdrs.encode(self.encoding))
 
+        if isinstance(body, str):
+            body = body.encode(self.encoding, self.errors)
         if isinstance(body, bytes):
             body = io.BytesIO(body)
 
@@ -1475,6 +1478,7 @@ class NNTPClient(BaseNNTPClient):
 
 
 # testing
+# TODO: Remove/move this to a test file
 if __name__ == "__main__":
     import sys
     from datetime import timedelta
