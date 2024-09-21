@@ -16,24 +16,66 @@ permissions:
   contents: read
 
 jobs:
-  deploy:
-
+  publish-testpypi:
+    if: github.event.release.prerelease
     runs-on: ubuntu-latest
+    environment:
+      name: testpypi
+      url: https://pypi.org/p/pynntp
+    permissions:
+      id-token: write
 
     steps:
-    - uses: actions/checkout@v4
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.x'
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install build
-    - name: Build package
-      run: python -m build
-    - name: Publish package
-      uses: pypa/gh-action-pypi-publish@897895f1e160c830e369f9779632ebc134688e1b
-      with:
-        user: __token__
-        password: ${{ secrets.PYPI_API_TOKEN }}
+      - uses: actions/checkout@v4
+      - run: pipx install poetry
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Bump version
+        run: |
+          poetry version ${{ github.event.release.tag_name }}
+
+      - name: Build package
+        run: poetry build
+
+      - name: Publish package
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+
+  publish-pypi:
+    if: "!github.event.release.prerelease"
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/pynntp
+    permissions:
+      id-token: write
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+      - run: pipx install poetry
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Bump version
+        run: |
+          poetry version ${{ github.event.release.tag_name }}
+
+      - name: Build package
+        run: poetry build
+
+      - name: Publish package
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+      - name: Commit version change
+        run: |
+          git config user.name "${{ github.actor }}"
+          git config user.email "${{ github.actor_id }}+${{ github.actor }}@users.noreply.github.com"
+          git commit -am "Bump version to ${{ github.event.release.ref_name }}"
+          git push
