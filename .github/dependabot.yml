@@ -8,6 +8,18 @@ updates:
     groups:
       github-actions:
         patterns:
-          - "*"  # Group all Actions updates into a single larger pull request
+          - "*" # Group all Actions updates into a single larger pull request
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: python
+    directory: /
+    allow:
+      - dependency-type: all # Update sub-dependencies
+    groups:
+      features-and-bugs:
+        update-types:
+          - patch
+          - minor
     schedule:
       interval: weekly
