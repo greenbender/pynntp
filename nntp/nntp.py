@@ -24,7 +24,8 @@ from collections.abc import Iterator, Mapping
 from datetime import datetime, timezone
 from functools import cached_property
 from types import TracebackType
-from typing import TYPE_CHECKING, Any, Iterable, Literal, Type, Union, overload
+from typing import TYPE_CHECKING, Any, Literal, Union, overload
+from collections.abc import Iterable
 
 from . import utils
 from .fifo import BytesFifo
@@ -563,7 +564,7 @@ class NNTPClient(BaseNNTPClient):
 
     def __exit__(
         self,
-        exc_type: Union[Type[BaseException], None],
+        exc_type: Union[type[BaseException], None],
         exc_val: Union[BaseException, None],
         exc_tb: Union[TracebackType, None],
     ) -> Literal[False]:
@@ -659,9 +660,7 @@ class NNTPClient(BaseNNTPClient):
         if code != 111:
             raise NNTPReplyError(code, message)
 
-        ts = utils.parse_date(message)
-
-        return ts
+        return utils.parse_date(message)
 
     def help(self) -> str:
         """HELP command.

@@ -18,12 +18,13 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 from collections import OrderedDict
 from collections.abc import Mapping, MutableMapping
-from typing import Any, Iterable, Iterator, Union
+from typing import Any, Union
+from collections.abc import Iterable, Iterator
 
 __all__ = ["HeaderDict"]
 
 
-class HeaderName(str):
+class HeaderName(str):  # noqa: SLOT000
     def __eq__(self, other: object) -> bool:
         return isinstance(other, str) and self.casefold() == other.casefold()
 
