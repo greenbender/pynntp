@@ -18,7 +18,8 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 from collections import OrderedDict
 from collections.abc import Mapping, MutableMapping
-from typing import Any, Iterable, Iterator, Union
+from typing import Any, Union
+from collections.abc import Iterable, Iterator
 
 __all__ = ["HeaderDict"]
 
