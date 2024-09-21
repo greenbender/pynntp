@@ -169,7 +169,7 @@ def _unparse_header(name: str, value: str) -> str:
     Returns:
         The header as a string.
     """
-    return ": ".join([name, value]) + "\r\n"
+    return f"{name}: {value}" + "\r\n"
 
 
 def unparse_headers(hdrs: Mapping[str, str]) -> str:

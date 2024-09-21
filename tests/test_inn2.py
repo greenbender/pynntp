@@ -129,4 +129,4 @@ def test_article(newsgroup: str) -> None:
         assert article_number == 1
         assert headers["Newsgroups"] == newsgroup
         assert headers["Subject"] == f"Test post to {newsgroup}"
-        assert body == f"This is a test post to {newsgroup}\r\n".encode("utf-8")
+        assert body == f"This is a test post to {newsgroup}\r\n".encode()

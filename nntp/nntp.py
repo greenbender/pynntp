@@ -471,7 +471,7 @@ class BaseNNTPClient:
             raise NNTPSyncError("Command issued while a generator is active")
 
         if args:
-            cmd = "%s %s\r\n" % (verb, args)
+            cmd = f"{verb} {args}\r\n"
         else:
             cmd = verb + "\r\n"
 
@@ -1016,7 +1016,7 @@ class NNTPClient(BaseNNTPClient):
             last = int(parts[2])
             group = parts[3]
         except (IndexError, ValueError):
-            raise NNTPDataError('Invalid GROUP status "%s"' % message)
+            raise NNTPDataError(f'Invalid GROUP status "{message}"')
 
         return total, first, last, group
 
@@ -1334,7 +1334,7 @@ class NNTPClient(BaseNNTPClient):
                 articleno = int(parts[0])
                 overview = HeaderDict(zip(fmt, parts[1:]))
             except (IndexError, ValueError):
-                raise NNTPDataError("Invalid %s response" % verb)
+                raise NNTPDataError(f"Invalid {verb} response")
             yield articleno, overview
 
     def xover(
@@ -1531,7 +1531,7 @@ if __name__ == "__main__":
         use_ssl = bool(int(sys.argv[5]))
     except (IndexError, TypeError, ValueError):
         prog = sys.argv[0]
-        log("%s <host> <port> <username> <password> <ssl(0|1)>\n" % prog)
+        log(f"{prog} <host> <port> <username> <password> <ssl(0|1)>\n")
         sys.exit(1)
 
     now = datetime.now(tz=timezone.utc)
@@ -1545,16 +1545,16 @@ if __name__ == "__main__":
     try:
         log("HELP\n")
         try:
-            log("%s\n" % nntp_client.help())
+            log(f"{nntp_client.help()}\n")
         except NNTPError as e:
-            log("%s\n" % e)
+            log(f"{e}\n")
         log("\n")
 
         log("DATE\n")
         try:
-            log("%s\n" % nntp_client.date())
+            log(f"{nntp_client.date()}\n")
         except NNTPError as e:
-            log("%s\n" % e)
+            log(f"{e}\n")
         log("\n")
 
         log("NEWGROUPS\n")
@@ -1563,23 +1563,23 @@ if __name__ == "__main__":
                 print(newsgroup)
                 # log('%s\n' % newsgroup)
         except NNTPError as e:
-            log("%s\n" % e)
+            log(f"{e}\n")
         log("\n")
 
         log("NEWNEWS\n")
         try:
             for msgid in nntp_client.newnews("alt.binaries.*", now - onemin):
-                log("%s\n" % msgid)
+                log(f"{msgid}\n")
         except NNTPError as e:
-            log("%s\n" % e)
+            log(f"{e}\n")
         log("\n")
 
         log("CAPABILITIES\n")
         try:
             for capability in nntp_client.capabilities():
-                log("%s\n" % capability)
+                log(f"{capability}\n")
         except NNTPError as e:
-            log("%s\n" % e)
+            log(f"{e}\n")
         log("\n")
 
         log("GROUP misc.test\n")
@@ -1587,28 +1587,28 @@ if __name__ == "__main__":
             total, first, last, name = nntp_client.group("misc.test")
             log("%d %d %d %s\n" % (total, first, last, name))
         except NNTPError as e:
-            log("%s\n" % e)
+            log(f"{e}\n")
         log("\n")
 
         log("HEAD\n")
         try:
-            log("%r\n" % nntp_client.head(last))
+            log(f"{nntp_client.head(last)!r}\n")
         except NNTPError as e:
-            log("%s\n" % e)
+            log(f"{e}\n")
         log("\n")
 
         log("BODY\n")
         try:
-            log("%r\n" % nntp_client.body(last))
+            log(f"{nntp_client.body(last)!r}\n")
         except NNTPError as e:
-            log("%s\n" % e)
+            log(f"{e}\n")
         log("\n")
 
         log("BODY\n")
         try:
-            log("%r\n" % nntp_client.body(910230))
+            log(f"{nntp_client.body(910230)!r}\n")
         except NNTPError as e:
-            log("%s\n" % e)
+            log(f"{e}\n")
         log("\n")
 
         log("ARTICLE\n")
@@ -1616,7 +1616,7 @@ if __name__ == "__main__":
             article, hdrs, body = nntp_client.article(last, False)
             log("%d\n%s\n%r\n" % (article, hdrs, body))
         except NNTPError as e:
-            log("%s\n" % e)
+            log(f"{e}\n")
         log("\n")
 
         log("ARTICLE (auto yEnc decode)\n")
@@ -1624,7 +1624,7 @@ if __name__ == "__main__":
             article, hdrs, body = nntp_client.article(910230)
             log("%d\n%s\n%r\n" % (article, hdrs, body))
         except NNTPError as e:
-            log("%s\n" % e)
+            log(f"{e}\n")
         log("\n")
 
         log("XHDR Date %d-%d\n" % (last - 10, last))
@@ -1632,7 +1632,7 @@ if __name__ == "__main__":
             for article, datestr in nntp_client.xhdr("Date", (last - 10, last)):
                 log("%d %s\n" % (article, datestr))
         except NNTPError as e:
-            log("%s\n" % e)
+            log(f"{e}\n")
         log("\n")
 
         log("XZHDR Date %d-%d\n" % (last - 10, last))
@@ -1640,7 +1640,7 @@ if __name__ == "__main__":
             for article, datestr in nntp_client.xhdr("Date", (last - 10, last)):
                 log("%d %s\n" % (article, datestr))
         except NNTPError as e:
-            log("%s\n" % e)
+            log(f"{e}\n")
         log("\n")
 
         log("XOVER %d-%d\n" % (last - 10, last))
@@ -1653,7 +1653,7 @@ if __name__ == "__main__":
                 count += 1
             log("Entries %d Hash %s\n" % (count, hash_))
         except NNTPError as e:
-            log("%s\n" % e)
+            log(f"{e}\n")
         log("\n")
 
         log("XZVER %d-%d\n" % (last - 10, last))
@@ -1665,14 +1665,14 @@ if __name__ == "__main__":
                 count += 1
             log("Entries %d Hash %s\n" % (count, hash_))
         except NNTPError as e:
-            log("%s\n" % e)
+            log(f"{e}\n")
         log("\n")
 
         log("XFEATURE COMPRESS GZIP\n")
         try:
-            log("%s\n" % nntp_client.xfeature_compress_gzip())
+            log(f"{nntp_client.xfeature_compress_gzip()}\n")
         except NNTPError as e:
-            log("%s\n" % e)
+            log(f"{e}\n")
         log("\n")
 
         log("XOVER %d-%d\n" % (last - 10, last))
@@ -1684,14 +1684,14 @@ if __name__ == "__main__":
                 count += 1
             log("Entries %d Hash %s\n" % (count, hash_))
         except NNTPError as e:
-            log("%s\n" % e)
+            log(f"{e}\n")
         log("\n")
 
         log("XFEATURE COMPRESS GZIP TERMINATOR\n")
         try:
-            log("%s\n" % nntp_client.xfeature_compress_gzip())
+            log(f"{nntp_client.xfeature_compress_gzip()}\n")
         except NNTPError as e:
-            log("%s\n" % e)
+            log(f"{e}\n")
         log("\n")
 
         log("XOVER %d-%d\n" % (last - 10, last))
@@ -1703,21 +1703,21 @@ if __name__ == "__main__":
                 count += 1
             log("Entries %d Hash %s\n" % (count, hash_))
         except NNTPError as e:
-            log("%s\n" % e)
+            log(f"{e}\n")
         log("\n")
 
         log("LIST\n")
         try:
             log("Entries %d\n" % len(list(nntp_client.list())))
         except NNTPError as e:
-            log("%s\n" % e)
+            log(f"{e}\n")
         log("\n")
 
         log("LIST ACTIVE\n")
         try:
             log("Entries %d\n" % len(list(nntp_client.list("ACTIVE"))))
         except NNTPError as e:
-            log("%s\n" % e)
+            log(f"{e}\n")
         log("\n")
 
         log("LIST ACTIVE alt.binaries.*\n")
@@ -1725,14 +1725,14 @@ if __name__ == "__main__":
             newsgroups = nntp_client.list("ACTIVE", "alt.binaries.*")
             log("Entries %d\n" % len(list(newsgroups)))
         except NNTPError as e:
-            log("%s\n" % e)
+            log(f"{e}\n")
         log("\n")
 
         log("LIST ACTIVE.TIMES\n")
         try:
             log("Entries %d\n" % len(list(nntp_client.list("ACTIVE.TIMES"))))
         except NNTPError as e:
-            log("%s\n" % e)
+            log(f"{e}\n")
         log("\n")
 
         log("LIST NEWSGROUPS\n")
@@ -1741,7 +1741,7 @@ if __name__ == "__main__":
             for group in nntp_client.list("NEWSGROUPS"):
                 print(group)
         except NNTPError as e:
-            log("%s\n" % e)
+            log(f"{e}\n")
         log("\n")
 
         log("LIST NEWSGROUPS alt.binaries.*\n")
@@ -1749,75 +1749,77 @@ if __name__ == "__main__":
             groups = nntp_client.list("NEWSGROUPS", "alt.binaries.*")
             log("Entries %d\n" % len(list(groups)))
         except NNTPError as e:
-            log("%s\n" % e)
+            log(f"{e}\n")
         log("\n")
 
         log("LIST OVERVIEW.FMT\n")
         try:
-            log("%s\n" % list(nntp_client.list("OVERVIEW.FMT")))
+            log("{}\n".format(list(nntp_client.list("OVERVIEW.FMT"))))
         except NNTPError as e:
-            log("%s\n" % e)
+            log(f"{e}\n")
         log("\n")
 
         log("LIST HEADERS\n")
         try:
-            log("%s\n" % list(nntp_client.list("HEADERS")))
+            log("{}\n".format(list(nntp_client.list("HEADERS"))))
         except NNTPError as e:
-            log("%s\n" % e)
+            log(f"{e}\n")
         log("\n")
 
         log("LIST EXTENSIONS\n")
         try:
-            log("%s\n" % list(nntp_client.list("EXTENSIONS")))
+            log("{}\n".format(list(nntp_client.list("EXTENSIONS"))))
         except NNTPError as e:
-            log("%s\n" % e)
+            log(f"{e}\n")
         log("\n")
 
         log("POST (with illegal characters)\n")
         try:
             log(
-                "%s\n"
-                % nntp_client.post(
-                    HeaderDict(
-                        {
-                            "From": '"pynntp" <pynntp@not.a.real.doma.in>',
-                            "Newsgroups": "misc.test",
-                            "Subject": "pynntp test article",
-                            "Organization": "pynntp",
-                        }
-                    ),
-                    b"pip install pynntp\r\nthis\0contains\rillegal\ncharacters",
+                "{}\n".format(
+                    nntp_client.post(
+                        HeaderDict(
+                            {
+                                "From": '"pynntp" <pynntp@not.a.real.doma.in>',
+                                "Newsgroups": "misc.test",
+                                "Subject": "pynntp test article",
+                                "Organization": "pynntp",
+                            }
+                        ),
+                        b"pip install pynntp\r\nthis\0contains\rillegal\ncharacters",
+                    )
                 )
             )
         except NNTPError as e:
-            log("%s\n" % e)
+            log(f"{e}\n")
         log("\n")
 
         log("POST\n")
         try:
             log(
-                "%s\n"
-                % nntp_client.post(
-                    HeaderDict(
-                        {
-                            "From": '"pynntp" <pynntp@not.a.real.doma.in>',
-                            "Newsgroups": "misc.test",
-                            "Subject": "pynntp test article",
-                            "Organization": "pynntp",
-                        }
-                    ),
-                    b"pip install pynntp",
+                "{}\n".format(
+                    nntp_client.post(
+                        HeaderDict(
+                            {
+                                "From": '"pynntp" <pynntp@not.a.real.doma.in>',
+                                "Newsgroups": "misc.test",
+                                "Subject": "pynntp test article",
+                                "Organization": "pynntp",
+                            }
+                        ),
+                        b"pip install pynntp",
+                    )
                 )
             )
         except NNTPError as e:
-            log("%s\n" % e)
+            log(f"{e}\n")
         log("\n")
 
         log("QUIT\n")
         try:
             nntp_client.quit()
         except NNTPError as e:
-            log("%s\n" % e)
+            log(f"{e}\n")
         log("\n")
 
     finally:
