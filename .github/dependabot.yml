@@ -12,7 +12,7 @@ updates:
     schedule:
       interval: weekly
 
-  - package-ecosystem: python
+  - package-ecosystem: pip
     directory: /
     allow:
       - dependency-type: all # Update sub-dependencies
