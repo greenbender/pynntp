@@ -40,6 +40,7 @@ select = [
   "DJ",     # flake8-django
   "E",      # pycodestyle
   "F",      # Pyflakes
+  "FLY",    # flynt
   "FURB",   # refurb
   "G",      # flake8-logging-format
   "ICN",    # flake8-import-conventions
@@ -57,6 +58,7 @@ select = [
   "T10",    # flake8-debugger
   "TCH",    # flake8-type-checking
   "TID",    # flake8-tidy-imports
+  "UP",     # pyupgrade
   "W",      # pycodestyle
   "YTT",    # flake8-2020
   # "A",    # flake8-builtins
@@ -75,7 +77,6 @@ select = [
   # "FAST", # FastAPI
   # "FBT",  # flake8-boolean-trap
   # "FIX",  # flake8-fixme
-  # "FLY",  # flynt
   # "I",    # isort
   # "INP",  # flake8-no-pep420
   # "N",    # pep8-naming
@@ -91,7 +92,6 @@ select = [
   # "T20",  # flake8-print
   # "TD",   # flake8-todos
   # "TRY",  # tryceratops
-  # "UP",   # pyupgrade
 ]
 
 [tool.ruff.lint.mccabe]
