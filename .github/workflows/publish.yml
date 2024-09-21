@@ -35,7 +35,7 @@ jobs:
 
       - name: Bump version
         run: |
-          poetry version ${{ github.event.release.ref_name }}
+          poetry version ${{ github.event.release.tag_name }}
 
       - name: Build package
         run: poetry build
@@ -65,7 +65,7 @@ jobs:
 
       - name: Bump version
         run: |
-          poetry version ${{ github.event.release.ref_name }}
+          poetry version ${{ github.event.release.tag_name }}
 
       - name: Build package
         run: poetry build
