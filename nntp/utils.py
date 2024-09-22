@@ -186,7 +186,7 @@ def unparse_headers(hdrs: Mapping[str, str]) -> str:
     return "".join([_unparse_header(n, v) for n, v in hdrs.items()]) + "\r\n"
 
 
-def parse_date(value: str) -> datetime:
+def parse_date(value: Union[str, int]) -> datetime:
     """Parse a date as returned by the `DATE` command.
 
     Args:
@@ -207,7 +207,7 @@ def parse_date(value: str) -> datetime:
     return datetime(Y % 10000, m, d, H, M, S, tzinfo=timezone.utc)
 
 
-def parse_epoch(value: str) -> datetime:
+def parse_epoch(value: Union[str, int]) -> datetime:
     """Parse a date as returned by the `DATE` command.
 
     Args:

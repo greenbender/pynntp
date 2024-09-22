@@ -1,8 +1,10 @@
 from datetime import datetime, timezone
 from io import StringIO
+from typing import Union
 
 import pytest
 
+from nntp.types import Newsgroup, Range
 from nntp.utils import (
     parse_date,
     parse_epoch,
@@ -23,7 +25,7 @@ from nntp.utils import (
         pytest.param((1, 10, 20), None, marks=pytest.mark.xfail(raises=ValueError)),
     ],
 )
-def test_unparse_range(range, expected):
+def test_unparse_range(range: Range, expected: str) -> None:
     assert unparse_range(range) == expected
 
 
@@ -38,7 +40,7 @@ def test_unparse_range(range, expected):
         pytest.param((1, 10, 20), None, marks=pytest.mark.xfail(raises=ValueError)),
     ],
 )
-def test_unparse_msgid_range(msgid_range, expected):
+def test_unparse_msgid_range(msgid_range: Union[str, Range], expected: str) -> None:
     assert unparse_msgid_range(msgid_range) == expected
 
 
@@ -56,11 +58,11 @@ def test_unparse_msgid_range(msgid_range, expected):
         ),
     ],
 )
-def test_parse_newsgroup(line, expected):
+def test_parse_newsgroup(line: str, expected: Newsgroup) -> None:
     assert parse_newsgroup(line) == expected
 
 
-def test_parse_headers():
+def test_parse_headers() -> None:
     headers = [
         "Subject: Test Subject",
         "From: John Doe <johndoe@example.com>",
@@ -78,7 +80,7 @@ def test_parse_headers():
     assert parse_headers(StringIO("\r\n".join(headers))) == expected
 
 
-def test_parse_headers_continuation():
+def test_parse_headers_continuation() -> None:
     headers = [
         "Subject: Test Subject",
         " with continuation",
@@ -93,7 +95,7 @@ def test_parse_headers_continuation():
     assert parse_headers(headers) == expected
 
 
-def test_parse_headers_invalid():
+def test_parse_headers_invalid() -> None:
     with pytest.raises(ValueError, match="First header is a continuation"):
         parse_headers(" Subject: Test Subject")
     with pytest.raises(ValueError, match="First header is a continuation"):
@@ -110,7 +112,7 @@ def test_parse_headers_invalid():
         pytest.param("2022", None, marks=pytest.mark.xfail(raises=ValueError)),
     ],
 )
-def test_parse_date(date, expected):
+def test_parse_date(date: Union[str, int], expected: datetime) -> None:
     assert parse_date(date) == expected
 
 
@@ -121,5 +123,5 @@ def test_parse_date(date, expected):
         (1641048001, datetime(2022, 1, 1, 14, 40, 1, tzinfo=timezone.utc)),
     ],
 )
-def test_parse_epoch(epoch, expected):
+def test_parse_epoch(epoch: Union[str, int], expected: datetime) -> None:
     assert parse_epoch(epoch) == expected
