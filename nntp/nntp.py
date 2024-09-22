@@ -20,12 +20,11 @@ import io
 import socket
 import ssl
 import zlib
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from datetime import datetime, timezone
 from functools import cached_property
 from types import TracebackType
 from typing import TYPE_CHECKING, Any, Literal, Union, overload
-from collections.abc import Iterable
 
 from . import utils
 from .fifo import BytesFifo

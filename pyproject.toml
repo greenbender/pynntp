@@ -43,7 +43,9 @@ select = [
   "FLY",    # flynt
   "FURB",   # refurb
   "G",      # flake8-logging-format
+  "I",      # isort
   "ICN",    # flake8-import-conventions
+  "INP",    # flake8-no-pep420
   "INT",    # flake8-gettext
   "ISC",    # flake8-implicit-str-concat
   "LOG",    # flake8-logging
@@ -77,8 +79,6 @@ select = [
   # "FAST", # FastAPI
   # "FBT",  # flake8-boolean-trap
   # "FIX",  # flake8-fixme
-  # "I",    # isort
-  # "INP",  # flake8-no-pep420
   # "N",    # pep8-naming
   # "PGH",  # pygrep-hooks
   # "PIE",  # flake8-pie
