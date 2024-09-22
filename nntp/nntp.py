@@ -19,6 +19,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 from __future__ import annotations
 
 import io
+import os
 import socket
 import ssl
 import zlib
@@ -29,6 +30,7 @@ from typing import TYPE_CHECKING, Any, Literal, overload
 from . import utils
 from .fifo import BytesFifo
 from .headerdict import HeaderDict
+from .types import SSLMode
 from .yenc import YEnc, trailer_crc32
 
 if TYPE_CHECKING:
@@ -140,6 +142,7 @@ class BaseNNTPClient:
         password: str = "",
         timeout: int = 30,
         use_ssl: bool = False,
+        ssl_mode: SSLMode = SSLMode.IMPLICIT,
     ) -> None:
         """Constructor for BasicNNTPClient.
 
@@ -152,6 +155,7 @@ class BaseNNTPClient:
             password: Password for usenet account
             timeout: Connection timeout
             use_ssl: Should we use ssl
+            ssl_mode: SSL mode to use
 
         Raises:
             IOError (socket.error): On error in underlying socket and/or ssl
@@ -166,16 +170,29 @@ class BaseNNTPClient:
 
         # connect
         self.socket = socket.create_connection((host, port), timeout=timeout)
-        if use_ssl:
-            context = ssl.create_default_context()
-            self.socket = context.wrap_socket(
-                self.socket,
-                server_hostname=host,
-            )
+        if use_ssl and ssl_mode == SSLMode.IMPLICIT:
+            self._enable_tls(host)
 
         code, message = self.status()
         if code not in (200, 201):
             raise NNTPReplyError(code, message)
+
+        if use_ssl and ssl_mode == SSLMode.STARTTLS:
+            code, message = self.command("STARTTLS")
+            if code != 382:
+                self.socket.close()
+                raise NNTPReplyError(code, message)
+            self._enable_tls(host)
+
+    def _enable_tls(self, host: str) -> None:
+        context = ssl.create_default_context()
+        if "PYNNTP_TLS_INSECURE" in os.environ:
+            context.check_hostname = False
+            context.verify_mode = ssl.CERT_NONE
+        self.socket = context.wrap_socket(
+            self.socket,
+            server_hostname=host,
+        )
 
     def _recv(self, size: int = 4096) -> None:
         """Reads data from the socket.
@@ -537,6 +554,7 @@ class NNTPClient(BaseNNTPClient):
         password: str = "",
         timeout: int = 30,
         use_ssl: bool = False,
+        ssl_mode: SSLMode = SSLMode.IMPLICIT,
         reader: bool = True,
     ) -> None:
         """Constructor for NNTP NNTPClient.
@@ -550,6 +568,7 @@ class NNTPClient(BaseNNTPClient):
             password: Password for usenet account
             timeout: Connection timeout
             use_ssl: Should we use ssl
+            ssl_mode: SSL mode to use
             reader: Use reader mode
 
         Raises:
@@ -557,7 +576,7 @@ class NNTPClient(BaseNNTPClient):
                 socket and ssl modules for further details.
             NNTPReplyError: On bad response code from server.
         """
-        super().__init__(host, port, username, password, timeout, use_ssl)
+        super().__init__(host, port, username, password, timeout, use_ssl, ssl_mode)
         if reader:
             self.mode_reader()
 

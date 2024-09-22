@@ -1,8 +1,10 @@
-import ssl
+import os
+from unittest import mock
 
 import pytest
 
 import nntp
+from nntp.types import SSLMode
 
 DEFAULT_NEWGROUPS = {
     ("control", "Various control messages (no posting)"),
@@ -59,13 +61,18 @@ def test_nntp_client_without_ssl() -> None:
         assert newsgroups == DEFAULT_NEWGROUPS
 
 
-@pytest.mark.xfail(
-    reason="INN2 in not configured to support SSL",
-    raises=ssl.SSLError,
-    strict=True,
-)
+@mock.patch.dict(os.environ, {"PYNNTP_TLS_INSECURE": "1"})
 def test_nntp_client_with_ssl() -> None:
-    with nntp.NNTPClient("localhost", use_ssl=True) as nntp_client:
+    with nntp.NNTPClient("localhost", 563, use_ssl=True) as nntp_client:
+        newsgroups = set(nntp_client.list_newsgroups())
+        assert newsgroups == DEFAULT_NEWGROUPS
+
+
+@mock.patch.dict(os.environ, {"PYNNTP_TLS_INSECURE": "1"})
+def test_nntp_client_with_ssl_starttls() -> None:
+    with nntp.NNTPClient(
+        "localhost", use_ssl=True, ssl_mode=SSLMode.STARTTLS
+    ) as nntp_client:
         newsgroups = set(nntp_client.list_newsgroups())
         assert newsgroups == DEFAULT_NEWGROUPS
 
