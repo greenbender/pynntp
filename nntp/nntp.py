@@ -456,7 +456,7 @@ class BaseNNTPClient:
         if self._generating:
             raise NNTPSyncError("Command issued while a generator is active")
 
-        cmd = f"{verb} {args}\r\n" if args else verb + "\r\n"
+        cmd = f"{verb} {args}\r\n" if args else f"{verb}\r\n"
 
         self.socket.sendall(cmd.encode(self.encoding))
 
@@ -1384,7 +1384,7 @@ class NNTPClient(BaseNNTPClient):
             NNTPReplyError: If no such article exists.
         """
         args = " ".join(
-            [header, utils.unparse_msgid_range(msgid_range), *list(pattern)]
+            [header, utils.unparse_msgid_range(msgid_range), *pattern]
         )
 
         code, message = self.command("XPAT", args)
