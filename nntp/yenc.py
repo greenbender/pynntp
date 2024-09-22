@@ -16,11 +16,12 @@ You should have received a copy of the GNU General Public License
 along with this program.  If not, see <http://www.gnu.org/licenses/>.
 """
 
+from __future__ import annotations
+
 import binascii
 import re
 import struct
 import zlib
-from typing import Union
 
 __all__ = ["trailer_crc32", "YEnc"]
 
@@ -28,7 +29,7 @@ __all__ = ["trailer_crc32", "YEnc"]
 _crc32_re = re.compile(b"\\s+crc(?:32)?=([0-9a-fA-F]{8})")
 
 
-def trailer_crc32(trailer: bytes) -> Union[int, None]:
+def trailer_crc32(trailer: bytes) -> int | None:
     """Extract the CRC32 value from a yEnc trailer."""
     match = _crc32_re.search(trailer)
     if not match:

@@ -16,10 +16,12 @@ You should have received a copy of the GNU General Public License
 along with this program.  If not, see <http://www.gnu.org/licenses/>.
 """
 
+from __future__ import annotations
+
 from collections import OrderedDict
 from collections.abc import Iterable, Iterator, Mapping, MutableMapping
 from itertools import chain
-from typing import Any, Union
+from typing import Any
 
 __all__ = ["HeaderDict"]
 
@@ -35,7 +37,7 @@ class HeaderName(str):  # noqa: SLOT000
 class HeaderDict(MutableMapping[str, str]):
     def __init__(
         self,
-        other: Union[Mapping[str, str], Iterable[tuple[str, str]], None] = None,
+        other: Mapping[str, str] | Iterable[tuple[str, str]] | None = None,
         **kwargs: str,
     ) -> None:
         self.__proxy = OrderedDict[HeaderName, str]()

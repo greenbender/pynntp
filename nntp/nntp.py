@@ -16,24 +16,28 @@ You should have received a copy of the GNU General Public License
 along with this program.  If not, see <http://www.gnu.org/licenses/>.
 """
 
+from __future__ import annotations
+
 import io
 import socket
 import ssl
 import zlib
-from collections.abc import Iterable, Iterator, Mapping
 from datetime import datetime, timezone
 from functools import cached_property
-from types import TracebackType
-from typing import TYPE_CHECKING, Any, Literal, Union, overload
+from typing import TYPE_CHECKING, Any, Literal, overload
 
 from . import utils
 from .fifo import BytesFifo
 from .headerdict import HeaderDict
-from .types import Newsgroup, Range
 from .yenc import YEnc, trailer_crc32
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable, Iterator, Mapping
+    from types import TracebackType
+
     from typing_extensions import Self
+
+    from .types import Newsgroup, Range
 
 __all__ = [
     "BaseNNTPClient",
@@ -429,7 +433,7 @@ class BaseNNTPClient:
         for line in self._info(code, message, yz):
             yield line.decode(self.encoding, self.errors)
 
-    def command(self, verb: str, args: Union[str, None] = None) -> tuple[int, str]:
+    def command(self, verb: str, args: str | None = None) -> tuple[int, str]:
         """Call a command on the server.
 
         If the user has not authenticated then authentication will be done
@@ -540,15 +544,15 @@ class NNTPClient(BaseNNTPClient):
         if reader:
             self.mode_reader()
 
-    def __enter__(self) -> "Self":
+    def __enter__(self) -> Self:
         """Support for the 'with' context manager statement."""
         return self
 
     def __exit__(
         self,
-        exc_type: Union[type[BaseException], None],
-        exc_val: Union[BaseException, None],
-        exc_tb: Union[TracebackType, None],
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
     ) -> Literal[False]:
         """Support for the 'with' context manager statement."""
         try:
@@ -559,7 +563,7 @@ class NNTPClient(BaseNNTPClient):
         return False
 
     # session administration commands
-    def capabilities(self, keyword: Union[str, None] = None) -> Iterator[str]:
+    def capabilities(self, keyword: str | None = None) -> Iterator[str]:
         """CAPABILITIES command.
 
         Determines the capabilities of the server.
@@ -729,7 +733,7 @@ class NNTPClient(BaseNNTPClient):
             yield line.strip()
 
     # list commands
-    def list_active(self, pattern: Union[str, None] = None) -> Iterator[Newsgroup]:
+    def list_active(self, pattern: str | None = None) -> Iterator[Newsgroup]:
         """LIST ACTIVE command.
 
         Retrieves a list of active newsgroups that match the specified pattern.
@@ -808,7 +812,7 @@ class NNTPClient(BaseNNTPClient):
 
     def list_newsgroups(
         self,
-        pattern: Union[str, None] = None,
+        pattern: str | None = None,
     ) -> Iterator[tuple[str, str]]:
         """LIST NEWSGROUPS command.
 
@@ -887,7 +891,7 @@ class NNTPClient(BaseNNTPClient):
     def list(
         self,
         keyword: Literal["ACTIVE", None] = None,
-        arg: Union[str, None] = None,
+        arg: str | None = None,
     ) -> Iterator[Newsgroup]: ...
 
     @overload
@@ -907,7 +911,7 @@ class NNTPClient(BaseNNTPClient):
     def list(
         self,
         keyword: Literal["NEWSGROUPS"],
-        arg: Union[str, None] = None,
+        arg: str | None = None,
     ) -> Iterator[tuple[str, str]]: ...
 
     @overload
@@ -924,8 +928,8 @@ class NNTPClient(BaseNNTPClient):
 
     def list(
         self,
-        keyword: Union[str, None] = None,
-        arg: Union[str, None] = None,
+        keyword: str | None = None,
+        arg: str | None = None,
     ) -> Any:
         """LIST command.
 
@@ -1055,7 +1059,7 @@ class NNTPClient(BaseNNTPClient):
         return article, msgid
 
     # TODO: Validate yEnc
-    def _body(self, code: int, message: str, decode: Union[bool, None] = None) -> bytes:
+    def _body(self, code: int, message: str, decode: bool | None = None) -> bytes:
         decoder = YEnc()
 
         # read the body
@@ -1081,8 +1085,8 @@ class NNTPClient(BaseNNTPClient):
 
     def article(
         self,
-        msgid_article: Union[str, int, None] = None,
-        decode: Union[bool, None] = None,
+        msgid_article: str | int | None = None,
+        decode: bool | None = None,
     ) -> tuple[int, HeaderDict, bytes]:
         """ARTICLE command.
 
@@ -1133,7 +1137,7 @@ class NNTPClient(BaseNNTPClient):
 
         return articleno, headers, body
 
-    def head(self, msgid_article: Union[str, int, None] = None) -> HeaderDict:
+    def head(self, msgid_article: str | int | None = None) -> HeaderDict:
         """HEAD command.
 
         Identical to the ARTICLE command except that only the headers are
@@ -1164,8 +1168,8 @@ class NNTPClient(BaseNNTPClient):
 
     def body(
         self,
-        msgid_article: Union[str, int, None] = None,
-        decode: Union[bool, None] = None,
+        msgid_article: str | int | None = None,
+        decode: bool | None = None,
     ) -> bytes:
         """BODY command.
 
@@ -1200,7 +1204,7 @@ class NNTPClient(BaseNNTPClient):
     def _hdr(
         self,
         header: str,
-        msgid_range: Union[str, Range, None] = None,
+        msgid_range: str | Range | None = None,
         verb: str = "HDR",
     ) -> Iterator[tuple[int, str]]:
         args = header
@@ -1224,7 +1228,7 @@ class NNTPClient(BaseNNTPClient):
     def hdr(
         self,
         header: str,
-        msgid_range: Union[str, Range, None] = None,
+        msgid_range: str | Range | None = None,
     ) -> Iterator[tuple[int, str]]:
         """HDR command.
 
@@ -1255,7 +1259,7 @@ class NNTPClient(BaseNNTPClient):
     def xhdr(
         self,
         header: str,
-        msgid_range: Union[str, Range, None] = None,
+        msgid_range: str | Range | None = None,
     ) -> Iterator[tuple[int, str]]:
         """Generator for the XHDR command.
 
@@ -1266,7 +1270,7 @@ class NNTPClient(BaseNNTPClient):
     def xzhdr(
         self,
         header: str,
-        msgid_range: Union[str, Range, None] = None,
+        msgid_range: str | Range | None = None,
     ) -> Iterator[tuple[int, str]]:
         """Generator for the XZHDR command.
 
@@ -1291,7 +1295,7 @@ class NNTPClient(BaseNNTPClient):
 
     def _xover(
         self,
-        range: Union[Range, None] = None,
+        range: Range | None = None,
         verb: str = "XOVER",
     ) -> Iterator[tuple[int, HeaderDict]]:
         # get overview fmt before entering generator
@@ -1317,7 +1321,7 @@ class NNTPClient(BaseNNTPClient):
 
     def xover(
         self,
-        range: Union[Range, None] = None,
+        range: Range | None = None,
     ) -> Iterator[tuple[int, HeaderDict]]:
         """XOVER command.
 
@@ -1348,7 +1352,7 @@ class NNTPClient(BaseNNTPClient):
 
     def xzver(
         self,
-        range: Union[Range, None] = None,
+        range: Range | None = None,
     ) -> Iterator[tuple[int, HeaderDict]]:
         """XZVER command.
 
@@ -1359,7 +1363,7 @@ class NNTPClient(BaseNNTPClient):
     def xpat(
         self,
         header: str,
-        msgid_range: Union[str, Range],
+        msgid_range: str | Range,
         *pattern: str,
     ) -> Iterator[str]:
         """XPAT command.
@@ -1404,9 +1408,9 @@ class NNTPClient(BaseNNTPClient):
 
     def post(
         self,
-        headers: Union[Mapping[str, str], None] = None,
-        body: Union[str, bytes, Iterable[bytes]] = b"",
-    ) -> Union[str, bool]:
+        headers: Mapping[str, str] | None = None,
+        body: str | bytes | Iterable[bytes] = b"",
+    ) -> str | bool:
         """POST command.
 
         Args:
