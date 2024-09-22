@@ -61,6 +61,12 @@ jobs:
           - python-version: "3.12"
             os: macos-latest
     runs-on: ${{ matrix.os }}
+    services:
+      inn-service:
+        image: greenbender/inn
+        ports:
+          - 119:119
+          - 563:563
     steps:
       - uses: actions/checkout@v4
       - run: pipx install poetry
