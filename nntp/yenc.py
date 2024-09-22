@@ -34,7 +34,7 @@ def trailer_crc32(trailer: bytes) -> Union[int, None]:
     if not match:
         return None
     buf = binascii.unhexlify(match.group(1))
-    return struct.unpack(">I", buf)[0]  # type: ignore
+    return struct.unpack(">I", buf)[0]  # type: ignore[no-any-return]
 
 
 class YEnc:

@@ -48,7 +48,7 @@ class Fifo(Generic[T]):
     def __next__(self) -> T:
         line = self.readline()
         if not line:
-            raise StopIteration()
+            raise StopIteration
         return line
 
     def __discard(self) -> None:
