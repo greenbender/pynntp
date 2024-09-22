@@ -1383,9 +1383,7 @@ class NNTPClient(BaseNNTPClient):
         Raises:
             NNTPReplyError: If no such article exists.
         """
-        args = " ".join(
-            [header, utils.unparse_msgid_range(msgid_range), *pattern]
-        )
+        args = " ".join([header, utils.unparse_msgid_range(msgid_range), *pattern])
 
         code, message = self.command("XPAT", args)
         if code != 221:
