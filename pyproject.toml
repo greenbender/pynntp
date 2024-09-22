@@ -38,7 +38,9 @@ select = [
   "C4",     # flake8-comprehensions
   "C90",    # McCabe cyclomatic complexity
   "DJ",     # flake8-django
+  "DTZ",    # flake8-datetimez
   "E",      # pycodestyle
+  "EXE",    # flake8-executable
   "F",      # Pyflakes
   "FLY",    # flynt
   "FURB",   # refurb
@@ -52,9 +54,16 @@ select = [
   "NPY",    # NumPy-specific rules
   "PD",     # pandas-vet
   "PERF",   # Perflint
+  "PGH",    # pygrep-hooks
   "PT",     # flake8-pytest-style
+  "PTH",    # flake8-use-pathlib
+  "PYI",    # flake8-pyi
   "Q",      # flake8-quotes
+  "RET",    # flake8-return
+  "RSE",    # flake8-raise
+  "RUF",    # Ruff-specific rules
   "S",      # flake8-bandit
+  "SIM",    # flake8-simplify
   "SLF",    # flake8-self
   "SLOT",   # flake8-slots
   "T10",    # flake8-debugger
@@ -71,27 +80,21 @@ select = [
   # "CPY",  # flake8-copyright
   # "D",    # pydocstyle
   # "DOC",  # pydoclint
-  # "DTZ",  # flake8-datetimez
   # "EM",   # flake8-errmsg
   # "ERA",  # eradicate
-  # "EXE",  # flake8-executable
   # "FA",   # flake8-future-annotations
   # "FAST", # FastAPI
   # "FBT",  # flake8-boolean-trap
   # "FIX",  # flake8-fixme
   # "N",    # pep8-naming
-  # "PGH",  # pygrep-hooks
   # "PIE",  # flake8-pie
   # "PL",   # Pylint
-  # "PTH",  # flake8-use-pathlib
-  # "PYI",  # flake8-pyi
-  # "RET",  # flake8-return
-  # "RSE",  # flake8-raise
-  # "RUF",  # Ruff-specific rules
-  # "SIM",  # flake8-simplify
   # "T20",  # flake8-print
   # "TD",   # flake8-todos
   # "TRY",  # tryceratops
+]
+ignore = [
+  "ISC001",  # may conflict with ruff format
 ]
 
 [tool.ruff.lint.mccabe]

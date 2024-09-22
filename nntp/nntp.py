@@ -54,8 +54,6 @@ __all__ = [
 class NNTPError(Exception):
     """Base class for all NNTP errors."""
 
-    ...
-
 
 class NNTPSyncError(NNTPError):
     """NNTP sync errors.
@@ -63,8 +61,6 @@ class NNTPSyncError(NNTPError):
     Generally raised when a command is issued while another command it still
     active.
     """
-
-    ...
 
 
 class NNTPReplyError(NNTPError):
@@ -91,16 +87,12 @@ class NNTPTemporaryError(NNTPReplyError):
     Temporary errors have response codes from 400 to 499.
     """
 
-    ...
-
 
 class NNTPPermanentError(NNTPReplyError):
     """NNTP permanent errors.
 
     Permanent errors have response codes from 500 to 599.
     """
-
-    ...
 
 
 # TODO: Add the status line as a parameter ?
@@ -110,16 +102,12 @@ class NNTPProtocolError(NNTPError):
     Protocol errors are raised when the response status is invalid.
     """
 
-    ...
-
 
 class NNTPDataError(NNTPError):
     """NNTP data error.
 
     Data errors are raised when the content of a response cannot be parsed.
     """
-
-    ...
 
 
 class BaseNNTPClient:
@@ -426,9 +414,7 @@ class BaseNNTPClient:
         """
         if "COMPRESS=GZIP" in message:
             return self._info_gzip()
-        elif yz:
-            return self._info_yenczlib()
-        return self._info_plain()
+        return self._info_yenczlib() if yz else self._info_plain()
 
     def info(self, code: int, message: str, yz: bool = False) -> Iterator[str]:
         """Dispatcher for the info generators.
@@ -474,10 +460,7 @@ class BaseNNTPClient:
         if self._generating:
             raise NNTPSyncError("Command issued while a generator is active")
 
-        if args:
-            cmd = f"{verb} {args}\r\n"
-        else:
-            cmd = verb + "\r\n"
+        cmd = f"{verb} {args}\r\n" if args else f"{verb}\r\n"
 
         self.socket.sendall(cmd.encode(self.encoding))
 
@@ -766,10 +749,7 @@ class NNTPClient(BaseNNTPClient):
         """
         args = pattern
 
-        if args is None:
-            cmd = "LIST"
-        else:
-            cmd = "LIST ACTIVE"
+        cmd = "LIST" if args is None else "LIST ACTIVE"
 
         code, message = self.command(cmd, args)
         if code != 215:
@@ -985,7 +965,7 @@ class NNTPClient(BaseNNTPClient):
         if keyword == "EXTENSIONS":
             return self.list_extensions()
 
-        raise NotImplementedError()
+        raise NotImplementedError
 
     def group(self, name: str) -> tuple[int, int, int, str]:
         """GROUP command.
@@ -1407,9 +1387,7 @@ class NNTPClient(BaseNNTPClient):
         Raises:
             NNTPReplyError: If no such article exists.
         """
-        args = " ".join(
-            [header, utils.unparse_msgid_range(msgid_range)] + list(pattern)
-        )
+        args = " ".join([header, utils.unparse_msgid_range(msgid_range), *pattern])
 
         code, message = self.command("XPAT", args)
         if code != 221:
