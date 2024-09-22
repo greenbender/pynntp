@@ -25,11 +25,17 @@ jobs:
         run: poetry run ruff check
 
   mypy:
-    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+        os: [ubuntu-latest]
+        python-version: ["3.9", "3.11", "3.13"]
+        include:
+          - python-version: "3.10"
+            os: windows-latest
+          - python-version: "3.12"
+            os: macos-latest
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - run: pipx install poetry
@@ -44,11 +50,17 @@ jobs:
         run: poetry run mypy --strict .
 
   test:
-    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+        os: [ubuntu-latest]
+        python-version: ["3.9", "3.11", "3.13"]
+        include:
+          - python-version: "3.10"
+            os: windows-latest
+          - python-version: "3.12"
+            os: macos-latest
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - run: pipx install poetry
@@ -81,7 +93,16 @@ jobs:
       - name: Install dependencies
         run: poetry install
       - name: Run inn2 integration tests
-        run: poetry run pytest tests/integration/inn2
+        run: poetry run pytest
       - name: Stop inn2
         if: always()
         run: sudo systemctl stop inn2
+
+  pre-commit:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-python@v5
+      with:
+        python-version: 3.x
+    - uses: pre-commit/action@v3.0.1
