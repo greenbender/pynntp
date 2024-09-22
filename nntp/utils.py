@@ -16,11 +16,10 @@ You should have received a copy of the GNU General Public License
 along with this program.  If not, see <http://www.gnu.org/licenses/>.
 """
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from datetime import datetime, timezone
 from io import StringIO
 from typing import Union
-from collections.abc import Iterable
 
 from .headerdict import HeaderDict
 from .types import Newsgroup, Range

@@ -1,3 +1,5 @@
+[![pre-commit.ci status](https://results.pre-commit.ci/badge/github/greenbender/pynntp/main.svg)](https://results.pre-commit.ci/latest/github/greenbender/pynntp/main)
+
 # pynntp
 
 Python NNTP library.
