@@ -18,6 +18,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 from collections import OrderedDict
 from collections.abc import Iterable, Iterator, Mapping, MutableMapping
+from itertools import chain
 from typing import Any, Union
 
 __all__ = ["HeaderDict"]
@@ -37,13 +38,21 @@ class HeaderDict(MutableMapping[str, str]):
         other: Union[Mapping[str, str], Iterable[tuple[str, str]], None] = None,
         **kwargs: str,
     ) -> None:
-        if other is None:
-            self.__proxy = OrderedDict[HeaderName, str]()
-        elif hasattr(other, "items"):
-            self.__proxy = OrderedDict((HeaderName(k), v) for k, v in other.items())
-        else:
-            self.__proxy = OrderedDict((HeaderName(k), v) for k, v in other)
-        self.__proxy.update((HeaderName(k), v) for k, v in kwargs.items())
+        self.__proxy = OrderedDict[HeaderName, str]()
+        other_pairs: Iterable[tuple[str, str]] = (
+            ()
+            if other is None
+            else other.items()
+            if isinstance(other, Mapping)
+            else other
+        )
+        kwargs_pairs = kwargs.items()
+        for k, v in chain(other_pairs, kwargs_pairs):
+            if not isinstance(k, str):
+                raise TypeError(f"Header name must be a string: {k!r}")
+            if not isinstance(v, str):
+                raise TypeError(f"Header value must be a string: {v!r}")
+            self.__proxy[HeaderName(k)] = v
 
     def __getitem__(self, key: str) -> str:
         return self.__proxy[HeaderName(key)]
@@ -59,6 +68,17 @@ class HeaderDict(MutableMapping[str, str]):
 
     def __len__(self) -> int:
         return len(self.__proxy)
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, HeaderDict):
+            return self.__proxy == other.__proxy
+        if isinstance(other, (Mapping, Iterable)):
+            try:
+                other = HeaderDict(other)
+            except (TypeError, ValueError):
+                return False
+            return self == HeaderDict(other)
+        return False
 
     def __repr__(self) -> str:
         clsname = type(self).__name__
