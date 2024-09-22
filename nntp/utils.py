@@ -16,13 +16,17 @@ You should have received a copy of the GNU General Public License
 along with this program.  If not, see <http://www.gnu.org/licenses/>.
 """
 
-from collections.abc import Iterable, Mapping
+from __future__ import annotations
+
 from datetime import datetime, timezone
 from io import StringIO
-from typing import Union
+from typing import TYPE_CHECKING
 
 from .headerdict import HeaderDict
 from .types import Newsgroup, Range
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable, Mapping
 
 
 def unparse_range(obj: Range) -> str:
@@ -56,7 +60,7 @@ def unparse_range(obj: Range) -> str:
     raise ValueError("Must be an integer or tuple")
 
 
-def unparse_msgid_range(obj: Union[str, Range]) -> str:
+def unparse_msgid_range(obj: str | Range) -> str:
     """Unparse a message-id or range argument.
 
     Args:
@@ -106,7 +110,7 @@ def parse_newsgroup(line: str) -> Newsgroup:
     return Newsgroup(name, low, high, status)
 
 
-def _parse_header(line: str) -> Union[str, tuple[str, str], None]:
+def _parse_header(line: str) -> str | tuple[str, str] | None:
     """Parse a header line.
 
     Args:
@@ -130,7 +134,7 @@ def _parse_header(line: str) -> Union[str, tuple[str, str], None]:
     return name.strip(), value.strip()
 
 
-def parse_headers(obj: Union[str, Iterable[str]]) -> HeaderDict:
+def parse_headers(obj: str | Iterable[str]) -> HeaderDict:
     """Parse a string a iterable object (including file like objects) to a
     python dictionary.
 
@@ -186,7 +190,7 @@ def unparse_headers(hdrs: Mapping[str, str]) -> str:
     return "".join([_unparse_header(n, v) for n, v in hdrs.items()]) + "\r\n"
 
 
-def parse_date(value: Union[str, int]) -> datetime:
+def parse_date(value: str | int) -> datetime:
     """Parse a date as returned by the `DATE` command.
 
     Args:
@@ -207,7 +211,7 @@ def parse_date(value: Union[str, int]) -> datetime:
     return datetime(Y % 10000, m, d, H, M, S, tzinfo=timezone.utc)
 
 
-def parse_epoch(value: Union[str, int]) -> datetime:
+def parse_epoch(value: str | int) -> datetime:
     """Parse a date as returned by the `DATE` command.
 
     Args:
