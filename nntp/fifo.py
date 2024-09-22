@@ -16,7 +16,9 @@ You should have received a copy of the GNU General Public License
 along with this program.  If not, see <http://www.gnu.org/licenses/>.
 """
 
-from typing import TYPE_CHECKING, Generic, TypeVar, Union
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Generic, TypeVar
 
 if TYPE_CHECKING:
     from typing_extensions import Self
@@ -34,7 +36,7 @@ class Fifo(Generic[T]):
     empty: T
     eol: T
 
-    def __init__(self, data: Union[T, None] = None) -> None:
+    def __init__(self, data: T | None = None) -> None:
         self.buf: T = data or self.empty
         self.buflist: list[T] = []
         self.pos = 0
@@ -42,7 +44,7 @@ class Fifo(Generic[T]):
     def __len__(self) -> int:
         return len(self.buf) - self.pos
 
-    def __iter__(self) -> "Self":
+    def __iter__(self) -> Self:
         return self
 
     def __next__(self) -> T:
