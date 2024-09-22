@@ -120,10 +120,12 @@ def _parse_header(line: str) -> Union[str, tuple[str, str], None]:
     Raises:
         ValueError: If the line cannot be parsed as a header.
     """
+    # End of headers
     if not line or line == "\r\n":
         return None
+    # Continuation line
     if line[0] in " \t":
-        return line[1:].rstrip()
+        return line.rstrip()
     name, value = line.split(":", 1)
     return name.strip(), value.strip()
 
@@ -184,7 +186,7 @@ def unparse_headers(hdrs: Mapping[str, str]) -> str:
     return "".join([_unparse_header(n, v) for n, v in hdrs.items()]) + "\r\n"
 
 
-def parse_date(value: str) -> datetime:
+def parse_date(value: Union[str, int]) -> datetime:
     """Parse a date as returned by the `DATE` command.
 
     Args:
@@ -199,13 +201,13 @@ def parse_date(value: str) -> datetime:
     i = int(value)
     M, S = divmod(i, 100)
     H, M = divmod(M, 100)
-    d, H = divmod(M, 100)
+    d, H = divmod(H, 100)
     m, d = divmod(d, 100)
     Y, m = divmod(m, 100)
     return datetime(Y % 10000, m, d, H, M, S, tzinfo=timezone.utc)
 
 
-def parse_epoch(value: str) -> datetime:
+def parse_epoch(value: Union[str, int]) -> datetime:
     """Parse a date as returned by the `DATE` command.
 
     Args:

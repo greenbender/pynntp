@@ -7,8 +7,8 @@ def test_init_empty() -> None:
 
 
 def test_init_with_dict() -> None:
-    header_dict = HeaderDict({"key1": "value1"})
-    assert header_dict == {"key1": "value1"}
+    header_dict = HeaderDict({"Key1": "value1"})
+    assert header_dict == {"Key1": "value1"}
 
 
 def test_init_with_list() -> None:
@@ -55,8 +55,9 @@ def test_len() -> None:
 
 def test_eq() -> None:
     header_dict = HeaderDict()
-    header_dict["key"] = "value"
-    assert header_dict == {"key": "value"}
+    header_dict["keylower"] = "value"
+    header_dict["KeYMiXeD"] = "value1"
+    assert header_dict == {"keyLoWer": "value", "keymixed": "value1"}
 
 
 def test_repr() -> None:
