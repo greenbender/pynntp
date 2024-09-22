@@ -54,6 +54,7 @@ jobs:
         image: greenbender/inn
         ports:
           - 119:119
+          - 563:563
     steps:
       - uses: actions/checkout@v4
       - run: pipx install poetry
