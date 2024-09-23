@@ -5,7 +5,6 @@ repos:
       - id: check-added-large-files
       - id: check-ast
       - id: check-builtin-literals
-      - id: check-byte-order-marker
       - id: check-case-conflict
       - id: check-docstring-first
       - id: check-executables-have-shebangs
@@ -27,6 +26,7 @@ repos:
       - id: forbid-submodules
       - id: mixed-line-ending
       # - id: pretty-format-json
+      - id: no-commit-to-branch
       - id: requirements-txt-fixer
       - id: sort-simple-yaml
       - id: trailing-whitespace
