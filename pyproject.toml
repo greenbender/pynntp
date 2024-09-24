@@ -32,16 +32,23 @@ target-version = "py39"
 
 [tool.ruff.lint]
 select = [
+  "A",      # flake8-builtins
   "AIR",    # Airflow
+  "ANN",    # flake8-annotations
+  "ARG",    # flake8-unused-arguments
   "ASYNC",  # flake8-async
+  "B",      # flake8-bugbear
   "BLE",    # flake8-blind-except
   "C4",     # flake8-comprehensions
   "C90",    # McCabe cyclomatic complexity
   "DJ",     # flake8-django
   "DTZ",    # flake8-datetimez
   "E",      # pycodestyle
+  "ERA",    # eradicate
   "EXE",    # flake8-executable
   "F",      # Pyflakes
+  "FA",     # flake8-future-annotations
+  "FIX",    # flake8-fixme
   "FLY",    # flynt
   "FURB",   # refurb
   "G",      # flake8-logging-format
@@ -51,10 +58,13 @@ select = [
   "INT",    # flake8-gettext
   "ISC",    # flake8-implicit-str-concat
   "LOG",    # flake8-logging
+  "N",      # pep8-naming
   "NPY",    # NumPy-specific rules
   "PD",     # pandas-vet
   "PERF",   # Perflint
   "PGH",    # pygrep-hooks
+  "PIE",    # flake8-pie
+  "PL",     # Pylint
   "PT",     # flake8-pytest-style
   "PTH",    # flake8-use-pathlib
   "PYI",    # flake8-pyi
@@ -72,33 +82,33 @@ select = [
   "UP",     # pyupgrade
   "W",      # pycodestyle
   "YTT",    # flake8-2020
-  # "A",    # flake8-builtins
-  # "ANN",  # flake8-annotations
-  # "ARG",  # flake8-unused-arguments
-  # "B",    # flake8-bugbear
   # "COM",  # flake8-commas
   # "CPY",  # flake8-copyright
   # "D",    # pydocstyle
   # "DOC",  # pydoclint
   # "EM",   # flake8-errmsg
-  # "ERA",  # eradicate
-  # "FA",   # flake8-future-annotations
   # "FAST", # FastAPI
   # "FBT",  # flake8-boolean-trap
-  # "FIX",  # flake8-fixme
-  # "N",    # pep8-naming
-  # "PIE",  # flake8-pie
-  # "PL",   # Pylint
   # "T20",  # flake8-print
   # "TD",   # flake8-todos
   # "TRY",  # tryceratops
 ]
 ignore = [
+  "ANN101",  # missing type annotation for `self`
+  "B904",    # raise-without-from-inside-except
+  "FIX002",  # line-contains-todo
   "ISC001",  # may conflict with ruff format
+  "PLW2901", # `for` loop variable overwritten
 ]
 
 [tool.ruff.lint.mccabe]
 max-complexity = 12
 
+[tool.ruff.lint.pylint]
+allow-magic-value-types = ["bytes", "int", "str"]
+max-args = 8  # Default: 5
+
 [tool.ruff.lint.per-file-ignores]
+"nntp/nntp.py" = ["A002", "ARG002"]
+"nntp/utils.py" = ["N806"]
 "tests/*" = ["S101"]

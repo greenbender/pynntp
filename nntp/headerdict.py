@@ -59,7 +59,7 @@ class HeaderDict(MutableMapping[str, str]):
     def __getitem__(self, key: str) -> str:
         return self.__proxy[HeaderName(key)]
 
-    def __setitem__(self, key: str, value: Any) -> None:
+    def __setitem__(self, key: str, value: Any) -> None:  # noqa: ANN401
         self.__proxy[HeaderName(key)] = value
 
     def __delitem__(self, key: str) -> None:
