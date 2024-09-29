@@ -25,7 +25,7 @@ import ssl
 import zlib
 from datetime import datetime, timezone
 from functools import cached_property
-from typing import TYPE_CHECKING, Any, Literal, overload
+from typing import TYPE_CHECKING, Literal
 
 from . import utils
 from .fifo import BytesFifo
@@ -752,6 +752,39 @@ class NNTPClient(BaseNNTPClient):
             yield line.strip()
 
     # list commands
+    def list(
+        self,
+        keyword: str | None = None,
+        args: str | None = None,
+        *,
+        success: Iterable[int] = (215,),
+    ) -> Iterator[str]:
+        """LIST command.
+
+        General purpose list command. allows the server to provide blocks of
+        information to the client. The keyword specifies the type of list, if no
+        keyword is provided, it defaults to ACTIVE.
+
+        See <http://tools.ietf.org/html/rfc3977#section-7.6.1>
+
+        Args:
+            keyword: Information requested.
+            args: Keyword specific arguments.
+
+        Yields:
+            A line of the list response.
+        """
+        if keyword:
+            keyword = keyword.upper()
+
+        cmd = f"LIST {keyword}" if keyword else "LIST"
+
+        code, message = self.command(cmd, args)
+        if code not in success:
+            raise NNTPReplyError(code, message)
+
+        return self.info(code, message)
+
     def list_active(self, pattern: str | None = None) -> Iterator[Newsgroup]:
         """LIST ACTIVE command.
 
@@ -766,15 +799,7 @@ class NNTPClient(BaseNNTPClient):
             A 4-tuple containing the name, low water mark, high water mark,
             and status for the newsgroup, for each newsgroup.
         """
-        args = pattern
-
-        cmd = "LIST" if args is None else "LIST ACTIVE"
-
-        code, message = self.command(cmd, args)
-        if code != 215:
-            raise NNTPReplyError(code, message)
-
-        for line in self.info(code, message):
+        for line in self.list("ACTIVE", args=pattern):
             yield utils.parse_newsgroup(line)
 
     def list_active_times(self) -> Iterator[tuple[str, datetime, str]]:
@@ -789,11 +814,7 @@ class NNTPClient(BaseNNTPClient):
             A 3-tuple containing the name, creation date as a datetime object
             and creator as a string for the newsgroup for each newsgroup.
         """
-        code, message = self.command("LIST ACTIVE.TIMES")
-        if code != 215:
-            raise NNTPReplyError(code, message)
-
-        for line in self.info(code, message):
+        for line in self.list("ACTIVE.TIMES"):
             parts = line.split()
             try:
                 name = parts[0]
@@ -820,13 +841,7 @@ class NNTPClient(BaseNNTPClient):
         Yields:
             The field name for each of the fields.
         """
-        args = variant
-
-        code, message = self.command("LIST HEADERS", args)
-        if code != 215:
-            raise NNTPReplyError(code, message)
-
-        for line in self.info(code, message):
+        for line in self.list("HEADERS", args=variant):
             yield line.strip()
 
     def list_newsgroups(
@@ -847,13 +862,7 @@ class NNTPClient(BaseNNTPClient):
             A tuple containing the name, and description for the newsgroup, for
             each newsgroup that matches the pattern.
         """
-        args = pattern
-
-        code, message = self.command("LIST NEWSGROUPS", args)
-        if code != 215:
-            raise NNTPReplyError(code, message)
-
-        for line in self.info(code, message):
+        for line in self.list("NEWSGROUPS", args=pattern):
             parts = line.strip().split(None, 1)
             name, description = parts[0], ""
             if len(parts) > 1:
@@ -873,11 +882,7 @@ class NNTPClient(BaseNNTPClient):
             the the field name is included in the field data, for each field in
             the database which is consistent, fields are yielded in order.
         """
-        code, message = self.command("LIST OVERVIEW.FMT")
-        if code != 215:
-            raise NNTPReplyError(code, message)
-
-        for line in self.info(code, message):
+        for line in self.list("OVERVIEW.FMT"):
             try:
                 name, suffix = line.rstrip().split(":")
             except ValueError:
@@ -899,92 +904,8 @@ class NNTPClient(BaseNNTPClient):
         Yields:
             The name of the extension of each of the available extensions.
         """
-        code, message = self.command("LIST EXTENSIONS")
-        if code != 202:
-            raise NNTPReplyError(code, message)
-
-        for line in self.info(code, message):
+        for line in self.list("EXTENSIONS", success=(202,)):
             yield line.strip()
-
-    @overload
-    def list(
-        self,
-        keyword: Literal["ACTIVE", None] = None,
-        arg: str | None = None,
-    ) -> Iterator[Newsgroup]: ...
-
-    @overload
-    def list(
-        self,
-        keyword: Literal["ACTIVE.TIMES"],
-    ) -> Iterator[tuple[str, datetime, str]]: ...
-
-    @overload
-    def list(
-        self,
-        keyword: Literal["HEADERS"],
-        arg: Literal["MSGID", "RANGE", None] = None,
-    ) -> Iterator[str]: ...
-
-    @overload
-    def list(
-        self,
-        keyword: Literal["NEWSGROUPS"],
-        arg: str | None = None,
-    ) -> Iterator[tuple[str, str]]: ...
-
-    @overload
-    def list(
-        self,
-        keyword: Literal["OVERVIEW.FMT"],
-    ) -> Iterator[tuple[str, bool]]: ...
-
-    @overload
-    def list(
-        self,
-        keyword: Literal["EXTENSIONS"],
-    ) -> Iterator[str]: ...
-
-    def list(
-        self,
-        keyword: str | None = None,
-        arg: str | None = None,
-    ) -> Any:
-        """LIST command.
-
-        A wrapper for all of the other list commands.
-
-        Args:
-            keyword: Information requested.
-            arg: Pattern or keyword specific argument.
-
-        Yields:
-            Depends on which list command is specified by the keyword. See the
-            list function that corresponds to that keyword.
-
-        Note: Keywords supported by this function include ACTIVE, ACTIVE.TIMES,
-            HEADERS, NEWSGROUPS, OVERVIEW.FMT and EXTENSIONS.
-
-        Raises:
-            NotImplementedError: For unsupported keywords.
-        """
-        if keyword:
-            keyword = keyword.upper()
-
-        if keyword is None or keyword == "ACTIVE":
-            return self.list_active(arg)
-        if keyword == "ACTIVE.TIMES":
-            return self.list_active_times()
-        if keyword == "HEADERS" and arg in ("MSGID", "RANGE", None):
-            return self.list_headers(arg)  # type: ignore[arg-type]
-        if keyword == "NEWSGROUPS":
-            return self.list_newsgroups(arg)
-        if keyword == "OVERVIEW.FMT":
-            return self.list_overview_fmt()
-        if keyword == "EXTENSIONS":
-            return self.list_extensions()
-
-        raise NotImplementedError
 
     def group(self, name: str) -> tuple[int, int, int, str]:
         """GROUP command.
