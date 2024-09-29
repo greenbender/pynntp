@@ -21,7 +21,6 @@ from __future__ import annotations
 from collections import OrderedDict
 from collections.abc import Iterable, Iterator, Mapping, MutableMapping
 from itertools import chain
-from typing import Any
 
 __all__ = ["HeaderDict"]
 
