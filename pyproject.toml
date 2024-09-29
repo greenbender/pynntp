@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "pynntp"
-version = "1.0.4"
+version = "2.0.1"
 description = "NNTP Library (including compressed headers)"
 authors = ["Byron Platt <byron.platt@gmail.com>"]
 license = "GPL-3.0-or-later"
