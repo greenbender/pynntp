@@ -128,6 +128,7 @@ class BaseNNTPClient:
         port: int = 119,
         username: str = "",
         password: str = "",
+        *,
         timeout: int = 30,
         use_ssl: bool = False,
         ssl_mode: SSLMode = SSLMode.IMPLICIT,
@@ -142,8 +143,8 @@ class BaseNNTPClient:
             username: Username for usenet account
             password: Password for usenet account
             timeout: Connection timeout
-            use_ssl: Should we use ssl
-            ssl_mode: SSL mode to use
+            use_ssl: Should we use SSL (TLS)
+            ssl_mode: SSL (TLS) mode to use
 
         Raises:
             IOError (socket.error): On error in underlying socket and/or ssl
@@ -535,6 +536,7 @@ class NNTPClient(BaseNNTPClient):
         port: int = 119,
         username: str = "",
         password: str = "",
+        *,
         timeout: int = 30,
         use_ssl: bool = False,
         ssl_mode: SSLMode = SSLMode.IMPLICIT,
@@ -559,7 +561,15 @@ class NNTPClient(BaseNNTPClient):
                 socket and ssl modules for further details.
             NNTPReplyError: On bad response code from server.
         """
-        super().__init__(host, port, username, password, timeout, use_ssl, ssl_mode)
+        super().__init__(
+            host=host,
+            port=port,
+            username=username,
+            password=password,
+            timeout=timeout,
+            use_ssl=use_ssl,
+            ssl_mode=ssl_mode,
+        )
         if reader:
             self.mode_reader()
 
