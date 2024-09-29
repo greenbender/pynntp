@@ -21,7 +21,6 @@ from __future__ import annotations
 from collections import OrderedDict
 from collections.abc import Iterable, Iterator, Mapping, MutableMapping
 from itertools import chain
-from typing import Any
 
 __all__ = ["HeaderDict"]
 
@@ -59,7 +58,7 @@ class HeaderDict(MutableMapping[str, str]):
     def __getitem__(self, key: str) -> str:
         return self.__proxy[HeaderName(key)]
 
-    def __setitem__(self, key: str, value: Any) -> None:
+    def __setitem__(self, key: str, value: str) -> None:
         self.__proxy[HeaderName(key)] = value
 
     def __delitem__(self, key: str) -> None:

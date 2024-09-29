@@ -486,7 +486,7 @@ class BaseNNTPClient:
             code, message = self.status()
         except NNTPTemporaryError as e:
             if e.code != 480:
-                raise e
+                raise
             code, message = self.command("AUTHINFO USER", self.username)
             if code == 381:
                 code, message = self.command("AUTHINFO PASS", self.password)
@@ -1491,7 +1491,7 @@ if __name__ == "__main__":
         try:
             for newsgroup in nntp_client.newgroups(now - fiftydays):
                 print(newsgroup)
-                # log('%s\n' % newsgroup)
+                # log('%s\n' % newsgroup)  # noqa: ERA001
         except NNTPError as e:
             log(f"{e}\n")
         log("\n")
@@ -1589,7 +1589,7 @@ if __name__ == "__main__":
         log("XZVER %d-%d\n" % (last - 10, last))
         try:
             hash_ = count = 0
-            for article, overview in nntp_client.xzver((last - 10, last)):
+            for _article, overview in nntp_client.xzver((last - 10, last)):
                 hash_ += sum(map(hash, overview.keys()))
                 hash_ += sum(map(hash, overview.values()))
                 count += 1
@@ -1608,7 +1608,7 @@ if __name__ == "__main__":
         log("XOVER %d-%d\n" % (last - 10, last))
         try:
             hash_ = count = 0
-            for article, overview in nntp_client.xover((last - 10, last)):
+            for _article, overview in nntp_client.xover((last - 10, last)):
                 hash_ += sum(map(hash, overview.keys()))
                 hash_ += sum(map(hash, overview.values()))
                 count += 1
@@ -1627,7 +1627,7 @@ if __name__ == "__main__":
         log("XOVER %d-%d\n" % (last - 10, last))
         try:
             hash_ = count = 0
-            for article, overview in nntp_client.xover((last - 10, last)):
+            for _article, overview in nntp_client.xover((last - 10, last)):
                 hash_ += sum(map(hash, overview.keys()))
                 hash_ += sum(map(hash, overview.values()))
                 count += 1

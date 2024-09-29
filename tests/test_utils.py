@@ -29,7 +29,7 @@ if TYPE_CHECKING:
         pytest.param((1, 10, 20), None, marks=pytest.mark.xfail(raises=ValueError)),
     ],
 )
-def test_unparse_range(range: Range, expected: str) -> None:
+def test_unparse_range(range: Range, expected: str) -> None:  # noqa: A002
     assert unparse_range(range) == expected
 
 

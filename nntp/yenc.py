@@ -57,7 +57,7 @@ class YEnc:
             elif b == 0x3D:
                 self._escape = 1
                 continue
-            elif b == 0x0D or b == 0x0A:
+            elif b in {0x0D, 0x0A}:
                 continue
             else:
                 b = (b - 42) & 0xFF
