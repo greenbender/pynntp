@@ -535,6 +535,7 @@ class NNTPClient(BaseNNTPClient):
         port: int = 119,
         username: str = "",
         password: str = "",
+        *,
         timeout: int = 30,
         use_ssl: bool = False,
         ssl_mode: SSLMode = SSLMode.IMPLICIT,
