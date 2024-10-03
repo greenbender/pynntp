@@ -16,12 +16,19 @@ classifiers = [
 [tool.poetry.dependencies]
 python = ">=3.9"
 
+myst-parser = { version = "*", optional = true }
+sphinx-autoapi = { version = "*", optional = true }
+
+[tool.poetry.extras]
+docs = ["myst-parser", "sphinx-autoapi"]
+
 [tool.poetry.group.dev.dependencies]
-pytest = "^8.3.2"
-ruff = "^0.6.3"
-pre-commit = "^3.8.0"
 mypy = "^1.11.2"
+pre-commit = "^3.8.0"
+pytest = "^8.3.2"
 pytest-benchmark = "^4.0.0"
+ruff = "^0.6.9"
+sphinx-pyproject = "*"
 
 
 [build-system]
@@ -112,3 +119,51 @@ max-args = 8  # Default: 5
 "nntp/nntp.py" = ["A002", "ARG002"]
 "nntp/utils.py" = ["N806"]
 "tests/*" = ["S101"]
+
+[tool.sphinx-pyproject]
+github_username = "greenbender"
+github_repository = "pynntp"
+copyright = "2024, Byron Platt"
+
+autoapi_dirs = ["nntp"]
+exclude_patterns = [
+    ".*/*",
+    ".DS_Store",
+    "docs/_build",
+    "LICENSE.rst",
+    "Thumbs.db",
+]
+extensions = [
+    "autoapi.extension",
+    "myst_parser",
+]
+
+html_static_path = ["_static"]
+html_theme = "alabaster"
+
+myst_enable_extensions = [
+    "amsmath",
+    "attrs_inline",
+    "colon_fence",
+    "deflist",
+    "dollarmath",
+    "fieldlist",
+    "html_admonition",
+    "html_image",
+    # "linkify",
+    "replacements",
+    "smartquotes",
+    "strikethrough",
+    "substitution",
+    "tasklist",
+]
+myst_fence_as_directive = [
+    "include",
+]
+suppress_warnings = ["epub.unknown_project_files"]
+templates_path = ["_templates"]
+
+[tool.sphinx-pyproject.source_suffix]
+".md" = "markdown"
+".rst" = "restructuredtext"
+".txt" = "markdown"
