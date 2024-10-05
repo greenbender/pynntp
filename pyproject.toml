@@ -16,12 +16,6 @@ classifiers = [
 [tool.poetry.dependencies]
 python = ">=3.9"
 
-myst-parser = { version = "*", optional = true }
-sphinx-autoapi = { version = "*", optional = true }
-
-[tool.poetry.extras]
-docs = ["myst-parser", "sphinx-autoapi"]
-
 [tool.poetry.group.dev.dependencies]
 mypy = "^1.11.2"
 pre-commit = "^3.8.0"
@@ -29,6 +23,13 @@ pytest = "^8.3.2"
 pytest-benchmark = "^4.0.0"
 ruff = "^0.6.9"
 sphinx-pyproject = "*"
+
+[tool.poetry.group.docs]
+optional = true
+
+[tool.poetry.group.docs.dependencies]
+myst-parser = "*"
+sphinx-autoapi = "*"
 
 
 [build-system]
