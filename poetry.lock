@@ -197,7 +197,7 @@ files = [
 name = "dom-toml"
 version = "2.0.0"
 description = "Dom's tools for Tom's Obvious, Minimal Language."
-optional = true
+optional = false
 python-versions = ">=3.6.1"
 files = [
     {file = "dom_toml-2.0.0-py3-none-any.whl", hash = "sha256:0b6d02a72bcbc6be8175c61afc30623bbb6b74c4650f2a806fbc3fb7fe86935d"},
@@ -212,7 +212,7 @@ tomli = ">=1.2.3"
 name = "domdf-python-tools"
 version = "3.9.0"
 description = "Helpful functions for Python 🐍 🛠️"
-optional = true
+optional = false
 python-versions = ">=3.6"
 files = [
     {file = "domdf_python_tools-3.9.0-py3-none-any.whl", hash = "sha256:4e1ef365cbc24627d6d1e90cf7d46d8ab8df967e1237f4a26885f6986c78872e"},
@@ -558,7 +558,7 @@ testing-docutils = ["pygments", "pytest (>=8,<9)", "pytest-param-files (>=0.6.0,
 name = "natsort"
 version = "8.4.0"
 description = "Simple yet flexible natural sorting in Python."
-optional = true
+optional = false
 python-versions = ">=3.7"
 files = [
     {file = "natsort-8.4.0-py3-none-any.whl", hash = "sha256:4732914fb471f56b5cce04d7bae6f164a592c7712e1c85f9ef585e197299521c"},
@@ -892,7 +892,7 @@ docs = ["furo", "sphinx", "sphinx-design"]
 name = "sphinx-pyproject"
 version = "0.3.0"
 description = "Move some of your Sphinx configuration into pyproject.toml"
-optional = true
+optional = false
 python-versions = ">=3.6"
 files = [
     {file = "sphinx_pyproject-0.3.0-py3-none-any.whl", hash = "sha256:3aca968919f5ecd390f96874c3f64a43c9c7fcfdc2fd4191a781ad9228501b52"},
@@ -1094,9 +1094,9 @@ test = ["big-O", "importlib-resources", "jaraco.functools", "jaraco.itertools", 
 type = ["pytest-mypy"]
 
 [extras]
-docs = ["myst-parser", "sphinx-autoapi", "sphinx-pyproject"]
+docs = ["myst-parser", "sphinx-autoapi"]
 
 [metadata]
 lock-version = "2.0"
 python-versions = ">=3.9"
-content-hash = "4c9bb7ac4e4dcbc3612bb8976fc316115a501ee26834f8abea2a71bae79616bd"
+content-hash = "2570592e3677a414fffbc7ffcc2329c7044dc62a41b7edb04e6f2ea2e0bdf6e7"
