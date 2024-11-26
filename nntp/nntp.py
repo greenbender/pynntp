@@ -1544,7 +1544,7 @@ if __name__ == "__main__":
         log("ARTICLE\n")
         try:
             article, hdrs, body = nntp_client.article(last, False)
-            log(f"{article}\n{hdrs}\n{body}\n")
+            log(f"{article}\n{hdrs}\n{body.decode()}\n")
         except NNTPError as e:
             log(f"{e}\n")
         log("\n")
@@ -1552,7 +1552,7 @@ if __name__ == "__main__":
         log("ARTICLE (auto yEnc decode)\n")
         try:
             article, hdrs, body = nntp_client.article(910230)
-            log(f"{article}\n{hdrs}\n{body}\n")
+            log(f"{article}\n{hdrs}\n{body.decode()}\n")
         except NNTPError as e:
             log(f"{e}\n")
         log("\n")
@@ -1645,7 +1645,7 @@ if __name__ == "__main__":
 
         log("LIST ACTIVE\n")
         try:
-            log(f"Entries {len(list(nntp_client.list("ACTIVE")))}\n")
+            log(f"Entries {len(list(nntp_client.list('ACTIVE')))}\n")
         except NNTPError as e:
             log(f"{e}\n")
         log("\n")
@@ -1660,14 +1660,14 @@ if __name__ == "__main__":
 
         log("LIST ACTIVE.TIMES\n")
         try:
-            log(f"Entries {len(list(nntp_client.list("ACTIVE.TIMES")))}\n")
+            log(f"Entries {len(list(nntp_client.list('ACTIVE.TIMES')))}\n")
         except NNTPError as e:
             log(f"{e}\n")
         log("\n")
 
         log("LIST NEWSGROUPS\n")
         try:
-            log(f"Entries {len(list(nntp_client.list("NEWSGROUPS")))}\n")
+            log(f"Entries {len(list(nntp_client.list('NEWSGROUPS')))}\n")
             for group in nntp_client.list("NEWSGROUPS"):
                 print(group)
         except NNTPError as e:
@@ -1684,21 +1684,21 @@ if __name__ == "__main__":
 
         log("LIST OVERVIEW.FMT\n")
         try:
-            log(f"{list(nntp_client.list("OVERVIEW.FMT"))}\n")
+            log(f"{list(nntp_client.list('OVERVIEW.FMT'))}\n")
         except NNTPError as e:
             log(f"{e}\n")
         log("\n")
 
         log("LIST HEADERS\n")
         try:
-            log(f"{list(nntp_client.list("HEADERS"))}\n")
+            log(f"{list(nntp_client.list('HEADERS'))}\n")
         except NNTPError as e:
             log(f"{e}\n")
         log("\n")
 
         log("LIST EXTENSIONS\n")
         try:
-            log(f"{list(nntp_client.list("EXTENSIONS"))}\n")
+            log(f"{list(nntp_client.list('EXTENSIONS'))}\n")
         except NNTPError as e:
             log(f"{e}\n")
         log("\n")
