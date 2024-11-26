@@ -80,7 +80,7 @@ class NNTPReplyError(NNTPError):
         super().__init__(code, message)
 
     def __str__(self) -> str:
-        return "%d %s" % (self.code, self.message)
+        return f"{self.code} {self.message}"
 
 
 class NNTPTemporaryError(NNTPReplyError):
@@ -1515,7 +1515,7 @@ if __name__ == "__main__":
         log("GROUP misc.test\n")
         try:
             total, first, last, name = nntp_client.group("misc.test")
-            log("%d %d %d %s\n" % (total, first, last, name))
+            log(f"{total} {first} {last} {name}\n")
         except NNTPError as e:
             log(f"{e}\n")
         log("\n")
@@ -1544,7 +1544,7 @@ if __name__ == "__main__":
         log("ARTICLE\n")
         try:
             article, hdrs, body = nntp_client.article(last, False)
-            log("%d\n%s\n%r\n" % (article, hdrs, body))
+            log(f"{article}\n{hdrs}\n{body}\n")
         except NNTPError as e:
             log(f"{e}\n")
         log("\n")
@@ -1552,48 +1552,48 @@ if __name__ == "__main__":
         log("ARTICLE (auto yEnc decode)\n")
         try:
             article, hdrs, body = nntp_client.article(910230)
-            log("%d\n%s\n%r\n" % (article, hdrs, body))
+            log(f"{article}\n{hdrs}\n{body}\n")
         except NNTPError as e:
             log(f"{e}\n")
         log("\n")
 
-        log("XHDR Date %d-%d\n" % (last - 10, last))
+        log(f"XHDR Date {last - 10}-{last}\n")
         try:
             for article, datestr in nntp_client.xhdr("Date", (last - 10, last)):
-                log("%d %s\n" % (article, datestr))
+                log(f"{article} {datestr}\n")
         except NNTPError as e:
             log(f"{e}\n")
         log("\n")
 
-        log("XZHDR Date %d-%d\n" % (last - 10, last))
+        log(f"XZHDR Date {last - 10}-{last}\n")
         try:
             for article, datestr in nntp_client.xhdr("Date", (last - 10, last)):
-                log("%d %s\n" % (article, datestr))
+                log(f"{article} {datestr}\n")
         except NNTPError as e:
             log(f"{e}\n")
         log("\n")
 
-        log("XOVER %d-%d\n" % (last - 10, last))
+        log(f"XOVER {last - 10}-{last}\n")
         try:
             hash_ = count = 0
             for article, overview in nntp_client.xover((last - 10, last)):
-                log("%d %r\n" % (article, overview))
+                log(f"{article} {overview}\n")
                 hash_ += sum(map(hash, overview.keys()))
                 hash_ += sum(map(hash, overview.values()))
                 count += 1
-            log("Entries %d Hash %s\n" % (count, hash_))
+            log(f"Entries {count} Hash {hash_}\n")
         except NNTPError as e:
             log(f"{e}\n")
         log("\n")
 
-        log("XZVER %d-%d\n" % (last - 10, last))
+        log(f"XZVER {last - 10}-{last}\n")
         try:
             hash_ = count = 0
             for _article, overview in nntp_client.xzver((last - 10, last)):
                 hash_ += sum(map(hash, overview.keys()))
                 hash_ += sum(map(hash, overview.values()))
                 count += 1
-            log("Entries %d Hash %s\n" % (count, hash_))
+            log(f"Entries {count} Hash {hash_}\n")
         except NNTPError as e:
             log(f"{e}\n")
         log("\n")
@@ -1605,14 +1605,14 @@ if __name__ == "__main__":
             log(f"{e}\n")
         log("\n")
 
-        log("XOVER %d-%d\n" % (last - 10, last))
+        log(f"XOVER {last - 10}-{last}\n")
         try:
             hash_ = count = 0
             for _article, overview in nntp_client.xover((last - 10, last)):
                 hash_ += sum(map(hash, overview.keys()))
                 hash_ += sum(map(hash, overview.values()))
                 count += 1
-            log("Entries %d Hash %s\n" % (count, hash_))
+            log(f"Entries {count} Hash {hash_}\n")
         except NNTPError as e:
             log(f"{e}\n")
         log("\n")
@@ -1624,28 +1624,28 @@ if __name__ == "__main__":
             log(f"{e}\n")
         log("\n")
 
-        log("XOVER %d-%d\n" % (last - 10, last))
+        log(f"XOVER {last - 10}-{last}\n")
         try:
             hash_ = count = 0
             for _article, overview in nntp_client.xover((last - 10, last)):
                 hash_ += sum(map(hash, overview.keys()))
                 hash_ += sum(map(hash, overview.values()))
                 count += 1
-            log("Entries %d Hash %s\n" % (count, hash_))
+            log(f"Entries {count} Hash {hash_}\n")
         except NNTPError as e:
             log(f"{e}\n")
         log("\n")
 
         log("LIST\n")
         try:
-            log("Entries %d\n" % len(list(nntp_client.list())))
+            log(f"Entries {len(list(nntp_client.list()))}\n")
         except NNTPError as e:
             log(f"{e}\n")
         log("\n")
 
         log("LIST ACTIVE\n")
         try:
-            log("Entries %d\n" % len(list(nntp_client.list("ACTIVE"))))
+            log(f"Entries {len(list(nntp_client.list("ACTIVE")))}\n")
         except NNTPError as e:
             log(f"{e}\n")
         log("\n")
@@ -1653,21 +1653,21 @@ if __name__ == "__main__":
         log("LIST ACTIVE alt.binaries.*\n")
         try:
             newsgroups = nntp_client.list("ACTIVE", "alt.binaries.*")
-            log("Entries %d\n" % len(list(newsgroups)))
+            log(f"Entries {len(list(newsgroups))}\n")
         except NNTPError as e:
             log(f"{e}\n")
         log("\n")
 
         log("LIST ACTIVE.TIMES\n")
         try:
-            log("Entries %d\n" % len(list(nntp_client.list("ACTIVE.TIMES"))))
+            log(f"Entries {len(list(nntp_client.list("ACTIVE.TIMES")))}\n")
         except NNTPError as e:
             log(f"{e}\n")
         log("\n")
 
         log("LIST NEWSGROUPS\n")
         try:
-            log("Entries %d\n" % len(list(nntp_client.list("NEWSGROUPS"))))
+            log(f"Entries {len(list(nntp_client.list("NEWSGROUPS")))}\n")
             for group in nntp_client.list("NEWSGROUPS"):
                 print(group)
         except NNTPError as e:
@@ -1677,28 +1677,28 @@ if __name__ == "__main__":
         log("LIST NEWSGROUPS alt.binaries.*\n")
         try:
             groups = nntp_client.list("NEWSGROUPS", "alt.binaries.*")
-            log("Entries %d\n" % len(list(groups)))
+            log(f"Entries {len(list(groups))}\n")
         except NNTPError as e:
             log(f"{e}\n")
         log("\n")
 
         log("LIST OVERVIEW.FMT\n")
         try:
-            log("{}\n".format(list(nntp_client.list("OVERVIEW.FMT"))))
+            log(f"{list(nntp_client.list("OVERVIEW.FMT"))}\n")
         except NNTPError as e:
             log(f"{e}\n")
         log("\n")
 
         log("LIST HEADERS\n")
         try:
-            log("{}\n".format(list(nntp_client.list("HEADERS"))))
+            log(f"{list(nntp_client.list("HEADERS"))}\n")
         except NNTPError as e:
             log(f"{e}\n")
         log("\n")
 
         log("LIST EXTENSIONS\n")
         try:
-            log("{}\n".format(list(nntp_client.list("EXTENSIONS"))))
+            log(f"{list(nntp_client.list("EXTENSIONS"))}\n")
         except NNTPError as e:
             log(f"{e}\n")
         log("\n")
