@@ -23,7 +23,7 @@ import re
 import struct
 import zlib
 
-__all__ = ["trailer_crc32", "YEnc"]
+__all__ = ["YEnc", "trailer_crc32"]
 
 
 _crc32_re = re.compile(b"\\s+crc(?:32)?=([0-9a-fA-F]{8})")

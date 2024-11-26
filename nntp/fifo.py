@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Generic, TypeVar
 if TYPE_CHECKING:
     from typing_extensions import Self
 
-__all__ = ["TextFifo", "BytesFifo", "Fifo"]
+__all__ = ["BytesFifo", "Fifo", "TextFifo"]
 
 
 _DISCARD_SIZE = 0xFFFF

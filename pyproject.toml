@@ -103,7 +103,6 @@ select = [
     # "TRY",  # tryceratops
 ]
 ignore = [
-    "ANN101",  # missing type annotation for `self`
     "B904",    # raise-without-from-inside-except
     "FIX002",  # line-contains-todo
     "ISC001",  # may conflict with ruff format
