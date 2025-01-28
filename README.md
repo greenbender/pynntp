@@ -16,7 +16,7 @@ application)
 
 ## Documentation
 
-See https://greenbender.github.io/pynntp/
+https://greenbender.github.io/pynntp/
 
 This is an area in need of improvement. At present docs are simply auto
 generated via docstrings. Some more explicit documentation, including examples,
