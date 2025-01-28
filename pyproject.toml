@@ -121,6 +121,9 @@ max-args = 8                                      # Default: 5
 "nntp/utils.py" = ["N806"]
 "tests/*" = ["S101"]
 
+[tool.ruff.lint.flake8-builtins]
+builtins-allowed-modules = ["types"]
+
 [tool.sphinx-pyproject]
 github_username = "greenbender"
 github_repository = "pynntp"
