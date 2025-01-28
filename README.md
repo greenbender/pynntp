@@ -14,6 +14,14 @@ Meaning that memory use is minimal (even for the largest responses) and that
 cycles aren't being wasted waiting on a blocking read (even in a single threaded
 application)
 
+## Documentation
+
+See https://greenbender.github.io/pynntp/
+
+This is an area in need of improvement. At present docs are simply auto
+generated via docstrings. Some more explicit documentation, including examples,
+is on the TODO list.
+
 ## Example
 
     >>> import nntp
