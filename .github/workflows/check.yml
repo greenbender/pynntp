@@ -39,7 +39,7 @@ jobs:
         run: poetry run pytest
       - name: add newsgroup my.newsgroup
         # run: docker exec -it inn-service sh -c "ctlinnd mode && ctlinnd newgroup my.public && cat db/active"
-        run: docker run --network ${{ job.services.inn-service.network }} --rm greenbender/inn ctlinnd newgroup my.newsgroup
+        run: docker run --network ${{ job.services.inn-service.network }} ctlinnd newgroup my.newsgroup
       - name: Test list_newsgroups on newly created newsgroups
         shell: python
         run: |
