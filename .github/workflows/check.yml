@@ -37,3 +37,13 @@ jobs:
         run: poetry run mypy --strict .
       - name: Run tests
         run: poetry run pytest
+      - name: add newsgroup my.newsgroup
+        run: docker exec -it inn-service sh -c "ctlinnd mode && ctlinnd newgroup my.public && cat db/active"
+      - name: Test list_newsgroups on newly created newsgroups
+        shell: python
+        run: |
+          import nntp
+          pynntp_client = nntp.NNTPClient("inn-service")
+          for name, description in sorted(pynntp_client.list_newsgroups()):
+              print(f"{name=:<20}: {description=}")
+          assert any(newsgroup.name == "my.public" for newsgroup in pynntp_client.list_newsgroups())
