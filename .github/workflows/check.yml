@@ -34,6 +34,7 @@ jobs:
       - name: Install dependencies
         run: poetry install
       - name: Run mypy
+        if: matrix.python-version != '3.15'
         run: poetry run mypy --strict .
       - name: Run tests
         run: poetry run pytest
