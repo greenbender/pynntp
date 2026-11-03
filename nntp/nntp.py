@@ -835,7 +835,7 @@ class NNTPClient(BaseNNTPClient):
             yield name, timestamp, creator
 
     def list_headers(
-        self, variant: Literal["MSGID", "RANGE", None] = None
+        self, variant: Literal["MSGID", "RANGE"] | None = None
     ) -> Iterator[str]:
         """LIST HEADERS command.
 
