@@ -24,9 +24,9 @@ jobs:
           - 119:119
           - 563:563
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - run: pipx install poetry
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
           allow-prereleases: true
