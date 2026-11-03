@@ -33,7 +33,7 @@ class HeaderName(str):  # noqa: SLOT000
         return hash(self.casefold())
 
 
-class HeaderDict(MutableMapping[str, str]):
+class HeaderDict(MutableMapping[str, str]):  # noqa: PLW1641
     def __init__(
         self,
         other: Mapping[str, str] | Iterable[tuple[str, str]] | None = None,
