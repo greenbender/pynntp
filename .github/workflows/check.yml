@@ -25,15 +25,13 @@ jobs:
           - 563:563
     steps:
       - uses: actions/checkout@v4
-      - run: pipx install poetry
-      - uses: actions/setup-python@v5
+      - uses: astral-sh/setup-uv@v7
         with:
           python-version: ${{ matrix.python-version }}
-          allow-prereleases: true
-          cache: poetry
+          enable-cache: true
       - name: Install dependencies
-        run: poetry install
+        run: uv sync --locked
       - name: Run mypy
-        run: poetry run mypy --strict .
+        run: uv run mypy --strict .
       - name: Run tests
-        run: poetry run pytest
+        run: uv run pytest
