@@ -8,10 +8,14 @@ import pytest
 
 from nntp.types import Newsgroup
 from nntp.utils import (
+    parse_active_time,
     parse_date,
     parse_epoch,
     parse_headers,
     parse_newsgroup,
+    parse_newsgroup_description,
+    parse_number_value,
+    parse_overview_fmt,
     unparse_headers,
     unparse_msgid_range,
     unparse_range,
@@ -201,3 +205,93 @@ def test_parse_epoch(epoch: str | int) -> None:
 def test_parse_epoch_invalid() -> None:
     with pytest.raises(ValueError):  # noqa: PT011
         parse_epoch("not a number")
+
+
+def test_parse_active_time() -> None:
+    assert parse_active_time("alt.test 1700000000 me@example.com\r\n") == (
+        "alt.test",
+        datetime(2023, 11, 14, 22, 13, 20, tzinfo=UTC),
+        "me@example.com",
+    )
+
+
+@pytest.mark.parametrize(
+    ("line", "match"),
+    [
+        ("", "not enough values"),
+        ("alt.test 1700000000", "not enough values"),
+        ("alt.test x me", "invalid literal"),
+    ],
+)
+def test_parse_active_time_invalid(line: str, match: str) -> None:
+    with pytest.raises(ValueError, match=match):
+        parse_active_time(line)
+
+
+@pytest.mark.parametrize(
+    ("line", "expected"),
+    [
+        ("alt.test\tA test group\r\n", ("alt.test", "A test group")),
+        ("alt.bare\r\n", ("alt.bare", "")),
+    ],
+)
+def test_parse_newsgroup_description(line: str, expected: tuple[str, str]) -> None:
+    assert parse_newsgroup_description(line) == expected
+
+
+def test_parse_newsgroup_description_empty() -> None:
+    with pytest.raises(ValueError, match="not enough values"):
+        parse_newsgroup_description("\r\n")
+
+
+@pytest.mark.parametrize(
+    ("line", "expected"),
+    [
+        ("Subject:\r\n", ("Subject", False)),
+        (":bytes\r\n", ("bytes", False)),
+        ("Xref:full\r\n", ("Xref", True)),
+        ("Xref:FULL\r\n", ("Xref", True)),
+    ],
+)
+def test_parse_overview_fmt(line: str, expected: tuple[str, bool]) -> None:
+    assert parse_overview_fmt(line) == expected
+
+
+@pytest.mark.parametrize(
+    ("line", "match"),
+    [
+        ("Subject", "not enough values"),
+        ("a:b:c", "too many values"),
+        ("Xref:partial", "unknown suffix"),
+    ],
+)
+def test_parse_overview_fmt_invalid(line: str, match: str) -> None:
+    with pytest.raises(ValueError, match=match):
+        parse_overview_fmt(line)
+
+
+@pytest.mark.parametrize(
+    ("line", "expected"),
+    [
+        ("3 hello world\r\n", (3, "hello world")),
+        ("3\r\n", (3, "")),
+        ("<a@b> subj\r\n", (0, "subj")),
+    ],
+)
+def test_parse_number_value(line: str, expected: tuple[int, str]) -> None:
+    assert parse_number_value(line) == expected
+
+
+@pytest.mark.parametrize(
+    ("line", "match"),
+    [("", "not enough values"), ("\r\n", "not enough values"), ("x v", "invalid")],
+)
+def test_parse_number_value_invalid(line: str, match: str) -> None:
+    with pytest.raises(ValueError, match=match):
+        parse_number_value(line)
+
+
+@pytest.mark.parametrize("value", [10**17, 10**20, -(10**20)])
+def test_parse_epoch_out_of_range(value: int) -> None:
+    with pytest.raises(ValueError, match="out of range"):
+        parse_epoch(value)

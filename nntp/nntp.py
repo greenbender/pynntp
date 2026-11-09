@@ -155,15 +155,6 @@ def _timestamp(timestamp: datetime) -> str:
     return f"{timestamp.year:04d}{timestamp:%m%d %H%M%S} GMT"
 
 
-@contextmanager
-def _data_errors(what: str) -> Iterator[None]:
-    """Raise NNTPDataError for a ValueError from parsing a response."""
-    try:
-        yield
-    except ValueError as e:
-        raise NNTPDataError(f"Invalid {what}: {e}") from e
-
-
 def _after_compress_forbidden(words: list[str]) -> bool:
     """Whether RFC 8054 forbids a command, given its first two words in upper case."""
     if words[:1] in (["AUTHINFO"], ["STARTTLS"], ["COMPRESS"]):
@@ -535,14 +526,32 @@ class BaseNNTPClient:
         return self._response(lines)
 
     def _response(self, lines: Iterator[bytes]) -> Iterator[bytes]:
-        complete = False
+        buffer, complete = self._buffer, False
         try:
             yield from lines
             complete = True
         finally:
-            self._reading = False
-            if not complete:
-                self._broken = True
+            # An iterator abandoned before reconnect() must not touch the new
+            # connection when it is finally closed
+            if self._buffer is buffer:
+                self._reading = False
+                if not complete:
+                    self._broken = True
+
+    @contextmanager
+    def _data_errors(self, what: str) -> Iterator[None]:
+        """Raise NNTPDataError for a ValueError from parsing a response.
+
+        If a response is being read, the rest of it is left unread, so the
+        connection is marked out of sync now: the response iterator may not be
+        closed for a while, as the exception's traceback can keep it alive.
+        """
+        try:
+            yield
+        except ValueError as e:
+            if self._reading:
+                self._reading, self._broken = False, True
+            raise NNTPDataError(f"Invalid {what}: {e}") from e
 
     def info(self, code: int, message: str, yz: bool = False) -> Iterator[str]:
         """Return the lines of a multi-line response as strings.
@@ -610,7 +619,10 @@ class BaseNNTPClient:
 
     def _command(self, verb: str, args: str | None) -> tuple[int, str]:
         if self._reading:
-            raise NNTPSyncError("Command issued while a response is being read")
+            raise NNTPSyncError(
+                "Command issued while a response is being read; read it to the "
+                "end, or call reconnect()"
+            )
         if self._broken:
             raise NNTPSyncError("Connection is closed or out of sync; call reconnect()")
 
@@ -702,9 +714,12 @@ class NNTPClient(BaseNNTPClient):
 
     Commands that can return a lot of data (LIST, XOVER, HDR, ...) return
     iterators that stream the response, so memory use stays low and data can be
-    processed as it arrives. Read each one to the end before issuing the next
-    command; abandoning one part way leaves the connection out of sync (see
-    NNTPSyncError and reconnect()).
+    processed as it arrives. The command is sent and its status line read when
+    the method is called, so a reply error is raised there. Read each iterator
+    to the end before issuing the next command; abandoning one part way leaves
+    the connection out of sync (see NNTPSyncError and reconnect()). That
+    includes never reading it: calling e.g. xover() and dropping the result
+    blocks the connection until reconnect().
 
     Any command can raise NNTPReplyError (and its subclasses), NNTPSyncError,
     NNTPProtocolError or OSError. Commands that parse a response can also
@@ -864,9 +879,13 @@ class NNTPClient(BaseNNTPClient):
             Each capability line, starting with VERSION.
         """
         code, message = self.command("CAPABILITIES", keyword, expect=101)
+        lines = self.info(code, message)
 
-        for line in self.info(code, message):
-            yield line.strip()
+        def capabilities() -> Iterator[str]:
+            for line in lines:
+                yield line.strip()
+
+        return capabilities()
 
     def mode_reader(self) -> bool:
         """MODE READER command.
@@ -937,7 +956,7 @@ class NNTPClient(BaseNNTPClient):
         """
         _, message = self.command("DATE", expect=111)
 
-        with _data_errors("DATE response"):
+        with self._data_errors("DATE response"):
             return utils.parse_date(message)
 
     def help(self) -> str:
@@ -968,11 +987,15 @@ class NNTPClient(BaseNNTPClient):
             NNTPDataError: If a line can't be parsed.
         """
         code, message = self.command("NEWGROUPS", _timestamp(timestamp), expect=231)
+        lines = self.info(code, message)
 
-        for line in self.info(code, message):
-            with _data_errors("NEWGROUPS line"):
-                group = utils.parse_newsgroup(line)
-            yield group
+        def groups() -> Iterator[Newsgroup]:
+            for line in lines:
+                with self._data_errors("NEWGROUPS line"):
+                    group = utils.parse_newsgroup(line)
+                yield group
+
+        return groups()
 
     def newnews(self, pattern: str, timestamp: datetime) -> Iterator[str]:
         """NEWNEWS command.
@@ -990,9 +1013,13 @@ class NNTPClient(BaseNNTPClient):
         code, message = self.command(
             "NEWNEWS", f"{pattern} {_timestamp(timestamp)}", expect=230
         )
+        lines = self.info(code, message)
 
-        for line in self.info(code, message):
-            yield line.strip()
+        def message_ids() -> Iterator[str]:
+            for line in lines:
+                yield line.strip()
+
+        return message_ids()
 
     # list commands
     def list(
@@ -1038,10 +1065,15 @@ class NNTPClient(BaseNNTPClient):
         Raises:
             NNTPDataError: If a line can't be parsed.
         """
-        for line in self.list("ACTIVE", args=pattern):
-            with _data_errors("LIST ACTIVE line"):
-                group = utils.parse_newsgroup(line)
-            yield group
+        lines = self.list("ACTIVE", args=pattern)
+
+        def groups() -> Iterator[Newsgroup]:
+            for line in lines:
+                with self._data_errors("LIST ACTIVE line"):
+                    group = utils.parse_newsgroup(line)
+                yield group
+
+        return groups()
 
     def list_active_times(self) -> Iterator[tuple[str, datetime, str]]:
         """LIST ACTIVE.TIMES command.
@@ -1054,15 +1086,15 @@ class NNTPClient(BaseNNTPClient):
         Raises:
             NNTPDataError: If a line can't be parsed.
         """
-        for line in self.list("ACTIVE.TIMES"):
-            parts = line.split()
-            try:
-                name = parts[0]
-                timestamp = utils.parse_epoch(parts[1])
-                creator = parts[2]
-            except (IndexError, ValueError) as e:
-                raise NNTPDataError("Invalid LIST ACTIVE.TIMES") from e
-            yield name, timestamp, creator
+        lines = self.list("ACTIVE.TIMES")
+
+        def times() -> Iterator[tuple[str, datetime, str]]:
+            for line in lines:
+                with self._data_errors("LIST ACTIVE.TIMES line"):
+                    name, created, creator = utils.parse_active_time(line)
+                yield name, created, creator
+
+        return times()
 
     def list_headers(
         self, variant: Literal["MSGID", "RANGE"] | None = None
@@ -1078,8 +1110,13 @@ class NNTPClient(BaseNNTPClient):
         Yields:
             Each field name.
         """
-        for line in self.list("HEADERS", args=variant):
-            yield line.strip()
+        lines = self.list("HEADERS", args=variant)
+
+        def headers() -> Iterator[str]:
+            for line in lines:
+                yield line.strip()
+
+        return headers()
 
     def list_newsgroups(
         self,
@@ -1098,12 +1135,15 @@ class NNTPClient(BaseNNTPClient):
         Yields:
             The name and description of each matching newsgroup.
         """
-        for line in self.list("NEWSGROUPS", args=pattern):
-            parts = line.strip().split(None, 1)
-            name, description = parts[0], ""
-            if len(parts) > 1:
-                description = parts[1]
-            yield name, description
+        lines = self.list("NEWSGROUPS", args=pattern)
+
+        def groups() -> Iterator[tuple[str, str]]:
+            for line in lines:
+                with self._data_errors("LIST NEWSGROUPS line"):
+                    name, description = utils.parse_newsgroup_description(line)
+                yield name, description
+
+        return groups()
 
     def list_overview_fmt(self) -> Iterator[tuple[str, bool]]:
         """LIST OVERVIEW.FMT command.
@@ -1117,17 +1157,15 @@ class NNTPClient(BaseNNTPClient):
         Raises:
             NNTPDataError: If a line can't be parsed.
         """
-        for line in self.list("OVERVIEW.FMT"):
-            try:
-                name, suffix = line.rstrip().split(":")
-            except ValueError as e:
-                raise NNTPDataError("Invalid LIST OVERVIEW.FMT") from e
-            if suffix and not name:
-                name, suffix = suffix, name
-            full = suffix.lower() == "full"  # ABNF strings ignore case
-            if suffix and not full:
-                raise NNTPDataError("Invalid LIST OVERVIEW.FMT")
-            yield (name, full)
+        lines = self.list("OVERVIEW.FMT")
+
+        def fields() -> Iterator[tuple[str, bool]]:
+            for line in lines:
+                with self._data_errors("LIST OVERVIEW.FMT line"):
+                    name, full = utils.parse_overview_fmt(line)
+                yield name, full
+
+        return fields()
 
     def list_extensions(self) -> Iterator[str]:
         """LIST EXTENSIONS command.
@@ -1137,8 +1175,13 @@ class NNTPClient(BaseNNTPClient):
         Yields:
             Each extension name.
         """
-        for line in self.list("EXTENSIONS", success=(202,)):
-            yield line.strip()
+        lines = self.list("EXTENSIONS", success=(202,))
+
+        def extensions() -> Iterator[str]:
+            for line in lines:
+                yield line.strip()
+
+        return extensions()
 
     def group(self, name: str) -> tuple[int, int, int, str]:
         """GROUP command.
@@ -1200,13 +1243,17 @@ class NNTPClient(BaseNNTPClient):
             args = f"{name} {utils.unparse_range(range)}"
 
         code, message = self.command("LISTGROUP", args, expect=211)
+        lines = self.info(code, message)
 
-        for line in self.info(code, message):
-            with _data_errors("LISTGROUP line"):
-                number = int(line)
-            if number < 1:
-                raise NNTPDataError(f'Invalid LISTGROUP line "{line}"')
-            yield number
+        def numbers() -> Iterator[int]:
+            for line in lines:
+                with self._data_errors("LISTGROUP line"):
+                    number = int(line)
+                    if number < 1:
+                        raise ValueError(f"{number} is not an article number")
+                yield number
+
+        return numbers()
 
     def next(self) -> tuple[int, str]:
         """NEXT command.
@@ -1380,7 +1427,7 @@ class NNTPClient(BaseNNTPClient):
         # Headers and body come from one response: parse_headers() stops at
         # the blank line and _read_body() reads the rest.
         lines = self._info(code, message)
-        with _data_errors("article headers"):
+        with self._data_errors("article headers"):
             headers = utils.parse_headers(self._decode(lines))
         body = self._read_body(lines, decode=decode)
 
@@ -1411,7 +1458,7 @@ class NNTPClient(BaseNNTPClient):
         """
         code, message = self.command("HEAD", _msgid_article(msgid_article), expect=221)
 
-        with _data_errors("article headers"):
+        with self._data_errors("article headers"):
             return utils.parse_headers(self.info(code, message))
 
     def body(
@@ -1451,24 +1498,16 @@ class NNTPClient(BaseNNTPClient):
             args += " " + utils.unparse_msgid_range(msgid_range)
 
         code, message = self.command(verb, args, expect=225 if verb == "HDR" else 221)
-
-        yield from self._number_values(verb, code, message, yz=verb == "XZHDR")
+        return self._number_values(verb, self.info(code, message, yz=verb == "XZHDR"))
 
     def _number_values(
-        self, verb: str, code: int, message: str, *, yz: bool = False
+        self, verb: str, lines: Iterator[str]
     ) -> Iterator[tuple[int, str]]:
-        """Parse "<article number> <value>" lines, as sent by HDR and XPAT.
-
-        A row starting with a message-id (older XHDR by message-id) gets 0.
-        """
-        for line in self.info(code, message, yz=yz):
-            parts = line.rstrip("\r\n").split(None, 1)
-            try:
-                # Older servers start rows for a message-id with the id, not 0
-                number = 0 if parts[0].startswith("<") else int(parts[0])
-            except (IndexError, ValueError) as e:
-                raise NNTPDataError(f"Invalid {verb} response") from e
-            yield number, parts[1] if len(parts) > 1 else ""
+        """Parse "<article number> <value>" lines, as sent by HDR and XPAT."""
+        for line in lines:
+            with self._data_errors(f"{verb} response"):
+                number, value = utils.parse_number_value(line)
+            yield number, value
 
     def hdr(
         self,
@@ -1544,22 +1583,23 @@ class NNTPClient(BaseNNTPClient):
             args = utils.unparse_msgid_range(range)
 
         code, message = self.command(verb, args, expect=224)
+        lines = self.info(code, message, yz=verb == "XZVER")
 
-        yz = verb == "XZVER"
-        for line in self.info(code, message, yz=yz):
-            parts = line.rstrip("\r\n").split("\t")
-            try:
-                articleno = int(parts[0])
-            except ValueError as e:
-                raise NNTPDataError(f"Invalid {verb} response") from e
-            values = parts[1:]
-            for i in full:
-                if i < len(values):
-                    name, sep, value = values[i].partition(":")
-                    if sep and name.strip().casefold() == keys[i]:
-                        values[i] = value.strip()
-            # Same-package fast path; names are unique per LIST OVERVIEW.FMT.
-            yield articleno, HeaderDict._from_fields(keys, names, values)  # noqa: SLF001
+        def overviews() -> Iterator[tuple[int, HeaderDict]]:
+            for line in lines:
+                parts = line.rstrip("\r\n").split("\t")
+                with self._data_errors(f"{verb} response"):
+                    articleno = int(parts[0])
+                values = parts[1:]
+                for i in full:
+                    if i < len(values):
+                        name, sep, value = values[i].partition(":")
+                        if sep and name.strip().casefold() == keys[i]:
+                            values[i] = value.strip()
+                # Same-package fast path; names are unique per LIST OVERVIEW.FMT.
+                yield articleno, HeaderDict._from_fields(keys, names, values)  # noqa: SLF001
+
+        return overviews()
 
     def xover(
         self,
@@ -1644,8 +1684,7 @@ class NNTPClient(BaseNNTPClient):
         args = " ".join([header, utils.unparse_msgid_range(msgid_range), *pattern])
 
         code, message = self.command("XPAT", args, expect=221)
-
-        yield from self._number_values("XPAT", code, message)
+        return self._number_values("XPAT", self.info(code, message))
 
     def xfeature_compress_gzip(self, terminator: bool = False) -> None:
         """XFEATURE COMPRESS GZIP command.
