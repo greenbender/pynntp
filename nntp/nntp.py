@@ -62,12 +62,21 @@ _SEND_SIZE = 0x10000  # Batch POST body lines into writes of about this size
 def _timestamp(timestamp: datetime) -> str:
     """Format a datetime as NEWGROUPS/NEWNEWS arguments (RFC 3977 7.3).
 
-    Naive datetimes are taken to be GMT. The zone token must be "GMT"; servers
+    Naive datetimes are taken as UTC. The zone token must be "GMT"; servers
     reject "UTC".
     """
     if timestamp.tzinfo:
         timestamp = timestamp.astimezone(timezone.utc)
     return timestamp.strftime("%Y%m%d %H%M%S GMT")
+
+
+@contextmanager
+def _data_errors(what: str) -> Iterator[None]:
+    """Raise NNTPDataError for a ValueError from parsing a response."""
+    try:
+        yield
+    except ValueError as e:
+        raise NNTPDataError(f"Invalid {what}: {e}") from e
 
 
 def _msgid_article(msgid_article: str | int | None) -> str | None:
@@ -79,24 +88,27 @@ class NNTPError(Exception):
 
 
 class NNTPSyncError(NNTPError):
-    """NNTP sync errors.
+    """The connection is busy or out of sync.
 
     Raised when a command is issued while the response to a previous command
     is still being read, or after a response was abandoned or failed part way
-    through, leaving unread data on the connection. Call reconnect() (or
-    close()) to recover.
+    through, leaving unread data on the connection, or after close(). Call
+    reconnect() to recover.
     """
 
 
 class NNTPReplyError(NNTPError):
-    """NNTP response status errors."""
+    """The server replied with an unexpected status code.
+
+    The code and message attributes hold the status line.
+    """
 
     def __init__(self, code: int, message: str) -> None:
-        """NNTP response error.
+        """Create the error.
 
         Args:
-            code: The response status code.
-            message: The response message.
+            code: The status code.
+            message: The status message.
         """
         self.code = code
         self.message = message
@@ -107,31 +119,19 @@ class NNTPReplyError(NNTPError):
 
 
 class NNTPTemporaryError(NNTPReplyError):
-    """NNTP temporary errors.
-
-    Temporary errors have response codes from 400 to 499.
-    """
+    """A 4xx (temporary) error reply."""
 
 
 class NNTPPermanentError(NNTPReplyError):
-    """NNTP permanent errors.
-
-    Permanent errors have response codes from 500 to 599.
-    """
+    """A 5xx (permanent) error reply."""
 
 
 class NNTPProtocolError(NNTPError):
-    """NNTP protocol error.
-
-    Protocol errors are raised when the response status is invalid.
-    """
+    """The server sent a status line that could not be parsed."""
 
 
 class NNTPDataError(NNTPError):
-    """NNTP data error.
-
-    Data errors are raised when the content of a response cannot be parsed.
-    """
+    """The content of a response could not be parsed or failed a check."""
 
 
 class NNTPYEncError(NNTPDataError):
@@ -147,10 +147,10 @@ class NNTPYEncError(NNTPDataError):
 
 
 class BaseNNTPClient:
-    """NNTP BaseNNTPClient.
+    """NNTP connection, command and response handling.
 
-    Base class for NNTP clients implements the basic command interface and
-    transparently handles compressed replies.
+    Responses compressed with XFEATURE COMPRESS GZIP or as yEnc-encoded zlib
+    (XZVER, XZHDR) are decompressed transparently.
     """
 
     encoding = "utf-8"
@@ -167,23 +167,20 @@ class BaseNNTPClient:
         use_ssl: bool = False,
         ssl_mode: SSLMode = SSLMode.IMPLICIT,
     ) -> None:
-        """Constructor for BasicNNTPClient.
-
-        Connects to usenet server and reads the welcome message.
+        """Connect to the server and read the welcome message.
 
         Args:
-            host: Hostname for usenet server.
-            port: Port for usenet server.
-            username: Username for usenet account
-            password: Password for usenet account
-            timeout: Connection timeout
-            use_ssl: Should we use SSL (TLS)
-            ssl_mode: SSL (TLS) mode to use
+            host: Server hostname.
+            port: Server port.
+            username: Username, sent if the server asks for authentication.
+            password: Password, sent if the server asks for authentication.
+            timeout: Socket timeout in seconds.
+            use_ssl: Use TLS.
+            ssl_mode: IMPLICIT (TLS from the start, usually port 563) or STARTTLS.
 
         Raises:
-            IOError (socket.error): On error in underlying socket and/or ssl
-                wrapper. See socket and ssl modules for further details.
-            NNTPReplyError: On bad response code from server.
+            OSError: On socket or TLS errors.
+            NNTPReplyError: If the server does not accept the connection.
         """
         self.username = username
         self.password = password
@@ -254,7 +251,7 @@ class BaseNNTPClient:
         )
 
     def _recv(self, size: int = 4096) -> None:
-        """Reads data from the socket.
+        """Read data from the socket into the buffer.
 
         Raises:
             NNTPError: If the server closed the connection.
@@ -266,16 +263,7 @@ class BaseNNTPClient:
         self._buffer.write(data)
 
     def _line(self) -> Iterator[bytes]:
-        """Generator that reads a line of data from the server.
-
-        It first attempts to read from the internal buffer. If there is not
-        enough data to read a line it then requests more data from the server
-        and adds it to the buffer. This process repeats until a line of data
-        can be read from the internal buffer.
-
-        Yields:
-            A line of data when it becomes available.
-        """
+        """Yield lines from the buffer, reading from the socket when it runs out."""
         while True:
             line = self._buffer.readline()
             if not line:
@@ -284,24 +272,11 @@ class BaseNNTPClient:
             yield line
 
     def _buf(self, length: int = 0) -> Iterator[bytes]:
-        """Generator that reads a block of data from the server.
-
-        It first attempts to read from the internal buffer. If there is not
-        enough data in the internal buffer it then requests more data from the
-        server and adds it to the buffer.
+        """Yield blocks from the buffer, reading from the socket when it runs out.
 
         Args:
-            length: An optional amount of data to retrieve. A length of 0 (the
-                default) will retrieve a least one buffer of data.
-
-        Yields:
-            A block of data when enough data becomes available.
-
-        Note:
-            If a length of 0 is supplied then the size of the yielded buffer
-            can vary. If there is data in the internal buffer it will yield all
-            of that data otherwise it will yield the the data returned by a
-            recv on the socket.
+            length: Maximum block size. 0 (the default) yields whatever is
+                buffered, or the next recv if the buffer is empty.
         """
         while True:
             buf = self._buffer.read(length)
@@ -311,20 +286,16 @@ class BaseNNTPClient:
             yield buf
 
     def status(self) -> tuple[int, str]:
-        """Reads a command response status.
-
-        If there is no response message then the returned status message will
-        be an empty string.
-
-        Raises:
-            NNTPError: If data is required to be read from the socket and
-                fails.
-            NNTPProtocolError: If the status line can't be parsed.
-            NNTPTemporaryError: For status code 400-499
-            NNTPPermanentError: For status code 500-599
+        """Read a status line.
 
         Returns:
-            A tuple of status code and status message.
+            The status code and message. The message is "" if there is none.
+
+        Raises:
+            NNTPError: If the server closed the connection.
+            NNTPProtocolError: If the status line can't be parsed.
+            NNTPTemporaryError: For status codes 400-499.
+            NNTPPermanentError: For status codes 500-599.
         """
         line = next(self._line()).rstrip()
         parts = line.split(None, 1)
@@ -350,20 +321,9 @@ class BaseNNTPClient:
         return code, message
 
     def _info_plain(self) -> Iterator[bytes]:
-        """Generator for the lines of an info (textual) response.
+        """Yield the lines of a multi-line response, up to its terminator.
 
-        When a terminating line (line containing single period) is received the
-        generator exits.
-
-        If there is a line beginning with an 'escaped' period then the extra
-        period is trimmed.
-
-        Yields:
-            A line of the info response.
-
-        Raises:
-            NNTPError: If data is required to be read from the socket and
-                fails.
+        Leading dots added by the server (dot-stuffing) are removed.
         """
         for line in self._line():
             if line == b".\r\n":
@@ -371,29 +331,13 @@ class BaseNNTPClient:
             yield line[1:] if line.startswith(b".") else line
 
     def _info_gzip(self) -> Iterator[bytes]:
-        """Generator for the lines of a compressed info (textual) response.
+        """Yield the lines of a gzip-compressed multi-line response.
 
-        Compressed responses are an extension to the NNTP protocol supported by
-        some usenet servers to reduce the bandwidth of heavily used range style
-        commands that can return large amounts of textual data.
-
-        This function handles gzip compressed responses that have the
-        terminating line inside or outside the compressed data. From experience
-        if the 'XFEATURE COMPRESS GZIP' command causes the terminating
-        '.\\r\\n' to follow the compressed data and 'XFEATURE COMPRESS GZIP
-        TERMINATOR' causes the terminator to be the last part of the compressed
-        data (i.e the reply the gzipped version of the original reply -
-        terminating line included)
-
-        This function will produce that same output as the _info_plain()
-        function. In other words it takes care of decompression.
-
-        Yields:
-            A line of the info response.
+        Handles the terminator both after the compressed data (XFEATURE COMPRESS
+        GZIP) and inside it (XFEATURE COMPRESS GZIP TERMINATOR). The lines are the
+        same as _info_plain() would give for the uncompressed response.
 
         Raises:
-            NNTPError: If data is required to be read from the socket and
-                fails.
             NNTPDataError: If decompression fails.
         """
         inflate = zlib.decompressobj(15 + 32)
@@ -417,26 +361,14 @@ class BaseNNTPClient:
                 yield line[1:] if line.startswith(b".") else line
 
     def _info_yenczlib(self) -> Iterator[bytes]:
-        """Generator for the lines of a compressed info (textual) response.
+        """Yield the lines of a yEnc-encoded, zlib-compressed response.
 
-        Compressed responses are an extension to the NNTP protocol supported by
-        some usenet servers to reduce the bandwidth of heavily used range style
-        commands that can return large amounts of textual data. The server
-        returns that same data as it would for the uncompressed versions of the
-        command the difference being that the data is zlib deflated and then
-        yEnc encoded.
-
-        This function will produce that same output as the info()
-        function. In other words it takes care of decoding and decompression.
-
-        Yields:
-            A line of the info response.
+        Used by XZVER and XZHDR. The lines are the same as _info_plain() would
+        give for the uncompressed command.
 
         Raises:
-            NNTPError: If data is required to be read from the socket and
-                fails.
-            NNTPDataError: When there is an error parsing the yEnc header or
-                trailer, if the CRC check fails or decompressing data fails.
+            NNTPDataError: If the yEnc header or trailer is bad, the CRC check
+                fails or decompression fails.
         """
 
         decoder = YEnc()
@@ -477,20 +409,15 @@ class BaseNNTPClient:
             raise NNTPDataError("Bad yEnc CRC")
 
     def _info(self, code: int, message: str, yz: bool = False) -> Iterator[bytes]:
-        """Dispatcher for the info generators.
+        """Return the lines of a multi-line response as bytes.
 
-        Determines which _info_*() generator should be used based on the
-        supplied parameters.
+        The connection is busy until the iterator is exhausted; if it is abandoned
+        or fails part way, the connection is marked out of sync.
 
         Args:
-            code: The status code for the command response.
-            message: The status message for the command response.
-            yz: Use yenzlib decompression. Useful for xz* commands.
-
-        Returns:
-            An iterator over the lines of the info response as bytes. The
-            connection is busy until it is exhausted; if it is abandoned or
-            fails part way the connection is marked out of sync.
+            code: The status code (unused).
+            message: The status message; "COMPRESS=GZIP" in it selects gzip.
+            yz: The response is yEnc-encoded zlib (XZVER, XZHDR).
         """
         if "COMPRESS=GZIP" in message:
             lines = self._info_gzip()
@@ -510,19 +437,15 @@ class BaseNNTPClient:
                 self._broken = True
 
     def info(self, code: int, message: str, yz: bool = False) -> Iterator[str]:
-        """Dispatcher for the info generators.
+        """Return the lines of a multi-line response as strings.
 
-        Determines which _info_*() generator should be used based on the
-        supplied parameters.
+        Read the iterator to the end before issuing another command; abandoning
+        it part way leaves the connection out of sync.
 
         Args:
-            code: The status code for the command response.
-            message: The status message for the command response.
-            yz: Use yenzlib decompression. Useful for xz* commands.
-
-        Returns:
-            An iterator over the lines of the info response as strings. See
-            _info() for how it affects the connection state.
+            code: The status code (unused).
+            message: The status message; "COMPRESS=GZIP" in it selects gzip.
+            yz: The response is yEnc-encoded zlib (XZVER, XZHDR).
         """
         return self._decode(self._info(code, message, yz))
 
@@ -530,28 +453,25 @@ class BaseNNTPClient:
         return (line.decode(self.encoding, self.errors) for line in lines)
 
     def command(self, verb: str, args: str | None = None) -> tuple[int, str]:
-        """Call a command on the server.
+        """Send a command and read its status line.
 
-        If the user has not authenticated then authentication will be done
-        as part of calling the command on the server.
-
-        For commands that don't return a status message the status message
-        will default to an empty string.
+        If the server replies 480, AUTHINFO USER/PASS is sent and the command
+        retried. A full command line can also be passed as verb.
 
         Args:
-            verb: The verb of the command to call.
-            args: The arguments of the command as a string (default None).
+            verb: The command.
+            args: The command arguments, if any.
 
         Returns:
-            A tuple of status code (as an integer) and status message.
+            The status code and message.
 
-        Note:
-            You can run raw commands by supplying the full command (including
-            args) in the verb.
-
-        Note: Although it is possible you shouldn't issue more than one command
-            at a time by adding newlines to the verb as it will most likely
-            lead to undesirable results.
+        Raises:
+            NNTPSyncError: If a response is still being read, or the connection
+                is closed or out of sync.
+            NNTPReplyError: If authentication fails.
+            NNTPTemporaryError: For status codes 400-499.
+            NNTPPermanentError: For status codes 500-599.
+            NNTPProtocolError: If the status line can't be parsed.
         """
         if self._reading:
             raise NNTPSyncError("Command issued while a response is being read")
@@ -576,7 +496,7 @@ class BaseNNTPClient:
         return self.command(verb, args)
 
     def close(self) -> None:
-        """Closes the connection at the client.
+        """Close the connection without sending QUIT.
 
         After this, only reconnect() can be used.
         """
@@ -585,26 +505,17 @@ class BaseNNTPClient:
 
 
 class NNTPClient(BaseNNTPClient):
-    """NNTP NNTPClient.
+    """NNTP client implementing the common reader commands.
 
-    Implements many of the commands that are commonly used by current usenet
-    servers. Including handling commands that use compressed responses.
+    Commands that can return a lot of data (LIST, XOVER, HDR, ...) return
+    iterators that stream the response, so memory use stays low and data can be
+    processed as it arrives. Read each one to the end before issuing the next
+    command; abandoning one part way leaves the connection out of sync (see
+    NNTPSyncError and reconnect()).
 
-    Commands that can return large amounts of data (LIST, XOVER, HDR, ...)
-    return iterators that stream the response, so memory use stays low and
-    data can be processed as it arrives. Read each one to the end before
-    issuing the next command; abandoning one part way leaves the connection
-    out of sync (see NNTPSyncError and reconnect()).
-
-    Note: All commands can raise the following exceptions:
-            NNTPError
-            NNTPProtocolError
-            NNTPPermanentError
-            NNTPReplyError
-            IOError (socket.error)
-
-    Note: All commands that use compressed responses can also raise an
-        NNTPDataError.
+    Any command can raise NNTPReplyError (and its subclasses), NNTPSyncError,
+    NNTPProtocolError or OSError. Commands that parse a response can also
+    raise NNTPDataError.
     """
 
     def __init__(
@@ -619,24 +530,21 @@ class NNTPClient(BaseNNTPClient):
         ssl_mode: SSLMode = SSLMode.IMPLICIT,
         reader: bool = True,
     ) -> None:
-        """Constructor for NNTP NNTPClient.
-
-        Connects to usenet server.
+        """Connect to the server and, by default, enter reader mode.
 
         Args:
-            host: Hostname for usenet server.
-            port: Port for usenet server.
-            username: Username for usenet account
-            password: Password for usenet account
-            timeout: Connection timeout
-            use_ssl: Should we use ssl
-            ssl_mode: SSL mode to use
-            reader: Use reader mode
+            host: Server hostname.
+            port: Server port.
+            username: Username, sent if the server asks for authentication.
+            password: Password, sent if the server asks for authentication.
+            timeout: Socket timeout in seconds.
+            use_ssl: Use TLS.
+            ssl_mode: IMPLICIT (TLS from the start, usually port 563) or STARTTLS.
+            reader: Send MODE READER after connecting, and after reconnect().
 
         Raises:
-            socket.error: On error in underlying socket and/or ssl wrapper. See
-                socket and ssl modules for further details.
-            NNTPReplyError: On bad response code from server.
+            OSError: On socket or TLS errors.
+            NNTPReplyError: If the server does not accept the connection.
         """
         self._reader = reader
         super().__init__(
@@ -659,7 +567,7 @@ class NNTPClient(BaseNNTPClient):
                 raise
 
     def __enter__(self) -> Self:
-        """Support for the 'with' context manager statement."""
+        """Return the client, for use in a with statement."""
         return self
 
     def __exit__(
@@ -668,7 +576,7 @@ class NNTPClient(BaseNNTPClient):
         exc_val: BaseException | None,
         exc_tb: TracebackType | None,
     ) -> Literal[False]:
-        """Support for the 'with' context manager statement."""
+        """Send QUIT, or just close the connection if it is busy or out of sync."""
         if self._reading or self._broken:  # Closed, or QUIT can't be sent
             self.close()
             return False
@@ -683,21 +591,15 @@ class NNTPClient(BaseNNTPClient):
     def capabilities(self, keyword: str | None = None) -> Iterator[str]:
         """CAPABILITIES command.
 
-        Determines the capabilities of the server.
+        Not every server implements it, so expect NNTPPermanentError.
 
-        Although RFC3977 states that this is a required command for servers to
-        implement not all servers do, so expect that NNTPPermanentError may be
-        raised when this command is issued.
-
-        See <http://tools.ietf.org/html/rfc3977#section-5.2>
+        See <https://datatracker.ietf.org/doc/html/rfc3977#section-5.2>
 
         Args:
-            keyword: Passed directly to the server, however, this is unused by
-                the server according to RFC3977.
+            keyword: Passed to the server; RFC 3977 defines no use for it.
 
         Yields:
-            Each of the capabilities supported by the server. The VERSION
-            capability is the first capability to be yielded.
+            Each capability line, starting with VERSION.
         """
         args = keyword
 
@@ -711,12 +613,10 @@ class NNTPClient(BaseNNTPClient):
     def mode_reader(self) -> bool:
         """MODE READER command.
 
-        Instructs a mode-switching server to switch modes.
-
-        See <http://tools.ietf.org/html/rfc3977#section-5.3>
+        See <https://datatracker.ietf.org/doc/html/rfc3977#section-5.3>
 
         Returns:
-            Boolean value indicating whether posting is allowed or not.
+            Whether posting is allowed.
         """
         code, message = self.command("MODE READER")
         if code not in (200, 201):
@@ -727,14 +627,11 @@ class NNTPClient(BaseNNTPClient):
     def quit(self) -> None:
         """QUIT command.
 
-        Tells the server to close the connection. After the server acknowledges
-        the request to quit the connection is closed both at the server and
-        client. Only useful for graceful shutdown; if the connection is out of
-        sync use close() instead.
+        Asks the server to close the connection, then closes it. If the
+        connection is out of sync use close() instead. After this, only
+        reconnect() can be used.
 
-        After this, only reconnect() can be used.
-
-        See <http://tools.ietf.org/html/rfc3977#section-5.4>
+        See <https://datatracker.ietf.org/doc/html/rfc3977#section-5.4>
         """
         code, message = self.command("QUIT")
         if code != 205:
@@ -746,34 +643,28 @@ class NNTPClient(BaseNNTPClient):
     def date(self) -> datetime:
         """DATE command.
 
-        Coordinated Universal time from the perspective of the usenet server.
-        It can be used to provide information that might be useful when using
-        the NEWNEWS command.
-
-        See <http://tools.ietf.org/html/rfc3977#section-7.1>
+        See <https://datatracker.ietf.org/doc/html/rfc3977#section-7.1>
 
         Returns:
-            The UTC time according to the server as a datetime object.
+            The server's current time, in UTC.
 
         Raises:
-            NNTPDataError: If the timestamp can't be parsed.
+            NNTPDataError: If the time can't be parsed.
         """
         code, message = self.command("DATE")
         if code != 111:
             raise NNTPReplyError(code, message)
 
-        return utils.parse_date(message)
+        with _data_errors("DATE response"):
+            return utils.parse_date(message)
 
     def help(self) -> str:
         """HELP command.
 
-        Provides a short summary of commands that are understood by the usenet
-        server.
-
-        See <http://tools.ietf.org/html/rfc3977#section-7.2>
+        See <https://datatracker.ietf.org/doc/html/rfc3977#section-7.2>
 
         Returns:
-            The help text from the server.
+            The help text.
         """
         code, message = self.command("HELP")
         if code != 100:
@@ -784,47 +675,39 @@ class NNTPClient(BaseNNTPClient):
     def newgroups(self, timestamp: datetime) -> Iterator[Newsgroup]:
         """NEWGROUPS command.
 
-        Retrieves a list of newsgroups created on the server since the
-        specified timestamp.
-
-        See <http://tools.ietf.org/html/rfc3977#section-7.3>
+        See <https://datatracker.ietf.org/doc/html/rfc3977#section-7.3>
 
         Args:
-            timestamp: Datetime object giving 'created since'
+            timestamp: List groups created since this time. A naive datetime is
+                taken as UTC.
 
         Yields:
-            A 4-tuple containing the name, low water mark, high water mark, and
-            status for the newsgroup, for each newsgroup.
+            Each new newsgroup.
 
-        Note: If the datetime object supplied as the timestamp is naive (tzinfo
-            is None) then it is assumed to be given as GMT.
+        Raises:
+            NNTPDataError: If a line can't be parsed.
         """
         code, message = self.command("NEWGROUPS", _timestamp(timestamp))
         if code != 231:
             raise NNTPReplyError(code, message)
 
         for line in self.info(code, message):
-            yield utils.parse_newsgroup(line)
+            with _data_errors("NEWGROUPS line"):
+                group = utils.parse_newsgroup(line)
+            yield group
 
     def newnews(self, pattern: str, timestamp: datetime) -> Iterator[str]:
         """NEWNEWS command.
 
-        Retrieves a list of message-ids for articles created since the
-        specified timestamp for newsgroups with names that match the given
-        pattern.
-
-        See <http://tools.ietf.org/html/rfc3977#section-7.4>
+        See <https://datatracker.ietf.org/doc/html/rfc3977#section-7.4>
 
         Args:
-            pattern: Glob matching newsgroups of interest.
-            timestamp: Datetime object giving 'created since'
+            pattern: Wildmat matching the newsgroups of interest.
+            timestamp: List articles posted since this time. A naive datetime is
+                taken as UTC.
 
         Yields:
-            A message-id as string, for each article.
-
-        Note: If the datetime object supplied as the timestamp is naive (tzinfo
-            is None) then it is assumed to be given as GMT. If tzinfo is set
-            then it will be converted to GMT by this function.
+            The message-id of each new article.
         """
         code, message = self.command("NEWNEWS", f"{pattern} {_timestamp(timestamp)}")
         if code != 230:
@@ -843,18 +726,16 @@ class NNTPClient(BaseNNTPClient):
     ) -> Iterator[str]:
         """LIST command.
 
-        General purpose list command. allows the server to provide blocks of
-        information to the client. The keyword specifies the type of list, if no
-        keyword is provided, it defaults to ACTIVE.
-
-        See <http://tools.ietf.org/html/rfc3977#section-7.6.1>
+        See <https://datatracker.ietf.org/doc/html/rfc3977#section-7.6.1>
 
         Args:
-            keyword: Information requested.
-            args: Keyword specific arguments.
+            keyword: The list to return, e.g. "ACTIVE" or "NEWSGROUPS". The server
+                default (ACTIVE) if omitted.
+            args: Keyword-specific arguments, such as a wildmat.
+            success: Status codes that mean success.
 
-        Yields:
-            A line of the list response.
+        Returns:
+            The lines of the response.
         """
         if keyword:
             keyword = keyword.upper()
@@ -870,31 +751,32 @@ class NNTPClient(BaseNNTPClient):
     def list_active(self, pattern: str | None = None) -> Iterator[Newsgroup]:
         """LIST ACTIVE command.
 
-        Retrieves a list of active newsgroups that match the specified pattern.
-
-        See <http://tools.ietf.org/html/rfc3977#section-7.6.3>
+        See <https://datatracker.ietf.org/doc/html/rfc3977#section-7.6.3>
 
         Args:
-            pattern: Glob matching newsgroups of interest.
+            pattern: Wildmat matching the newsgroups of interest.
 
         Yields:
-            A 4-tuple containing the name, low water mark, high water mark,
-            and status for the newsgroup, for each newsgroup.
+            Each matching newsgroup.
+
+        Raises:
+            NNTPDataError: If a line can't be parsed.
         """
         for line in self.list("ACTIVE", args=pattern):
-            yield utils.parse_newsgroup(line)
+            with _data_errors("LIST ACTIVE line"):
+                group = utils.parse_newsgroup(line)
+            yield group
 
     def list_active_times(self) -> Iterator[tuple[str, datetime, str]]:
-        """LIST ACTIVE TIMES command.
+        """LIST ACTIVE.TIMES command.
 
-        Retrieves a list of newsgroups including the creation time and who
-        created them.
-
-        See <http://tools.ietf.org/html/rfc3977#section-7.6.4>
+        See <https://datatracker.ietf.org/doc/html/rfc3977#section-7.6.4>
 
         Yields:
-            A 3-tuple containing the name, creation date as a datetime object
-            and creator as a string for the newsgroup for each newsgroup.
+            The name, creation time and creator of each newsgroup.
+
+        Raises:
+            NNTPDataError: If a line can't be parsed.
         """
         for line in self.list("ACTIVE.TIMES"):
             parts = line.split()
@@ -911,17 +793,14 @@ class NNTPClient(BaseNNTPClient):
     ) -> Iterator[str]:
         """LIST HEADERS command.
 
-        Returns a list of fields that may be retrieved using the HDR command.
-
-        See <https://tools.ietf.org/html/rfc3977#section-8.6>
+        See <https://datatracker.ietf.org/doc/html/rfc3977#section-8.6>
 
         Args:
-            variant: The string 'MSGID' or 'RANGE' or None (the default).
-                Different variants of the HDR request may return a different
-                fields.
+            variant: "MSGID" or "RANGE" for the fields available to that form of
+                HDR, or None for all.
 
         Yields:
-            The field name for each of the fields.
+            Each field name.
         """
         for line in self.list("HEADERS", args=variant):
             yield line.strip()
@@ -932,17 +811,13 @@ class NNTPClient(BaseNNTPClient):
     ) -> Iterator[tuple[str, str]]:
         """LIST NEWSGROUPS command.
 
-        Retrieves a list of newsgroups including the name and a short
-        description.
-
-        See <http://tools.ietf.org/html/rfc3977#section-7.6.6>
+        See <https://datatracker.ietf.org/doc/html/rfc3977#section-7.6.6>
 
         Args:
-            pattern: Glob matching newsgroups of interest.
+            pattern: Wildmat matching the newsgroups of interest.
 
         Yields:
-            A tuple containing the name, and description for the newsgroup, for
-            each newsgroup that matches the pattern.
+            The name and description of each matching newsgroup.
         """
         for line in self.list("NEWSGROUPS", args=pattern):
             parts = line.strip().split(None, 1)
@@ -954,15 +829,14 @@ class NNTPClient(BaseNNTPClient):
     def list_overview_fmt(self) -> Iterator[tuple[str, bool]]:
         """LIST OVERVIEW.FMT command.
 
-        Returns a description of the fields in the database for which it is
-        consistent.
-
-        See <https://tools.ietf.org/html/rfc3977#section-8.4>
+        See <https://datatracker.ietf.org/doc/html/rfc3977#section-8.4>
 
         Yields:
-            A 2-tuple of the name of the field and a boolean indicating whether
-            the the field name is included in the field data, for each field in
-            the database which is consistent, fields are yielded in order.
+            The name of each overview field, in order, and whether it is a "full"
+            field (its value includes the header name, e.g. Xref).
+
+        Raises:
+            NNTPDataError: If a line can't be parsed.
         """
         for line in self.list("OVERVIEW.FMT"):
             try:
@@ -978,13 +852,10 @@ class NNTPClient(BaseNNTPClient):
     def list_extensions(self) -> Iterator[str]:
         """LIST EXTENSIONS command.
 
-        Allows a client to determine which extensions are supported by the
-        server at any given time.
-
-        See <https://tools.ietf.org/html/draft-ietf-nntpext-base-20#section-5.3>
+        See <https://datatracker.ietf.org/doc/html/draft-ietf-nntpext-base-20#section-5.3>
 
         Yields:
-            The name of the extension of each of the available extensions.
+            Each extension name.
         """
         for line in self.list("EXTENSIONS", success=(202,)):
             yield line.strip()
@@ -992,20 +863,20 @@ class NNTPClient(BaseNNTPClient):
     def group(self, name: str) -> tuple[int, int, int, str]:
         """GROUP command.
 
-        Selects a newsgroup as the currently selected newsgroup and returns
-        summary information about it.
+        Selects a newsgroup.
 
-        See <https://tools.ietf.org/html/rfc3977#section-6.1.1>
+        See <https://datatracker.ietf.org/doc/html/rfc3977#section-6.1.1>
 
         Args:
-            name: The group name.
+            name: The newsgroup.
 
         Returns:
-            A 4-tuple of the estimated total articles in the group, the
-            articles numbers of the first and last article and the group name.
+            The estimated number of articles, the first and last article numbers,
+            and the group name.
 
         Raises:
-            NNTPReplyError: If no such newsgroup exists.
+            NNTPReplyError: If there is no such newsgroup.
+            NNTPDataError: If the reply can't be parsed.
         """
         args = name
 
@@ -1027,34 +898,33 @@ class NNTPClient(BaseNNTPClient):
     def next(self) -> tuple[int, str]:
         """NEXT command.
 
-        Sets the current article number to the next article in the current
-        newsgroup.
+        Moves to the next article in the selected newsgroup.
 
-        See <https://tools.ietf.org/html/rfc3977#section-6.1.4>
+        See <https://datatracker.ietf.org/doc/html/rfc3977#section-6.1.4>
 
         Returns:
-            A 2-tuple of the article number and message id.
+            The article number and message-id.
 
         Raises:
-            NNTPReplyError: If no such article exists or the currently selected
-                newsgroup is invalid.
+            NNTPReplyError: If there is no next article or no newsgroup selected.
+            NNTPDataError: If the reply can't be parsed.
         """
         return self._select("NEXT")
 
     def last(self) -> tuple[int, str]:
         """LAST command.
 
-        Sets the current article number to the previous article in the current
-        newsgroup.
+        Moves to the previous article in the selected newsgroup.
 
-        See <https://tools.ietf.org/html/rfc3977#section-6.1.3>
+        See <https://datatracker.ietf.org/doc/html/rfc3977#section-6.1.3>
 
         Returns:
-            A 2-tuple of the article number and message id.
+            The article number and message-id.
 
         Raises:
-            NNTPReplyError: If no such article exists or the currently selected
-                newsgroup is invalid.
+            NNTPReplyError: If there is no previous article or no newsgroup
+                selected.
+            NNTPDataError: If the reply can't be parsed.
         """
         return self._select("LAST")
 
@@ -1074,13 +944,12 @@ class NNTPClient(BaseNNTPClient):
 
         Each yEnc block is checked against its =yend trailer: the size, and
         pcrc32 for a part of a multipart post or crc32 otherwise. The whole
-        response is read before a mismatch is raised, so the connection stays
-        in sync.
+        response is read before a mismatch is raised, so the connection stays in
+        sync.
 
         Raises:
-            NNTPYEncError: If yEnc data does not match its trailer, or a
-                =ybegin has no =yend. The decoded body is in its data
-                attribute.
+            NNTPYEncError: If yEnc data does not match its trailer, or a =ybegin
+                has no =yend. The decoded body is in its data attribute.
         """
         body: list[bytes] = []
         decoder, size, multipart, open_block = YEnc(), 0, False, False
@@ -1122,28 +991,22 @@ class NNTPClient(BaseNNTPClient):
     ) -> tuple[int, HeaderDict, bytes]:
         """ARTICLE command.
 
-        Selects an article according to the arguments and presents the entire
-        article (that is, the headers, an empty line, and the body, in that
-        order) to the client.
-
-        See <https://tools.ietf.org/html/rfc3977#section-6.2.1>
+        See <https://datatracker.ietf.org/doc/html/rfc3977#section-6.2.1>
 
         Args:
-            msgid_article: A message-id as a string, or an article number as an
-                integer. A msgid_article of None (the default) uses the current
-                article.
-            decode: Force yenc decoding to be enabled or disabled. A value of
-                None (the default) attempts to determine this automatically.
+            msgid_article: A message-id or article number. None (the default)
+                uses the current article.
+            decode: Decode yEnc. None (the default) detects it from the Subject
+                header and the body.
 
         Returns:
-            A 3-tuple of the article number, the article headers, and the
-            article body. The headers are decoded to unicode, where as the body
-            is returned as bytes.
+            The article number, headers and body. The body is bytes.
 
         Raises:
-            NNTPReplyError: If no such article exists.
-            NNTPYEncError: If yEnc data fails its size or CRC check. The
-                decoded body is in its data attribute.
+            NNTPReplyError: If there is no such article.
+            NNTPDataError: If the reply or headers can't be parsed.
+            NNTPYEncError: If yEnc data fails its size or CRC check. The decoded
+                body is in its data attribute.
         """
         code, message = self.command("ARTICLE", _msgid_article(msgid_article))
         if code != 220:
@@ -1158,7 +1021,8 @@ class NNTPClient(BaseNNTPClient):
         # Headers and body come from one response: parse_headers() stops at
         # the blank line and _read_body() reads the rest.
         lines = self._info(code, message)
-        headers = utils.parse_headers(self._decode(lines))
+        with _data_errors("article headers"):
+            headers = utils.parse_headers(self._decode(lines))
 
         if decode is None and "yEnc" in headers.get("subject", ""):
             decode = True
@@ -1170,27 +1034,25 @@ class NNTPClient(BaseNNTPClient):
     def head(self, msgid_article: str | int | None = None) -> HeaderDict:
         """HEAD command.
 
-        Identical to the ARTICLE command except that only the headers are
-        presented.
-
-        See <https://tools.ietf.org/html/rfc3977#section-6.2.2>
+        See <https://datatracker.ietf.org/doc/html/rfc3977#section-6.2.2>
 
         Args:
-            msgid_article: A message-id as a string, or an article number as an
-                integer. A msgid_article of None (the default) uses the current
-                article.
+            msgid_article: A message-id or article number. None (the default)
+                uses the current article.
 
         Returns:
             The article headers.
 
         Raises:
-            NNTPReplyError: If no such article exists.
+            NNTPReplyError: If there is no such article.
+            NNTPDataError: If the headers can't be parsed.
         """
         code, message = self.command("HEAD", _msgid_article(msgid_article))
         if code != 221:
             raise NNTPReplyError(code, message)
 
-        return utils.parse_headers(self.info(code, message))
+        with _data_errors("article headers"):
+            return utils.parse_headers(self.info(code, message))
 
     def body(
         self,
@@ -1199,25 +1061,20 @@ class NNTPClient(BaseNNTPClient):
     ) -> bytes:
         """BODY command.
 
-        Identical to the ARTICLE command except that only the body is
-        presented.
-
-        See <https://tools.ietf.org/html/rfc3977#section-6.2.3>
+        See <https://datatracker.ietf.org/doc/html/rfc3977#section-6.2.3>
 
         Args:
-            msgid_article: A message-id as a string, or an article number as an
-                integer. A msgid_article of None (the default) uses the current
-                article.
-            decode: Force yenc decoding to be enabled or disabled. A value of
-                None (the default) attempts to determine this automatically.
+            msgid_article: A message-id or article number. None (the default)
+                uses the current article.
+            decode: Decode yEnc. None (the default) detects it from the body.
 
         Returns:
             The article body.
 
         Raises:
-            NNTPReplyError: If no such article exists.
-            NNTPYEncError: If yEnc data fails its size or CRC check. The
-                decoded body is in its data attribute.
+            NNTPReplyError: If there is no such article.
+            NNTPYEncError: If yEnc data fails its size or CRC check. The decoded
+                body is in its data attribute.
         """
         code, message = self.command("BODY", _msgid_article(msgid_article))
         if code != 222:
@@ -1256,27 +1113,19 @@ class NNTPClient(BaseNNTPClient):
     ) -> Iterator[tuple[int, str]]:
         """HDR command.
 
-        Provides access to specific fields from an article specified by
-        message-id, or from a specified article or range of articles in the
-        currently selected newsgroup.
-
-        See <https://tools.ietf.org/html/rfc3977#section-8.5>
+        See <https://datatracker.ietf.org/doc/html/rfc3977#section-8.5>
 
         Args:
-            header: The header field to retrieve.
-            msgid_range: A message-id as a string, or an article number as an
-                integer, or a tuple of specifying a range of article numbers in
-                the form (first, [last]) - if last is omitted then all articles
-                after first are included. A msgid_range of None (the default)
-                uses the current article.
+            header: The header or metadata field, e.g. "Subject" or ":bytes".
+            msgid_range: A message-id, an article number, or a (first,) or
+                (first, last) range. None (the default) uses the current article.
 
         Yields:
-            A 2-tuple giving the article number and value for the provided
-            header field for each article in the given range.
+            The article number and field value for each article.
 
         Raises:
-            NNTPDataError: If the response from the server is malformed.
-            NNTPReplyError: If no such article exists.
+            NNTPReplyError: If there is no such article.
+            NNTPDataError: If a line can't be parsed.
         """
         return self._hdr(header, msgid_range)
 
@@ -1285,10 +1134,7 @@ class NNTPClient(BaseNNTPClient):
         header: str,
         msgid_range: str | Range | None = None,
     ) -> Iterator[tuple[int, str]]:
-        """XHDR command.
-
-        See hdr().
-        """
+        """XHDR command, the RFC 2980 form of HDR. See hdr()."""
         return self._hdr(header, msgid_range, verb="XHDR")
 
     def xzhdr(
@@ -1296,10 +1142,7 @@ class NNTPClient(BaseNNTPClient):
         header: str,
         msgid_range: str | Range | None = None,
     ) -> Iterator[tuple[int, str]]:
-        """XZHDR command.
-
-        The compressed version of XHDR. See hdr().
-        """
+        """XZHDR command, a compressed XHDR. See hdr()."""
         return self._hdr(header, msgid_range, verb="XZHDR")
 
     @cached_property
@@ -1356,28 +1199,19 @@ class NNTPClient(BaseNNTPClient):
     ) -> Iterator[tuple[int, HeaderDict]]:
         """XOVER command.
 
-        The XOVER command returns information from the overview database for
-        the article(s) specified.
-
-        <http://tools.ietf.org/html/rfc2980#section-2.8>
+        See <https://datatracker.ietf.org/doc/html/rfc2980#section-2.8>
 
         Args:
-            range: An article number as an integer, or a tuple of specifying a
-                range of article numbers in the form (first, [last]). If last
-                is omitted then all articles after first are included. A range
-                of None (the default) uses the current article.
+            range: An article number, or a (first,) or (first, last) range. None
+                (the default) uses the current article.
 
         Yields:
-            A 2-tuple of the article number and a dictionary of the fields as
-            given by the overview database for each available article in the
-            specified range. The names of the fields that are returned are
-            determined using the LIST OVERVIEW.FMT command if the server
-            supports it, otherwise a fallback set of 'required' headers is
-            used.
+            The article number and overview fields of each article. Field names
+            come from overview_fmt; "full" fields have the header name removed.
 
         Raises:
-            NNTPReplyError: If no such article exists or the currently selected
-                newsgroup is invalid.
+            NNTPReplyError: If there is no such article or no newsgroup selected.
+            NNTPDataError: If a line can't be parsed.
         """
         return self._xover(range)
 
@@ -1385,10 +1219,7 @@ class NNTPClient(BaseNNTPClient):
         self,
         range: Range | None = None,
     ) -> Iterator[tuple[int, HeaderDict]]:
-        """XZVER command.
-
-        The compressed version of XOVER. See xover().
-        """
+        """XZVER command, a compressed XOVER. See xover()."""
         return self._xover(range, verb="XZVER")
 
     def xpat(
@@ -1399,24 +1230,21 @@ class NNTPClient(BaseNNTPClient):
     ) -> Iterator[str]:
         """XPAT command.
 
-        Used to retrieve specific headers from specific articles, based on
-        pattern matching on the contents of the header.
+        Finds articles whose header matches a pattern.
 
-        See <https://tools.ietf.org/html/rfc2980#section-2.9>
+        See <https://datatracker.ietf.org/doc/html/rfc2980#section-2.9>
 
         Args:
-            header: The header field to match against.
-            msgid_range: An article number as an integer, or a tuple of
-                specifying a range of article numbers in the form (first,
-                [last]). If last is omitted then all articles after first are
-                included.
+            header: The header to match against.
+            msgid_range: A message-id, an article number, or a (first,) or
+                (first, last) range.
+            *pattern: The wildmat pattern(s), passed to the server as given.
 
         Yields:
-            Not sure of the format but the value of the header will be part of
-            it.
+            Each matching line: the article number and header value.
 
         Raises:
-            NNTPReplyError: If no such article exists.
+            NNTPReplyError: If there is no such article.
         """
         args = " ".join([header, utils.unparse_msgid_range(msgid_range), *pattern])
 
@@ -1428,7 +1256,20 @@ class NNTPClient(BaseNNTPClient):
             yield line.strip()
 
     def xfeature_compress_gzip(self, terminator: bool = False) -> bool:
-        """XFEATURE COMPRESS GZIP command."""
+        """XFEATURE COMPRESS GZIP command.
+
+        Asks the server to gzip-compress multi-line responses from now on; they
+        are decompressed transparently.
+
+        Args:
+            terminator: Put the terminating line inside the compressed data.
+
+        Returns:
+            True.
+
+        Raises:
+            NNTPReplyError: If the server does not support it.
+        """
         args = "TERMINATOR" if terminator else None
 
         code, message = self.command("XFEATURE COMPRESS GZIP", args)
@@ -1444,39 +1285,26 @@ class NNTPClient(BaseNNTPClient):
     ) -> str | bool:
         """POST command.
 
-        Args:
-            headers: A dictionary of headers.
-            body: A string, bytes or binary file-like object containing the post
-                content.
+        See <https://datatracker.ietf.org/doc/html/rfc3977#section-6.3.1>
 
-        Raises:
-            NNTPDataError: If binary characters are detected in the message
-                body.
-            ValueError: If a header name or value is invalid (see
-                utils.unparse_headers). Nothing is sent to the server.
+        LF line endings in the body are sent as CRLF and lines starting with "."
+        are dot-stuffed.
+
+        Args:
+            headers: The article headers.
+            body: The body as str, bytes, or an iterable of byte lines such as a
+                binary file.
 
         Returns:
-            A value that evaluates to true if posting the message succeeded.
-            (See note for further details)
+            The message-id if the server's reply includes one (common, though not
+            standard), otherwise True.
 
-        Note:
-            '\\n' line terminators are converted to '\\r\\n'
-
-        Note:
-            Though not part of any specification it is common for usenet
-            servers to return the message-id for a successfully posted message.
-            If a message-id is identified in the response from the server then
-            that message-id will be returned by the function, otherwise True
-            will be returned.
-
-        Note:
-            Due to protocol issues if illegal characters are found in the body
-            the message will still be posted but will be truncated as soon as
-            an illegal character is detected. No illegal characters will be
-            sent to the server. For information illegal characters include
-            embedded carriage returns '\\r' and null characters '\\0' (because
-            this function converts line feeds to CRLF, embedded line feeds are
-            not an issue)
+        Raises:
+            ValueError: If a header name or value is invalid (see
+                utils.unparse_headers). Nothing is sent to the server.
+            NNTPDataError: If a body line contains CR or NUL, which NNTP cannot
+                carry. The article is still posted, cut short before that line.
+            NNTPReplyError: If posting is not allowed or fails.
         """
         # TODO: Set some default headers? Require some headers?
 
@@ -1508,8 +1336,11 @@ class NNTPClient(BaseNNTPClient):
         return True
 
     def _send_article(self, hdrs: str, body: str | bytes | Iterable[bytes]) -> bool:
-        """Send headers, body and terminator. Returns True if the body was cut
-        short at a line containing CR or NUL."""
+        """Send headers, body and terminator.
+
+        Returns:
+            True if the body was cut short at a line containing CR or NUL.
+        """
         if isinstance(body, str):
             body = body.encode(self.encoding, self.errors)
         if isinstance(body, bytes):

@@ -1,5 +1,5 @@
 """
-An NNTP library - a bit more useful than the nntplib one (hopefully).
+Parsing and formatting helpers for NNTP arguments and responses.
 Copyright (C) 2013-2020  Byron Platt
 
 This program is free software: you can redistribute it and/or modify
@@ -36,22 +36,16 @@ if TYPE_CHECKING:
 
 
 def unparse_range(obj: Range) -> str:
-    """Unparse a range argument.
+    """Format an article range as a command argument.
 
     Args:
-        obj: An article range. There are a number of valid formats; an integer
-            specifying a single article or a tuple specifying an article range.
-            If the range doesn't specify a last article then all articles from
-            the first specified article up to the current last article for the
-            group are included.
+        obj: An article number, (first,) for first onwards, or (first, last).
 
     Returns:
-        The range as a string that can be used by an NNTP command.
+        The range, e.g. "4678", "4245-" or "4245-5234".
 
-    Note: Sample valid formats.
-        4678
-        (4245,)
-        (4245, 5234)
+    Raises:
+        ValueError: If obj is not one of those forms.
     """
     if isinstance(obj, int):
         return str(obj)
@@ -67,18 +61,16 @@ def unparse_range(obj: Range) -> str:
 
 
 def unparse_msgid_range(obj: str | Range) -> str:
-    """Unparse a message-id or range argument.
+    """Format a message-id or article range as a command argument.
 
     Args:
-        obj: A message id as a string or a range as specified by
-            unparse_range().
-
-    Raises:
-        ValueError: If obj is not a valid message id or range format. See
-            unparse_range() for valid range formats.
+        obj: A message-id, or a range as for unparse_range().
 
     Returns:
-        A message id or range as a string that can be used by an NNTP command.
+        The message-id unchanged, or the formatted range.
+
+    Raises:
+        ValueError: If obj is not a valid range.
     """
     if isinstance(obj, str):
         return obj
@@ -87,26 +79,19 @@ def unparse_msgid_range(obj: str | Range) -> str:
 
 
 def parse_newsgroup(line: str) -> Newsgroup:
-    """Parse a newsgroup info line to python types.
+    """Parse a LIST ACTIVE or NEWGROUPS line.
+
+    The fields are name, high water mark, low water mark and status (RFC 3977
+    section 7.6.3).
 
     Args:
-        line: An info response line containing newsgroup info.
-
-    Lines are in the LIST ACTIVE / NEWGROUPS format (RFC 3977 section 7.6.3):
-    name, high water mark, low water mark, status.
+        line: The response line.
 
     Returns:
-        A tuple of group name, low-water as integer, high-water as integer and
-        posting status.
+        The newsgroup.
 
     Raises:
-        ValueError: If the newsgroup info cannot be parsed.
-
-    Note:
-        Posting status is a character is one of (but not limited to):
-            "y" posting allowed
-            "n" posting not allowed
-            "m" posting is moderated
+        ValueError: If the line cannot be parsed.
     """
     parts = line.split()
     try:
@@ -120,18 +105,19 @@ def parse_newsgroup(line: str) -> Newsgroup:
 
 
 def parse_headers(obj: str | Iterable[str]) -> HeaderDict:
-    """Parse header lines up to the first blank line into a HeaderDict.
+    """Parse header lines up to the first blank line.
+
+    Continuation lines are unfolded. CRLF and LF line endings are accepted.
 
     Args:
-        obj: An iterable object including file-like objects.
+        obj: A string, or an iterable of lines such as a file.
 
     Returns:
-        An dictionary of headers. If a header is repeated then the last value
-        for that header is given.
+        The headers. If a header is repeated the last value wins.
 
     Raises:
-        ValueError: If the first line is a continuation line or the headers
-            cannot be parsed.
+        ValueError: If the first line is a continuation line or a line is not
+            a header.
     """
     if isinstance(obj, str):
         obj = StringIO(obj)
@@ -155,16 +141,16 @@ def parse_headers(obj: str | Iterable[str]) -> HeaderDict:
 
 
 def unparse_headers(hdrs: Mapping[str, str]) -> str:
-    """Format a dictionary of headers as an article header block.
-
-    Args:
-        hdrs: A dictionary of headers.
+    """Format headers as an article header block, ending with a blank line.
 
     Values may be folded (RFC 5322 section 2.2.3): a line break followed by a
     space or tab. LF line breaks in folds are sent as CRLF.
 
+    Args:
+        hdrs: The headers.
+
     Returns:
-        The headers as a string that can be used in an NNTP POST.
+        The header block.
 
     Raises:
         ValueError: If a name is not printable ASCII without ":", or a value
@@ -183,16 +169,16 @@ def unparse_headers(hdrs: Mapping[str, str]) -> str:
 
 
 def parse_date(value: str | int) -> datetime:
-    """Parse a date as returned by the `DATE` command.
+    """Parse a date as returned by the DATE command.
 
     Args:
-        value: A date in the format `YYYYMMDDHHMMSS`.
+        value: A date in the format YYYYMMDDHHMMSS.
 
     Returns:
-        A datetime object representing the date with timezone set to UTC.
+        The date, in UTC.
 
     Raises:
-        ValueError: If the value cannot be parsed.
+        ValueError: If the value is not a valid date in that format.
     """
     text = str(value)
     if len(text) != 14 or not (text.isascii() and text.isdigit()):
@@ -201,15 +187,15 @@ def parse_date(value: str | int) -> datetime:
 
 
 def parse_epoch(value: str | int) -> datetime:
-    """Parse a Unix timestamp, as used by `LIST ACTIVE.TIMES`.
+    """Parse a Unix timestamp, as used by LIST ACTIVE.TIMES.
 
     Args:
         value: Seconds since the epoch.
 
     Returns:
-        A datetime object representing the date with timezone set to UTC.
+        The time, in UTC.
 
     Raises:
-        ValueError: If the value cannot be parsed.
+        ValueError: If the value is not an integer.
     """
     return datetime.fromtimestamp(int(value), tz=timezone.utc)

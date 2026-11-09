@@ -83,6 +83,7 @@ def connect(monkeypatch: pytest.MonkeyPatch, chunk: int) -> Connect:
 
 
 def yenc_encode(data: bytes, line_length: int = 128) -> bytes:
+    """yEnc-encode data into CRLF-terminated lines (no =ybegin/=yend)."""
     lines, line = [], bytearray()
     for b in data:
         e = (b + 42) & 0xFF
@@ -551,7 +552,8 @@ def yenc_body(
 ) -> bytes:
     """A BODY response holding plain as yEnc, single or one part of many.
 
-    trailer overrides the =yend keywords (default: correct size and CRC).
+    trailer overrides the =yend keywords (default: correct size and CRC);
+    end=False leaves out the =yend line.
     """
     if part is None:
         begin = f"=ybegin line=128 size={len(plain)} name=my file.bin\r\n"

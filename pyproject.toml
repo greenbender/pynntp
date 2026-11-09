@@ -136,9 +136,8 @@ exclude_patterns = [
     "LICENSE.rst",
     "Thumbs.db",
 ]
-extensions = ["autoapi.extension", "myst_parser"]
+extensions = ["autoapi.extension", "myst_parser", "sphinx.ext.napoleon"]
 
-html_static_path = ["_static"]
 html_theme = "alabaster"
 
 myst_enable_extensions = [

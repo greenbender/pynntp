@@ -1,10 +1,19 @@
+"""Types used in the NNTP client API."""
+
 from enum import Enum
 from typing import NamedTuple, Union
 
+# An article number, (first,) for first onwards, or (first, last).
 Range = Union[int, tuple[int], tuple[int, int]]
 
 
 class Newsgroup(NamedTuple):
+    """A newsgroup, as returned by LIST ACTIVE and NEWGROUPS.
+
+    status is the posting status, usually "y" (allowed), "n" (not allowed)
+    or "m" (moderated).
+    """
+
     name: str
     low: int
     high: int
@@ -12,6 +21,8 @@ class Newsgroup(NamedTuple):
 
 
 class SSLMode(str, Enum):
+    """How a TLS connection is established."""
+
     IMPLICIT = "implicit"
     """Establish secure connection immediately.
     You need to use a different port (usually 563) in this mode.
