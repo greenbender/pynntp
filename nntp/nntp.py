@@ -132,6 +132,8 @@ def _url_bool(name: str, value: str) -> bool:
 # RFC 3977 section 3.2: a status code is three digits, the first 1-5
 _STATUS_CODE_RE = re.compile(rb"[1-5][0-9]{2}")
 
+_MESSAGE_ID_RE = re.compile(r"<[^\s<>]+@[^\s<>]+>")
+
 # RFC 3977 3.4.1 (and 2980 for 282): replies followed by a multi-line block.
 # 211 is left out: it is multi-line only for LISTGROUP.
 _MULTILINE = frozenset({100, 101, 215, 220, 221, 222, 224, 225, 230, 231, 282})
@@ -149,7 +151,8 @@ def _timestamp(timestamp: datetime) -> str:
     """
     if timestamp.tzinfo:
         timestamp = timestamp.astimezone(UTC)
-    return timestamp.strftime("%Y%m%d %H%M%S GMT")
+    # %Y isn't zero-padded to 4 digits on every platform
+    return f"{timestamp.year:04d}{timestamp:%m%d %H%M%S} GMT"
 
 
 @contextmanager
@@ -1205,6 +1208,8 @@ class NNTPClient(BaseNNTPClient):
         for line in self.info(code, message):
             with _data_errors("LISTGROUP line"):
                 number = int(line)
+            if number < 1:
+                raise NNTPDataError(f'Invalid LISTGROUP line "{line}"')
             yield number
 
     def next(self) -> tuple[int, str]:
@@ -1266,9 +1271,12 @@ class NNTPClient(BaseNNTPClient):
 
         parts = message.split(None, 2)
         try:
-            return int(parts[0]), parts[1]
-        except (IndexError, ValueError) as e:
-            raise NNTPDataError(f'Invalid {verb} status "{message}"') from e
+            number, message_id = int(parts[0]), parts[1]
+        except (IndexError, ValueError):
+            number, message_id = -1, ""
+        if number < 0 or not _MESSAGE_ID_RE.fullmatch(message_id):
+            raise NNTPDataError(f'Invalid {verb} status "{message}"')
+        return number, message_id
 
     def _read_body(self, lines: Iterator[bytes], decode: bool | None = None) -> bytes:
         """Read an article body, decoding yEnc if decode is set or detected.
@@ -1453,11 +1461,15 @@ class NNTPClient(BaseNNTPClient):
     def _number_values(
         self, verb: str, code: int, message: str, *, yz: bool = False
     ) -> Iterator[tuple[int, str]]:
-        """Parse "<article number> <value>" lines, as sent by HDR and XPAT."""
+        """Parse "<article number> <value>" lines, as sent by HDR and XPAT.
+
+        A row starting with a message-id (older XHDR by message-id) gets 0.
+        """
         for line in self.info(code, message, yz=yz):
             parts = line.rstrip("\r\n").split(None, 1)
             try:
-                number = int(parts[0])
+                # Older servers start rows for a message-id with the id, not 0
+                number = 0 if parts[0].startswith("<") else int(parts[0])
             except (IndexError, ValueError) as e:
                 raise NNTPDataError(f"Invalid {verb} response") from e
             yield number, parts[1] if len(parts) > 1 else ""
@@ -1688,12 +1700,9 @@ class NNTPClient(BaseNNTPClient):
         hdrs = utils.unparse_headers(headers or {})
         message = self._transfer("POST", None, hdrs, body, ready=340, done=240)
 
-        # return message-id possible
-        message_id = message.split(None, 1)[0] if message else ""
-        if message_id.startswith("<") and message_id.endswith(">"):
-            return message_id
-
-        return True
+        # Servers often include the message-id, e.g. INN's "Article received <id>"
+        match = _MESSAGE_ID_RE.search(message)
+        return match.group() if match else True
 
     def ihave(
         self,

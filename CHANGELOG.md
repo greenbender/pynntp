@@ -41,6 +41,15 @@ Found by go-while (#102).
   failed to parse.
 - XZVER/XZHDR: a DEFLATE stream that ends early raises `NNTPDataError` instead
   of silently dropping the last, partial row.
+- `post()` returned `True` for INN's `240 Article received <id>`: the
+  message-id was only looked for in the first word. It is now found anywhere
+  in the reply.
+- STAT, NEXT and LAST reject a negative article number or a missing or
+  malformed message-id; LISTGROUP rejects article numbers below 1.
+- XHDR by message-id accepts the older `<id> value` rows, giving article
+  number 0 as HDR does.
+- NEWGROUPS and NEWNEWS zero-pad years before 1000 (`%Y` is not padded on
+  every platform).
 
 ## 3.1.0 - 2026-11-09
 

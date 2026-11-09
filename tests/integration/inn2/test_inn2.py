@@ -96,12 +96,10 @@ def test_post(newsgroup: str) -> None:
         "Newsgroups": newsgroup,
     }
     with nntp.NNTPClient("localhost") as nntp_client:
-        assert (
-            nntp_client.post(
-                headers=headers, body=f"This is a test post to {newsgroup}"
-            )
-            is True
-        )
+        message_id = nntp_client.post(headers, f"This is a test post to {newsgroup}")
+        # INN replies "240 Article received <id>"
+        assert isinstance(message_id, str)
+        assert nntp_client.stat(message_id)[1] == message_id
 
 
 @pytest.mark.parametrize("newsgroup", ["local.general", "local.test", "junk"])
