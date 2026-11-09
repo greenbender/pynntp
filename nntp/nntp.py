@@ -19,7 +19,6 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 from __future__ import annotations
 
 import io
-import os
 import re
 import socket
 import ssl
@@ -62,6 +61,7 @@ __all__ = [
 # then ">"
 _MESSAGE_ID_RE = re.compile(r"<[!-=?-~]{1,248}>")
 
+_MAX_COMMAND = 512  # RFC 3977 3.1: command line length, including CRLF
 _SEND_SIZE = 0x10000  # Batch POST body lines into writes of about this size
 _SPOOL_SIZE = 0x100000  # Articles larger than this are prepared on disk
 
@@ -182,6 +182,7 @@ class BaseNNTPClient:
         timeout: int = 30,
         use_ssl: bool = False,
         ssl_mode: SSLMode = SSLMode.IMPLICIT,
+        ssl_context: ssl.SSLContext | None = None,
     ) -> None:
         """Connect to the server and read the welcome message.
 
@@ -189,10 +190,13 @@ class BaseNNTPClient:
             host: Server hostname.
             port: Server port.
             username: Username, sent if the server asks for authentication.
+                Without TLS it is sent in clear text, as is the password.
             password: Password, sent if the server asks for authentication.
             timeout: Socket timeout in seconds.
             use_ssl: Use TLS.
             ssl_mode: IMPLICIT (TLS from the start, usually port 563) or STARTTLS.
+            ssl_context: TLS settings, e.g. to trust a private CA. Defaults to
+                ssl.create_default_context(), which verifies the certificate.
 
         Raises:
             OSError: On socket or TLS errors.
@@ -204,6 +208,7 @@ class BaseNNTPClient:
         self._timeout = timeout
         self._use_ssl = use_ssl
         self._ssl_mode = ssl_mode
+        self._ssl_context = ssl_context
         self._connect()
 
     def _connect(self) -> None:
@@ -228,6 +233,9 @@ class BaseNNTPClient:
                 code, message = self.command("STARTTLS")
                 if code != 382:
                     raise NNTPReplyError(code, message)
+                if len(self._buffer):
+                    # Data sent before TLS must not be read as if protected
+                    raise NNTPProtocolError("Unexpected data after STARTTLS reply")
                 self._enable_tls(host)
         except BaseException:
             self.close()
@@ -259,10 +267,7 @@ class BaseNNTPClient:
             raise
 
     def _enable_tls(self, host: str) -> None:
-        context = ssl.create_default_context()
-        if "PYNNTP_TLS_INSECURE" in os.environ:
-            context.check_hostname = False
-            context.verify_mode = ssl.CERT_NONE
+        context = self._ssl_context or ssl.create_default_context()
         self.socket = context.wrap_socket(
             self.socket,
             server_hostname=host,
@@ -524,14 +529,16 @@ class BaseNNTPClient:
             raise NNTPError(
                 f"{cmd.split()[0]} is not allowed after COMPRESS (RFC 8054)"
             )
-        cmd += "\r\n"
+        line = (cmd + "\r\n").encode(self.encoding)
+        if len(line) > _MAX_COMMAND:
+            raise ValueError(f"Command longer than {_MAX_COMMAND} octets: {cmd!r}")
 
         with self._sync():
-            self._send(cmd.encode(self.encoding))
+            self._send(line)
             try:
                 return self.status()
             except NNTPTemporaryError as e:
-                if e.code != 480:
+                if e.code != 480 or not self.username:
                     raise
                 if self._deflate is not None:
                     # RFC 8054: never authenticate on a compressed connection
@@ -579,6 +586,7 @@ class NNTPClient(BaseNNTPClient):
         timeout: int = 30,
         use_ssl: bool = False,
         ssl_mode: SSLMode = SSLMode.IMPLICIT,
+        ssl_context: ssl.SSLContext | None = None,
         reader: bool = True,
     ) -> None:
         """Connect to the server and, by default, enter reader mode.
@@ -587,10 +595,13 @@ class NNTPClient(BaseNNTPClient):
             host: Server hostname.
             port: Server port.
             username: Username, sent if the server asks for authentication.
+                Without TLS it is sent in clear text, as is the password.
             password: Password, sent if the server asks for authentication.
             timeout: Socket timeout in seconds.
             use_ssl: Use TLS.
             ssl_mode: IMPLICIT (TLS from the start, usually port 563) or STARTTLS.
+            ssl_context: TLS settings, e.g. to trust a private CA. Defaults to
+                ssl.create_default_context(), which verifies the certificate.
             reader: Send MODE READER after connecting, and after reconnect().
 
         Raises:
@@ -606,6 +617,7 @@ class NNTPClient(BaseNNTPClient):
             timeout=timeout,
             use_ssl=use_ssl,
             ssl_mode=ssl_mode,
+            ssl_context=ssl_context,
         )
 
     def _connect(self) -> None:
@@ -931,9 +943,10 @@ class NNTPClient(BaseNNTPClient):
                 raise NNTPDataError("Invalid LIST OVERVIEW.FMT")
             if suffix and not name:
                 name, suffix = suffix, name
-            if suffix and suffix != "full":
+            full = suffix.lower() == "full"  # ABNF strings ignore case
+            if suffix and not full:
                 raise NNTPDataError("Invalid LIST OVERVIEW.FMT")
-            yield (name, suffix == "full")
+            yield (name, full)
 
     def list_extensions(self) -> Iterator[str]:
         """LIST EXTENSIONS command.

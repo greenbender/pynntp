@@ -13,7 +13,7 @@ import pytest
 import nntp
 from nntp.headerdict import HeaderDict
 from nntp.nntp import NNTPSyncError
-from nntp.types import Newsgroup
+from nntp.types import Newsgroup, SSLMode
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -948,3 +948,43 @@ def test_gzip_response_inside_compress(connect: Connect) -> None:
     client, _ = connect(WELCOME + MODE_READER + server)
     client.compress()
     _check_xover(list(client.xover((1, 2))))
+
+
+def test_starttls_rejects_data_after_reply(connect: Connect, chunk: int) -> None:
+    # A man-in-the-middle appends a fake reply to the plaintext 382. If it
+    # arrives in a later read it goes to the TLS handshake instead, and fails.
+    if chunk < 64:
+        pytest.skip("The injected reply must arrive in the same read")
+    injected = b"200 hi\r\n382 go ahead\r\n211 1 1 1 fake.group\r\n"
+    with pytest.raises(nntp.NNTPProtocolError, match="after STARTTLS"):
+        connect(injected, use_ssl=True, ssl_mode=SSLMode.STARTTLS)
+    assert FakeSocket.last.closed
+
+
+def test_480_without_username_raises(connect: Connect) -> None:
+    client, sock = connect(WELCOME + MODE_READER + b"480 auth required\r\n")
+    sock.sent = b""
+    with pytest.raises(nntp.NNTPTemporaryError) as info:
+        client.date()
+    assert info.value.code == 480
+    assert sock.sent == b"DATE\r\n"  # No bare AUTHINFO USER
+
+
+def test_command_line_limit(connect: Connect) -> None:
+    client, sock = connect(WELCOME + MODE_READER + b"211 1 1 1 g\r\n")
+    sock.sent = b""
+    with pytest.raises(ValueError, match="longer than 512"):
+        client.group("g" * 505)  # "GROUP " + 505 + CRLF = 513 octets
+    assert sock.sent == b""
+    client.group("g" * 504)  # Exactly 512 octets is allowed
+    assert len(sock.sent) == 512
+
+
+def test_overview_fmt_full_is_case_insensitive(connect: Connect) -> None:
+    fmt = b"215 fmt\r\nSubject:\r\n:bytes\r\nXref:FULL\r\n.\r\n"
+    client, _ = connect(WELCOME + MODE_READER + fmt)
+    assert list(client.list_overview_fmt()) == [
+        ("Subject", False),
+        ("bytes", False),
+        ("Xref", True),
+    ]

@@ -1,8 +1,8 @@
 import email.utils
 import os
+import ssl
 import time
 from datetime import UTC, datetime, timedelta
-from unittest import mock
 
 import pytest
 
@@ -56,17 +56,33 @@ def test_nntp_client_without_ssl() -> None:
         assert newsgroups == DEFAULT_NEWGROUPS
 
 
-@mock.patch.dict(os.environ, {"PYNNTP_TLS_INSECURE": "1"})
+def insecure_context() -> ssl.SSLContext:
+    """TLS without certificate checks, for the test server's self-signed cert."""
+    context = ssl.create_default_context()
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE
+    return context
+
+
+def test_tls_verifies_certificate_by_default() -> None:
+    with pytest.raises(ssl.SSLCertVerificationError):
+        nntp.NNTPClient("localhost", 563, use_ssl=True)
+
+
 def test_nntp_client_with_ssl() -> None:
-    with nntp.NNTPClient("localhost", 563, use_ssl=True) as nntp_client:
+    with nntp.NNTPClient(
+        "localhost", 563, use_ssl=True, ssl_context=insecure_context()
+    ) as nntp_client:
         newsgroups = set(nntp_client.list_newsgroups())
         assert newsgroups == DEFAULT_NEWGROUPS
 
 
-@mock.patch.dict(os.environ, {"PYNNTP_TLS_INSECURE": "1"})
 def test_nntp_client_with_ssl_starttls() -> None:
     with nntp.NNTPClient(
-        "localhost", use_ssl=True, ssl_mode=SSLMode.STARTTLS
+        "localhost",
+        use_ssl=True,
+        ssl_mode=SSLMode.STARTTLS,
+        ssl_context=insecure_context(),
     ) as nntp_client:
         newsgroups = set(nntp_client.list_newsgroups())
         assert newsgroups == DEFAULT_NEWGROUPS
