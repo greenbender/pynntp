@@ -32,6 +32,22 @@ def test_post_header_surrogateescape(connect: Connect) -> None:
     assert b"Subject: caf\xe9\r\n" in sock.sent
 
 
+@pytest.mark.parametrize(
+    ("reply", "result"),
+    [
+        (b"240 Article received <new@id>", "<new@id>"),  # INN
+        (b"240 <new@id> posted", "<new@id>"),
+        (b"240 article posted ok", True),
+        (b"240", True),
+    ],
+)
+def test_post_message_id_from_reply(
+    connect: Connect, reply: bytes, result: str | bool
+) -> None:
+    client, _ = connect(WELCOME + MODE_READER + b"340 send\r\n" + reply + b"\r\n")
+    assert client.post({"Subject": "hi"}, b"x\n") == result
+
+
 def test_post_bad_header_sends_nothing(connect: Connect) -> None:
     client, sock = connect(WELCOME + MODE_READER)
     sock.sent = b""
