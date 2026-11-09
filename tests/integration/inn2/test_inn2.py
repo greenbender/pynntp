@@ -232,3 +232,18 @@ def test_xpat() -> None:
         _, first, last, _ = nntp_client.group("local.test")
         matches = list(nntp_client.xpat("Subject", (first, last), "*local.test*"))
         assert (1, "Test post to local.test") in matches
+
+
+@pytest.mark.parametrize(
+    "url", ["nntp://localhost", "nntps://localhost", "nntp+starttls://localhost"]
+)
+def test_from_url(url: str) -> None:
+    with nntp.NNTPClient.from_url(url, ssl_context=insecure_context()) as nntp_client:
+        assert set(nntp_client.list_newsgroups()) == DEFAULT_NEWGROUPS
+
+
+def test_from_url_with_options() -> None:
+    url = "nntp://localhost?timeout=5&reader=false"
+    with nntp.NNTPClient.from_url(url) as nntp_client:
+        assert nntp_client.socket.gettimeout() == 5
+        assert nntp_client.date().year >= 2024

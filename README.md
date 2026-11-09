@@ -47,6 +47,18 @@ TLS certificates are verified;
 pass `ssl_context=` (an `ssl.SSLContext`) to trust a private CA or change other
 TLS settings. Leaving the `with` block sends QUIT.
 
+Or connect from a URL, such as one held in an environment variable. The schemes
+are `nntp://`, `nntps://` (or `snews://`) and `nntp+starttls://`:
+
+```python
+client = nntp.NNTPClient.from_url("nntps://user@news.example.com", password=secret)
+```
+
+The username and password come from the URL's user info, and the query can set
+`timeout` (seconds, or `none`) and `reader` (`true`/`false`), for example
+`?timeout=10&reader=false`. Keyword arguments override the URL. Passing the
+password as an argument keeps it out of the URL, which tends to end up in logs.
+
 ### Browsing a group
 
 ```python
