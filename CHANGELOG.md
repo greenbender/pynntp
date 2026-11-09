@@ -42,6 +42,10 @@
 
 ### Added
 
+- `NNTPClient.from_url()` connects from a URL such as
+  `nntps://user:password@news.example.com` (schemes `nntp`, `nntps`/`snews` and
+  `nntp+starttls`). The query can set `timeout` and `reader`; keyword
+  arguments override the URL.
 - `port` defaults to 563 with implicit TLS (119 otherwise), and `timeout`
   accepts a float or `None` (#123).
 - `ssl_context` argument for TLS settings, such as a private CA (#123).

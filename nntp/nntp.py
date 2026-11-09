@@ -20,15 +20,17 @@ from __future__ import annotations
 
 import io
 import itertools
+import math
 import re
 import socket
 import ssl
 import tempfile
+import urllib.parse
 import zlib
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from functools import cached_property
-from typing import IO, TYPE_CHECKING, Literal
+from typing import IO, TYPE_CHECKING, Literal, TypedDict
 
 from . import utils
 from .fifo import BytesFifo
@@ -39,13 +41,14 @@ from .yenc import YEnc, check_trailer, parse_keywords
 if TYPE_CHECKING:
     from collections.abc import Iterable, Iterator, Mapping
     from types import TracebackType
-    from typing import Self
+    from typing import Self, Unpack
     from zlib import _Compress, _Decompress
 
     from .types import Newsgroup, Range
 
 __all__ = [
     "BaseNNTPClient",
+    "FromURLOptions",
     "NNTPClient",
     "NNTPDataError",
     "NNTPError",
@@ -61,6 +64,70 @@ __all__ = [
 # RFC 3977 section 3.6: "<", 1-248 printable US-ASCII characters except ">",
 # then ">"
 _MESSAGE_ID_RE = re.compile(r"<[!-=?-~]{1,248}>")
+
+# URL scheme -> (use_ssl, ssl_mode) for NNTPClient.from_url()
+_URL_SCHEMES = {
+    "nntp": (False, SSLMode.IMPLICIT),
+    "nntps": (True, SSLMode.IMPLICIT),
+    "snews": (True, SSLMode.IMPLICIT),  # The historic name for nntps
+    "nntp+starttls": (True, SSLMode.STARTTLS),
+}
+_URL_QUERY = ("timeout", "reader")
+_URL_TRUE = ("1", "true", "yes", "on")
+_URL_FALSE = ("0", "false", "no", "off")
+
+
+class FromURLOptions(TypedDict, total=False):
+    """Keyword arguments of NNTPClient.from_url(); each overrides the URL."""
+
+    username: str
+    password: str
+    timeout: float | None
+    ssl_context: ssl.SSLContext | None
+    reader: bool
+
+
+def _url_settings(parts: urllib.parse.SplitResult) -> FromURLOptions:
+    """The constructor settings given by a from_url() URL."""
+    query = urllib.parse.parse_qs(parts.query, keep_blank_values=True)
+    if unknown := set(query) - set(_URL_QUERY):
+        raise ValueError(f"Unsupported URL query parameter: {sorted(unknown)}")
+    if repeated := sorted(name for name, values in query.items() if len(values) > 1):
+        raise ValueError(f"Repeated URL query parameter: {repeated}")
+
+    settings: FromURLOptions = {}
+    if parts.username is not None:
+        settings["username"] = urllib.parse.unquote(parts.username)
+    if parts.password is not None:
+        settings["password"] = urllib.parse.unquote(parts.password)
+    if "timeout" in query:
+        settings["timeout"] = _url_timeout(query["timeout"][0])
+    if "reader" in query:
+        settings["reader"] = _url_bool("reader", query["reader"][0])
+    return settings
+
+
+def _url_timeout(value: str) -> float | None:
+    """Parse a URL timeout: seconds, or "none" to wait forever."""
+    if value.lower() == "none":
+        return None
+    try:
+        seconds = float(value)
+    except ValueError:
+        pass
+    else:
+        if 0 < seconds < math.inf:  # Also rejects nan
+            return seconds
+    raise ValueError(f"Invalid URL timeout: {value!r}")
+
+
+def _url_bool(name: str, value: str) -> bool:
+    if value.lower() in _URL_TRUE:
+        return True
+    if value.lower() in _URL_FALSE:
+        return False
+    raise ValueError(f"Invalid URL {name}: {value!r}")
+
 
 _MAX_COMMAND = 512  # RFC 3977 3.1: command line length, including CRLF
 _SEND_SIZE = 0x10000  # Batch POST body lines into writes of about this size
@@ -621,6 +688,59 @@ class NNTPClient(BaseNNTPClient):
             use_ssl=use_ssl,
             ssl_mode=ssl_mode,
             ssl_context=ssl_context,
+        )
+
+    @classmethod
+    def from_url(cls, url: str, **options: Unpack[FromURLOptions]) -> Self:
+        """Connect using a URL such as "nntps://user:password@news.example.com".
+
+        Schemes: "nntp" (plain text, port 119), "nntps" or "snews" (implicit
+        TLS, port 563) and "nntp+starttls" (STARTTLS, port 119). A port in the
+        URL overrides the default.
+
+        The username and password come from the URL's user info
+        ("user:password@", percent-encoded). The query can set timeout
+        (seconds, or "none") and reader ("true"/"false", "1"/"0", "yes"/"no" or
+        "on"/"off").
+
+        Keyword arguments override the URL, and the constructor's defaults
+        apply to anything set by neither. Passing the password as an argument
+        keeps it out of the URL, which tends to end up in logs.
+
+        Args:
+            url: The server URL. It may not have a path or fragment.
+            **options: username, password, timeout, ssl_context and reader, as
+                for the constructor.
+
+        Raises:
+            ValueError: If the URL is not valid for NNTP: an unknown scheme or
+                query parameter, a repeated parameter, a path or fragment, no
+                host, or a bad port, timeout or reader value. The message never
+                includes the URL, which may hold a password.
+        """
+        parts = urllib.parse.urlsplit(url)
+        scheme = parts.scheme.lower()
+        if scheme not in _URL_SCHEMES:
+            raise ValueError(f"Unsupported URL scheme: {parts.scheme!r}")
+        if not parts.hostname:
+            raise ValueError("NNTP URL has no host")
+        if parts.path not in ("", "/") or parts.fragment:
+            raise ValueError("NNTP URL may not have a path or fragment")
+        if parts.port == 0:  # Accessing port raises ValueError if it is invalid
+            raise ValueError("NNTP URL port may not be 0")
+
+        # The options override the URL; anything set by neither is left to the
+        # constructor's defaults.
+        settings = _url_settings(parts)
+        settings.update(options)
+
+        use_ssl, ssl_mode = _URL_SCHEMES[scheme]
+        return cls(
+            parts.hostname,
+            parts.port,
+            use_ssl=use_ssl,
+            ssl_mode=ssl_mode,
+            **settings,
         )
 
     def _connect(self) -> None:
