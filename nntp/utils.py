@@ -28,6 +28,8 @@ from .types import Newsgroup, Range
 
 # RFC 5322 field name: printable ASCII except ":".
 _HEADER_NAME_RE = re.compile(r"[!-9;-~]+")
+# A folded header value continues after a line break followed by whitespace.
+_HEADER_FOLD_RE = re.compile(r"\r?\n(?=[ \t])")
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping
@@ -158,20 +160,24 @@ def unparse_headers(hdrs: Mapping[str, str]) -> str:
     Args:
         hdrs: A dictionary of headers.
 
+    Values may be folded (RFC 5322 section 2.2.3): a line break followed by a
+    space or tab. LF line breaks in folds are sent as CRLF.
+
     Returns:
         The headers as a string that can be used in an NNTP POST.
 
     Raises:
         ValueError: If a name is not printable ASCII without ":", or a value
-            contains CR, LF or NUL. Either would let the header end early and
-            inject extra headers or body text.
+            contains NUL or a CR/LF that is not part of a fold. Either would
+            let the header end early and inject extra headers or body text.
     """
     lines = []
     for name, value in hdrs.items():
         if not _HEADER_NAME_RE.fullmatch(name):
             raise ValueError(f"Invalid header name: {name!r}")
-        if any(c in value for c in "\r\n\0"):
+        if any(c in _HEADER_FOLD_RE.sub("", value) for c in "\r\n\0"):
             raise ValueError(f"Invalid header value for {name}: {value!r}")
+        value = _HEADER_FOLD_RE.sub("\r\n", value)
         lines.append(f"{name}: {value}\r\n")
     return "".join(lines) + "\r\n"
 

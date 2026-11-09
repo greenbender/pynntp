@@ -134,11 +134,28 @@ def test_unparse_headers() -> None:
 
 
 @pytest.mark.parametrize(
+    ("value", "wire"),
+    [
+        ("one\r\n two", "one\r\n two"),
+        ("one\r\n\ttwo\r\n three", "one\r\n\ttwo\r\n three"),
+        ("one\n two", "one\r\n two"),  # LF fold sent as CRLF
+    ],
+)
+def test_unparse_headers_folded(value: str, wire: str) -> None:
+    text = unparse_headers({"X-Long": value})
+    assert text == f"X-Long: {wire}\r\n\r\n"
+    assert parse_headers(text) == {"X-Long": wire.replace("\r\n", "")}
+
+
+@pytest.mark.parametrize(
     "headers",
     [
         {"Subject": "hi\r\nNewsgroups: alt.spam"},
         {"Subject": "hi\nX: y"},
         {"Subject": "hi\r"},
+        {"Subject": "hi\r\n"},  # Would end the headers early
+        {"Subject": "hi\r \r\nX: y"},  # Bare CR is not a fold
+        {"Subject": "hi\r\n \r\n"},
         {"Subject": "hi\0"},
         {"Bad Name": "x"},
         {"Bad:Name": "x"},
