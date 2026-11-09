@@ -27,18 +27,14 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-      - run: pipx install poetry
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.x"
+      - uses: astral-sh/setup-uv@v7
 
       - name: Bump version
         run: |
-          poetry version ${{ github.event.release.tag_name }}
+          uv version --no-sync ${{ github.event.release.tag_name }}
 
       - name: Build package
-        run: poetry build
+        run: uv build
 
       - name: Publish package
         uses: pypa/gh-action-pypi-publish@release/v1
@@ -57,18 +53,14 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-      - run: pipx install poetry
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.x"
+      - uses: astral-sh/setup-uv@v7
 
       - name: Bump version
         run: |
-          poetry version ${{ github.event.release.tag_name }}
+          uv version --no-sync ${{ github.event.release.tag_name }}
 
       - name: Build package
-        run: poetry build
+        run: uv build
 
       - name: Publish package
         uses: pypa/gh-action-pypi-publish@release/v1
