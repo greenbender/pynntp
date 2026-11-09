@@ -18,3 +18,7 @@ dist/
 # Sphinx
 autoapi/
 docs/_build/
+
+# coverage
+.coverage
+htmlcov/
