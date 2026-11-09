@@ -489,3 +489,12 @@ def test_480_logs_in_and_retries(connect: Connect) -> None:
     sock.sent = b""
     assert client.date().year == 2024
     assert sock.sent == b"DATE\r\nAUTHINFO USER u\r\nAUTHINFO PASS p\r\nDATE\r\n"
+
+
+def test_login_unexpected_multiline_reply_is_read(connect: Connect) -> None:
+    server = b"222 1 <a@b>\r\n111 19990101000000\r\n.\r\n" + DATE
+    client, _ = connect(WELCOME + MODE_READER + server)
+    with pytest.raises(nntp.NNTPReplyError) as info:
+        client.login("u", "p")
+    assert info.value.code == 222
+    assert client.date().year == 2024  # Not 1999 from the unread block
