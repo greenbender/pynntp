@@ -18,12 +18,16 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 from io import StringIO
 from typing import TYPE_CHECKING
 
 from .headerdict import HeaderDict
 from .types import Newsgroup, Range
+
+# RFC 5322 field name: printable ASCII except ":".
+_HEADER_NAME_RE = re.compile(r"[!-9;-~]+")
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping
@@ -86,6 +90,9 @@ def parse_newsgroup(line: str) -> Newsgroup:
     Args:
         line: An info response line containing newsgroup info.
 
+    Lines are in the LIST ACTIVE / NEWGROUPS format (RFC 3977 section 7.6.3):
+    name, high water mark, low water mark, status.
+
     Returns:
         A tuple of group name, low-water as integer, high-water as integer and
         posting status.
@@ -102,41 +109,16 @@ def parse_newsgroup(line: str) -> Newsgroup:
     parts = line.split()
     try:
         name = parts[0]
-        low = int(parts[1])
-        high = int(parts[2])
+        high = int(parts[1])
+        low = int(parts[2])
         status = parts[3]
     except (IndexError, ValueError):
         raise ValueError("Invalid newsgroup info")
     return Newsgroup(name, low, high, status)
 
 
-def _parse_header(line: str) -> str | tuple[str, str] | None:
-    """Parse a header line.
-
-    Args:
-        line: A header line as a string.
-
-    Returns:
-        None if end of headers is found. A string giving the continuation line
-        if a continuation is found. A tuple of name, value when a header line
-        is found.
-
-    Raises:
-        ValueError: If the line cannot be parsed as a header.
-    """
-    # End of headers
-    if not line or line == "\r\n":
-        return None
-    # Continuation line
-    if line[0] in " \t":
-        return line.rstrip()
-    name, value = line.split(":", 1)
-    return name.strip(), value.strip()
-
-
 def parse_headers(obj: str | Iterable[str]) -> HeaderDict:
-    """Parse a string a iterable object (including file like objects) to a
-    python dictionary.
+    """Parse header lines up to the first blank line into a HeaderDict.
 
     Args:
         obj: An iterable object including file-like objects.
@@ -153,48 +135,52 @@ def parse_headers(obj: str | Iterable[str]) -> HeaderDict:
         obj = StringIO(obj)
     hdrs: list[tuple[str, str]] = []
     for line in obj:
-        hdr = _parse_header(line)
-        if not hdr:
+        # A blank line (CRLF or LF) ends the headers.
+        if not line.rstrip("\r\n"):
             break
-        if isinstance(hdr, str):
+        # A line starting with whitespace continues the previous header.
+        if line[0] in " \t":
             if not hdrs:
                 raise ValueError("First header is a continuation")
-            hdrs[-1] = hdrs[-1][0], hdrs[-1][1] + hdr
+            name, value = hdrs[-1]
+            hdrs[-1] = name, value + line.rstrip()
             continue
-        hdrs.append(hdr)
+        name, sep, value = line.partition(":")
+        if not sep:
+            raise ValueError(f"Invalid header line: {line!r}")
+        hdrs.append((name.strip(), value.strip()))
     return HeaderDict(hdrs)
 
 
-def _unparse_header(name: str, value: str) -> str:
-    """Parse a name value tuple to a header string.
-
-    Args:
-        name: The header name.
-        value: the header value.
-
-    Returns:
-        The header as a string.
-    """
-    return f"{name}: {value}" + "\r\n"
-
-
 def unparse_headers(hdrs: Mapping[str, str]) -> str:
-    """Parse a dictionary of headers to a string.
+    """Format a dictionary of headers as an article header block.
 
     Args:
         hdrs: A dictionary of headers.
 
     Returns:
         The headers as a string that can be used in an NNTP POST.
+
+    Raises:
+        ValueError: If a name is not printable ASCII without ":", or a value
+            contains CR, LF or NUL. Either would let the header end early and
+            inject extra headers or body text.
     """
-    return "".join([_unparse_header(n, v) for n, v in hdrs.items()]) + "\r\n"
+    lines = []
+    for name, value in hdrs.items():
+        if not _HEADER_NAME_RE.fullmatch(name):
+            raise ValueError(f"Invalid header name: {name!r}")
+        if any(c in value for c in "\r\n\0"):
+            raise ValueError(f"Invalid header value for {name}: {value!r}")
+        lines.append(f"{name}: {value}\r\n")
+    return "".join(lines) + "\r\n"
 
 
 def parse_date(value: str | int) -> datetime:
     """Parse a date as returned by the `DATE` command.
 
     Args:
-        value: A date as a string in the format `YYYYMMDDHHMMSS`.
+        value: A date in the format `YYYYMMDDHHMMSS`.
 
     Returns:
         A datetime object representing the date with timezone set to UTC.
@@ -202,20 +188,17 @@ def parse_date(value: str | int) -> datetime:
     Raises:
         ValueError: If the value cannot be parsed.
     """
-    i = int(value)
-    M, S = divmod(i, 100)
-    H, M = divmod(M, 100)
-    d, H = divmod(H, 100)
-    m, d = divmod(d, 100)
-    Y, m = divmod(m, 100)
-    return datetime(Y % 10000, m, d, H, M, S, tzinfo=timezone.utc)
+    text = str(value)
+    if len(text) != 14 or not (text.isascii() and text.isdigit()):
+        raise ValueError(f"Invalid date: {value!r}")
+    return datetime.strptime(text, "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc)
 
 
 def parse_epoch(value: str | int) -> datetime:
-    """Parse a date as returned by the `DATE` command.
+    """Parse a Unix timestamp, as used by `LIST ACTIVE.TIMES`.
 
     Args:
-        line: An epoch date as a string.
+        value: Seconds since the epoch.
 
     Returns:
         A datetime object representing the date with timezone set to UTC.

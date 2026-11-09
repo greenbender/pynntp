@@ -109,9 +109,9 @@ def test_list_active(newsgroup: str) -> None:
         articles = nntp_client.list_active(newsgroup)
         for name, low, high, status in articles:
             assert name == newsgroup
-            assert low == 0 if newsgroup == "junk" else 1
-            assert high == 1
-            assert status == "n" if newsgroup == "junk" else "y"
+            # junk is empty (high < low); the others have the one test post.
+            assert (low, high) == ((1, 0) if newsgroup == "junk" else (1, 1))
+            assert status == ("n" if newsgroup == "junk" else "y")
 
 
 @pytest.mark.parametrize(

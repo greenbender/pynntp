@@ -244,6 +244,14 @@ def test_post(connect: Connect) -> None:
     assert sock.sent == b"POST\r\nSubject: hi\r\n\r\none\r\n..two\r\n.\r\n"
 
 
+def test_post_bad_header_sends_nothing(connect: Connect) -> None:
+    client, sock = connect(WELCOME + MODE_READER)
+    sock.sent = b""
+    with pytest.raises(ValueError, match="Invalid header value"):
+        client.post({"Subject": "hi\r\n.\r\nQUIT"}, b"body\n")
+    assert sock.sent == b""
+
+
 def test_post_illegal_chars(connect: Connect) -> None:
     client, sock = connect(WELCOME + MODE_READER + b"340 send\r\n" + b"240 ok\r\n")
     with pytest.raises(nntp.NNTPDataError):
