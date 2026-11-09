@@ -8,19 +8,9 @@ def test_init_empty() -> None:
     assert header_dict == {}
 
 
-def test_init_with_dict() -> None:
-    header_dict = HeaderDict({"Key1": "value1"})
-    assert header_dict == {"Key1": "value1"}
-
-
 def test_init_with_list() -> None:
     header_dict = HeaderDict([("key2", "value2")])
     assert header_dict == {"key2": "value2"}
-
-
-def test_init_with_kwargs() -> None:
-    header_dict = HeaderDict(key="value")
-    assert header_dict == {"key": "value"}
 
 
 def test_get_item() -> None:

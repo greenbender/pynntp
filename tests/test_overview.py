@@ -33,18 +33,6 @@ def test_xover_plain(connect: Connect) -> None:
 
 @pytest.mark.parametrize("terminator", [False, True])
 def test_xover_gzip(connect: Connect, terminator: bool) -> None:
-    if terminator:
-        payload = gzip.compress(XOVER_LINES + b".\r\n")
-    else:
-        payload = gzip.compress(XOVER_LINES) + b".\r\n"
-    client, _ = connect(
-        WELCOME + MODE_READER + OVERVIEW_FMT + b"224 ok COMPRESS=GZIP\r\n" + payload
-    )
-    check_xover(list(client.xover((1, 2))))
-
-
-@pytest.mark.parametrize("terminator", [False, True])
-def test_xover_gzip_next_reply_in_sync(connect: Connect, terminator: bool) -> None:
     # The gzip trailer can arrive after the decompressed terminator
     if terminator:
         payload = gzip.compress(XOVER_LINES + b".\r\n")
@@ -81,12 +69,6 @@ def test_xzver_truncated_stream(connect: Connect) -> None:
 def test_xzver(connect: Connect) -> None:
     client, _ = connect(WELCOME + MODE_READER + OVERVIEW_FMT + xzver_server())
     check_xover(list(client.xzver((1, 2))))
-
-
-def test_xzver_bad_crc(connect: Connect) -> None:
-    client, _ = connect(WELCOME + MODE_READER + OVERVIEW_FMT + xzver_server(crc=1))
-    with pytest.raises(nntp.NNTPDataError, match="CRC"):
-        list(client.xzver((1, 2)))
 
 
 def test_xover_full_field_and_empty_trailing(connect: Connect) -> None:
@@ -136,6 +118,7 @@ def test_xzhdr(connect: Connect) -> None:
     ("server", "match"),
     [
         (b"224 ok\r\nnot a ybegin line\r\n.\r\n", "Bad yEnc header"),
+        (xzver_server(crc=1), "CRC"),
         (b"224 ok\r\n=ybegin line=128 size=0 name=x\r\n.\r\n", "Missing yEnc trailer"),
         (yenczlib(b"224", XOVER_LINES, trailer="=yend size=1"), "trailer says 1"),
         (

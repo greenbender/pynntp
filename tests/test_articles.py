@@ -135,6 +135,13 @@ def test_yenc_text_outside_block_dropped(connect: Connect) -> None:
     assert client.body(1) == PLAIN
 
 
+def test_body_decode_forced_ybegin_prefix_is_not_a_block(connect: Connect) -> None:
+    server = b"222 1 <a@b>\r\n=ybeginners guide\r\n.\r\n"
+    client, _ = connect(WELCOME + MODE_READER + server)
+    with pytest.raises(nntp.NNTPYEncError, match="no =ybegin"):
+        client.body(1, decode=True)
+
+
 def test_body_ybegin_prefix_is_plain(connect: Connect) -> None:
     server = b"222 1 <a@b>\r\n=ybeginners guide\r\n.\r\n"
     client, _ = connect(WELCOME + MODE_READER + server)

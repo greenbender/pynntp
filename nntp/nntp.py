@@ -133,6 +133,7 @@ def _url_bool(name: str, value: str) -> bool:
 _STATUS_CODE_RE = re.compile(rb"[1-5][0-9]{2}")
 
 _MESSAGE_ID_RE = re.compile(r"<[^\s<>]+@[^\s<>]+>")
+_DIGITS_RE = re.compile(r"[0-9]+")
 
 # RFC 3977 3.4.1 (and 2980 for 282): replies followed by a multi-line block.
 # 211 is left out: it is multi-line only for LISTGROUP.
@@ -164,12 +165,11 @@ def _data_errors(what: str) -> Iterator[None]:
         raise NNTPDataError(f"Invalid {what}: {e}") from e
 
 
-def _after_compress_forbidden(cmd: str) -> bool:
-    """Whether RFC 8054 forbids cmd once COMPRESS is active."""
-    words = cmd.upper().split()
+def _after_compress_forbidden(words: list[str]) -> bool:
+    """Whether RFC 8054 forbids a command, given its first two words in upper case."""
     if words[:1] in (["AUTHINFO"], ["STARTTLS"], ["COMPRESS"]):
         return True
-    return words[:2] == ["MODE", "READER"]
+    return words == ["MODE", "READER"]
 
 
 def _msgid_article(msgid_article: str | int | None) -> str | None:
@@ -491,7 +491,7 @@ class BaseNNTPClient:
         header = next(lines, None)
         if header is None:  # An empty response
             return
-        if not header.startswith(b"=ybegin"):
+        if not header.startswith(b"=ybegin "):
             raise NNTPDataError("Bad yEnc header")
 
         buf, trailer, size = BytesFifo(), b"", 0
@@ -619,10 +619,8 @@ class BaseNNTPClient:
         words = cmd.upper().split()[:2]
         if any(c in cmd for c in "\r\n\0"):
             raise ValueError(f"Command contains CR, LF or NUL: {cmd!r}")
-        if self._deflate is not None and _after_compress_forbidden(cmd):
-            raise NNTPError(
-                f"{cmd.split()[0]} is not allowed after COMPRESS (RFC 8054)"
-            )
+        if self._deflate is not None and _after_compress_forbidden(words):
+            raise NNTPError(f"{words[0]} is not allowed after COMPRESS (RFC 8054)")
         line = (cmd + "\r\n").encode(self.encoding, self.errors)
         if len(line) > _MAX_COMMAND:
             raise ValueError(f"Command longer than {_MAX_COMMAND} octets: {cmd!r}")
@@ -676,14 +674,13 @@ class BaseNNTPClient:
             NNTPReplyError: If the login is rejected, or a password is asked
                 for and there is none.
         """
-        if username is not None:
-            self.username = username
-        if password is not None:
-            self.password = password
-        if not self.username:
+        username = self.username if username is None else username
+        password = self.password if password is None else password
+        if not username:
             raise ValueError("No username to log in with")
-        if any(c in self.username + self.password for c in "\r\n\0"):
+        if any(c in username + password for c in "\r\n\0"):
             raise ValueError("Username or password contains CR, LF or NUL")
+        self.username, self.password = username, password
         code, message = self._command("AUTHINFO USER", self.username)
         if code == 381:
             if not self.password:
@@ -1270,13 +1267,13 @@ class NNTPClient(BaseNNTPClient):
         _, message = self.command(verb, args, expect=223)
 
         parts = message.split(None, 2)
-        try:
-            number, message_id = int(parts[0]), parts[1]
-        except (IndexError, ValueError):
-            number, message_id = -1, ""
-        if number < 0 or not _MESSAGE_ID_RE.fullmatch(message_id):
+        if (
+            len(parts) < 2
+            or not _DIGITS_RE.fullmatch(parts[0])
+            or not _MESSAGE_ID_RE.fullmatch(parts[1])
+        ):
             raise NNTPDataError(f'Invalid {verb} status "{message}"')
-        return number, message_id
+        return int(parts[0]), parts[1]
 
     def _read_body(self, lines: Iterator[bytes], decode: bool | None = None) -> bytes:
         """Read an article body, decoding yEnc if decode is set or detected.
@@ -1335,7 +1332,7 @@ class NNTPClient(BaseNNTPClient):
                     encoded.append(line)
                 continue
             decode_pending()
-            if line.startswith(b"=ybegin"):
+            if line.startswith(b"=ybegin "):
                 decoder, size, open_block, seen_block = YEnc(), 0, True, True
                 multipart = "part" in parse_keywords(line)
             elif line.startswith(b"=yend"):
