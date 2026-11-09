@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import gzip
 import zlib
-from datetime import datetime, timedelta, timezone
-from typing import Callable
+from collections.abc import Callable
+from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
 
@@ -94,7 +94,7 @@ def dot_stuff(data: bytes) -> bytes:
 def test_status_codes(connect: Connect) -> None:
     client, sock = connect(WELCOME + MODE_READER + b"111 20240102030405\r\n")
     assert sock.sent == b"MODE READER\r\n"
-    assert client.date() == datetime(2024, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+    assert client.date() == datetime(2024, 1, 2, 3, 4, 5, tzinfo=UTC)
 
 
 @pytest.mark.parametrize(
@@ -286,7 +286,7 @@ def test_protocol_error_message_is_text(connect: Connect) -> None:
     "when",
     [
         datetime(2024, 1, 2, 3, 4, 5),  # noqa: DTZ001 - naive is taken as GMT
-        datetime(2024, 1, 2, 3, 4, 5, tzinfo=timezone.utc),
+        datetime(2024, 1, 2, 3, 4, 5, tzinfo=UTC),
         datetime(2024, 1, 2, 13, 4, 5, tzinfo=timezone(timedelta(hours=10))),
     ],
 )

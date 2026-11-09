@@ -1,7 +1,7 @@
-from enum import Enum
-from typing import NamedTuple, Union
+from enum import StrEnum
+from typing import NamedTuple
 
-Range = Union[int, tuple[int], tuple[int, int]]
+Range = int | tuple[int] | tuple[int, int]
 
 
 class Newsgroup(NamedTuple):
@@ -11,7 +11,7 @@ class Newsgroup(NamedTuple):
     status: str
 
 
-class SSLMode(str, Enum):
+class SSLMode(StrEnum):
     IMPLICIT = "implicit"
     """Establish secure connection immediately.
     You need to use a different port (usually 563) in this mode.

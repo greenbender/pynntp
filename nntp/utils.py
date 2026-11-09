@@ -19,7 +19,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 from __future__ import annotations
 
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from io import StringIO
 from typing import TYPE_CHECKING
 
@@ -197,7 +197,7 @@ def parse_date(value: str | int) -> datetime:
     text = str(value)
     if len(text) != 14 or not (text.isascii() and text.isdigit()):
         raise ValueError(f"Invalid date: {value!r}")
-    return datetime.strptime(text, "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc)
+    return datetime.strptime(text, "%Y%m%d%H%M%S").replace(tzinfo=UTC)
 
 
 def parse_epoch(value: str | int) -> datetime:
@@ -212,4 +212,4 @@ def parse_epoch(value: str | int) -> datetime:
     Raises:
         ValueError: If the value cannot be parsed.
     """
-    return datetime.fromtimestamp(int(value), tz=timezone.utc)
+    return datetime.fromtimestamp(int(value), tz=UTC)

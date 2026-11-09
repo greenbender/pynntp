@@ -1,5 +1,5 @@
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest import mock
 
 import pytest
@@ -132,14 +132,14 @@ def test_article_in_empty_group() -> None:
         assert info.value.code == 420
 
 
-SINCE = datetime(2000, 1, 1, tzinfo=timezone.utc)
+SINCE = datetime(2000, 1, 1, tzinfo=UTC)
 
 
 def test_newgroups() -> None:
     with nntp.NNTPClient("localhost") as nntp_client:
         names = {group.name for group in nntp_client.newgroups(SINCE)}
         assert {"local.general", "local.test"} <= names
-        tomorrow = datetime.now(timezone.utc) + timedelta(days=1)
+        tomorrow = datetime.now(UTC) + timedelta(days=1)
         assert list(nntp_client.newgroups(tomorrow)) == []
 
 

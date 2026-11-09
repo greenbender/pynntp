@@ -23,7 +23,7 @@ import os
 import socket
 import ssl
 import zlib
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from functools import cached_property
 from typing import TYPE_CHECKING, Literal
 
@@ -36,8 +36,7 @@ from .yenc import YEnc, trailer_crc32
 if TYPE_CHECKING:
     from collections.abc import Iterable, Iterator, Mapping
     from types import TracebackType
-
-    from typing_extensions import Self
+    from typing import Self
 
     from .types import Newsgroup, Range
 
@@ -64,7 +63,7 @@ def _timestamp(timestamp: datetime) -> str:
     reject "UTC".
     """
     if timestamp.tzinfo:
-        timestamp = timestamp.astimezone(timezone.utc)
+        timestamp = timestamp.astimezone(UTC)
     return timestamp.strftime("%Y%m%d %H%M%S GMT")
 
 

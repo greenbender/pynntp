@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from io import StringIO
 from typing import TYPE_CHECKING
 
@@ -174,7 +174,7 @@ def test_unparse_headers_rejects_injection(headers: dict[str, str]) -> None:
     ["20220101144001", 20220101144001],
 )
 def test_parse_date(date: str | int) -> None:
-    assert parse_date(date) == datetime(2022, 1, 1, 14, 40, 1, tzinfo=timezone.utc)
+    assert parse_date(date) == datetime(2022, 1, 1, 14, 40, 1, tzinfo=UTC)
 
 
 @pytest.mark.parametrize(
@@ -195,7 +195,7 @@ def test_parse_date_invalid(date: str) -> None:
 
 @pytest.mark.parametrize("epoch", ["1641048001", 1641048001])
 def test_parse_epoch(epoch: str | int) -> None:
-    assert parse_epoch(epoch) == datetime(2022, 1, 1, 14, 40, 1, tzinfo=timezone.utc)
+    assert parse_epoch(epoch) == datetime(2022, 1, 1, 14, 40, 1, tzinfo=UTC)
 
 
 def test_parse_epoch_invalid() -> None:
