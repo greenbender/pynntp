@@ -20,6 +20,14 @@
 
 ### Fixed
 
+Found by go-while (#102).
+
+- 3.2.0 added a second message-id pattern requiring `@`, which replaced the
+  RFC 3977 one: STAT, NEXT and LAST rejected valid message-ids without `@`
+  (served by INN with `laxmid`), and `ihave()` accepted non-ASCII message-ids
+  and ones over 250 octets. The RFC 3977 pattern is used everywhere again.
+- `login()` left an unexpected multi-line reply to AUTHINFO unread, so the
+  next command read its data as a reply.
 - An iterator abandoned before `reconnect()` no longer marks the new
   connection broken when it is closed or garbage-collected.
 - An empty line in a LIST NEWSGROUPS response raised `IndexError` instead of

@@ -537,3 +537,12 @@ def test_iterator_abandoned_before_reconnect(connect: Connect) -> None:
     del groups  # Closing the old iterator must not break the new connection
     gc.collect()
     assert client.date().year == 2024
+
+
+def test_login_unexpected_multiline_reply_is_read(connect: Connect) -> None:
+    server = b"222 1 <a@b>\r\n111 19990101000000\r\n.\r\n" + DATE
+    client, _ = connect(WELCOME + MODE_READER + server)
+    with pytest.raises(nntp.NNTPReplyError) as info:
+        client.login("u", "p")
+    assert info.value.code == 222
+    assert client.date().year == 2024  # Not 1999 from the unread block
