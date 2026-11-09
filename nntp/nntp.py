@@ -39,6 +39,7 @@ from .yenc import YEnc, check_trailer, parse_keywords, trailer_crc32
 if TYPE_CHECKING:
     from collections.abc import Iterable, Iterator, Mapping
     from types import TracebackType
+    from zlib import _Compress, _Decompress
 
     from typing_extensions import Self
 
@@ -84,6 +85,15 @@ def _data_errors(what: str) -> Iterator[None]:
         yield
     except ValueError as e:
         raise NNTPDataError(f"Invalid {what}: {e}") from e
+
+
+def _after_compress_forbidden(cmd: str) -> bool:
+    """Whether RFC 8054 forbids cmd once COMPRESS is active."""
+    words = cmd.upper().split()
+    return words[0] in ("AUTHINFO", "STARTTLS", "COMPRESS") or words[:2] == [
+        "MODE",
+        "READER",
+    ]
 
 
 def _msgid_article(msgid_article: str | int | None) -> str | None:
@@ -202,6 +212,8 @@ class BaseNNTPClient:
         self._buffer = BytesFifo()
         self._reading = False  # A multi-line response is being read
         self._broken = False  # Closed, or unread/unknown data on the socket
+        self._deflate: _Compress | None = None  # Set by COMPRESS (RFC 8054)
+        self._inflate: _Decompress | None = None
 
         host = self._address[0]
         self.socket = socket.create_connection(self._address, timeout=self._timeout)
@@ -267,7 +279,28 @@ class BaseNNTPClient:
         data = self.socket.recv(size)
         if not data:
             raise NNTPError("Failed to read from socket")
-        self._buffer.write(data)
+        self._buffer.write(self._decompress(data))
+
+    def _decompress(self, data: bytes) -> bytes:
+        """Inflate received data if COMPRESS is active."""
+        if self._inflate is None:
+            return data
+        try:
+            data = self._inflate.decompress(data)
+        except zlib.error as e:
+            self.close()  # RFC 8054: close on corrupt compressed data
+            raise NNTPDataError("Decompression failed") from e
+        if self._inflate.unused_data:
+            # The stream lasts as long as the connection; an end means corruption
+            self.close()
+            raise NNTPDataError("Decompression failed: data after end of stream")
+        return data
+
+    def _send(self, data: bytes) -> None:
+        """Write data to the socket, compressed if COMPRESS is active."""
+        if self._deflate is not None:
+            data = self._deflate.compress(data) + self._deflate.flush(zlib.Z_SYNC_FLUSH)
+        self.socket.sendall(data)
 
     def _line(self) -> Iterator[bytes]:
         """Yield lines from the buffer, reading from the socket when it runs out."""
@@ -488,15 +521,24 @@ class BaseNNTPClient:
         cmd = f"{verb} {args}" if args else verb
         if any(c in cmd for c in "\r\n\0"):
             raise ValueError(f"Command contains CR, LF or NUL: {cmd!r}")
+        if self._deflate is not None and _after_compress_forbidden(cmd):
+            raise NNTPError(
+                f"{cmd.split()[0]} is not allowed after COMPRESS (RFC 8054)"
+            )
         cmd += "\r\n"
 
         with self._sync():
-            self.socket.sendall(cmd.encode(self.encoding))
+            self._send(cmd.encode(self.encoding))
             try:
                 return self.status()
             except NNTPTemporaryError as e:
                 if e.code != 480:
                     raise
+                if self._deflate is not None:
+                    # RFC 8054: never authenticate on a compressed connection
+                    raise NNTPTemporaryError(
+                        e.code, f"{e.message} (can't authenticate after COMPRESS)"
+                    ) from e
 
         code, message = self.command("AUTHINFO USER", self.username)
         if code == 381:
@@ -633,6 +675,36 @@ class NNTPClient(BaseNNTPClient):
             raise NNTPReplyError(code, message)
 
         return code == 200
+
+    def compress(self) -> None:
+        """COMPRESS DEFLATE command.
+
+        Compresses everything sent and received on this connection from now
+        on: commands, replies and articles. Use it after MODE READER and
+        any login; once it is active, AUTHINFO, STARTTLS, MODE READER and
+        COMPRESS are refused, and a server asking for a login (480) raises
+        rather than being sent credentials. reconnect() does not restore it.
+
+        INN before 2.7.2 can hang on POST or IHAVE over COMPRESS without TLS.
+
+        See <https://datatracker.ietf.org/doc/html/rfc8054>
+
+        Raises:
+            NNTPError: If compression (COMPRESS or TLS-level) is already active.
+            NNTPReplyError: If the server refuses (403, or 502 if unavailable).
+        """
+        tls_compression = getattr(self.socket, "compression", None)
+        if tls_compression is not None and tls_compression():
+            raise NNTPError("TLS-level compression is already active (RFC 8054)")
+        code, message = self.command("COMPRESS", "DEFLATE")
+        if code != 206:
+            raise NNTPReplyError(code, message)
+        self._deflate = zlib.compressobj(wbits=-15)
+        self._inflate = zlib.decompressobj(wbits=-15)
+        # Compression starts right after the 206 line, so anything already
+        # buffered behind it is compressed too.
+        if pending := self._buffer.read():
+            self._buffer.write(self._decompress(pending))
 
     def quit(self) -> None:
         """QUIT command.
@@ -1482,7 +1554,7 @@ class NNTPClient(BaseNNTPClient):
 
             with self._sync():
                 while chunk := article.read(_SEND_SIZE):
-                    self.socket.sendall(chunk)
+                    self._send(chunk)
                 code, message = self.status()
 
         if code != done:

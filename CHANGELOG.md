@@ -32,6 +32,8 @@
 ### Added
 
 - `ihave()` for the IHAVE command (#42).
+- `compress()` for RFC 8054 COMPRESS DEFLATE, compressing the whole
+  connection (#41).
 - `over()`, `stat()` and `listgroup()` for the RFC 3977 OVER, STAT and
   LISTGROUP commands (#43, #45, #46).
 - `reconnect()` reopens the connection with the same settings (#116).
