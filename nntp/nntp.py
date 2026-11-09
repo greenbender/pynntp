@@ -461,6 +461,16 @@ class BaseNNTPClient:
                     break
                 yield line[1:] if line.startswith(b".") else line
 
+        # With TERMINATOR, the end of the gzip stream can follow the terminator
+        while not inflate.eof:
+            try:
+                inflate.decompress(self._read())
+            except zlib.error as e:
+                raise NNTPDataError("Decompression failed") from e
+            buf.write(inflate.unused_data)
+        # Anything left over belongs to the next reply
+        self._buffer.write(buf.read())
+
     def _info_yenczlib(self) -> Iterator[bytes]:
         """Yield the lines of a yEnc-encoded, zlib-compressed response.
 
@@ -469,7 +479,7 @@ class BaseNNTPClient:
 
         Raises:
             NNTPDataError: If the yEnc header or trailer is bad, the size or CRC
-                check fails or decompression fails.
+                check fails, or decompression fails or ends early.
         """
         decoder = YEnc()
         inflate = zlib.decompressobj(-15)
@@ -501,6 +511,8 @@ class BaseNNTPClient:
             raise NNTPDataError("Missing yEnc trailer")
         if mismatch := check_trailer(trailer, size, decoder.crc32, part=False):
             raise NNTPDataError(f"Bad yEnc data: {mismatch}")
+        if not inflate.eof:
+            raise NNTPDataError("Decompression failed: compressed data is truncated")
 
     def _info(self, code: int, message: str, yz: bool = False) -> Iterator[bytes]:
         """Return the lines of a multi-line response as bytes.
@@ -1262,7 +1274,7 @@ class NNTPClient(BaseNNTPClient):
         """Read an article body, decoding yEnc if decode is set or detected.
 
         Detection: the body is yEnc if its first non-blank line starts with
-        "=y". Every path reads the response to its end.
+        "=ybegin ". Every path reads the response to its end.
 
         Raises:
             NNTPYEncError: As for _decode_yenc().
@@ -1271,7 +1283,7 @@ class NNTPClient(BaseNNTPClient):
             return self._decode_yenc(lines) if decode else b"".join(lines)
         blank: list[bytes] = []
         for line in lines:
-            if line.startswith(b"=y"):
+            if line.startswith(b"=ybegin "):
                 # Leading blank lines are not part of the yEnc data
                 return self._decode_yenc(itertools.chain([line], lines))
             if line != b"\r\n":
@@ -1286,13 +1298,18 @@ class NNTPClient(BaseNNTPClient):
         crc32 otherwise. The whole response is read before a mismatch is
         raised, so the connection stays in sync.
 
+        Only lines between =ybegin and =yend are decoded; text outside them,
+        such as a signature, is dropped.
+
         Raises:
-            NNTPYEncError: If yEnc data does not match its trailer, or a =ybegin
-                has no =yend. The decoded body is in its data attribute.
+            NNTPYEncError: If yEnc data does not match its trailer, a =ybegin
+                has no =yend, or there is no =ybegin. The decoded body is in
+                its data attribute.
         """
         body: list[bytes] = []
         encoded: list[bytes] = []  # yEnc data lines not yet decoded
         decoder, size, multipart, open_block = YEnc(), 0, False, False
+        seen_block = False
         error: str | None = None
 
         def decode_pending() -> None:
@@ -1306,11 +1323,12 @@ class NNTPClient(BaseNNTPClient):
 
         for line in lines:
             if line[:2] != b"=y":
-                encoded.append(line)
+                if open_block:  # Text outside blocks (e.g. a signature) is dropped
+                    encoded.append(line)
                 continue
             decode_pending()
             if line.startswith(b"=ybegin"):
-                decoder, size, open_block = YEnc(), 0, True
+                decoder, size, open_block, seen_block = YEnc(), 0, True, True
                 multipart = "part" in parse_keywords(line)
             elif line.startswith(b"=yend"):
                 mismatch = check_trailer(line, size, decoder.crc32, part=multipart)
@@ -1321,6 +1339,8 @@ class NNTPClient(BaseNNTPClient):
         decode_pending()
         if open_block:
             error = error or "missing =yend trailer"
+        elif not seen_block:
+            error = "no =ybegin line"
         data = b"".join(body)
         if error:
             raise NNTPYEncError(f"Bad yEnc data: {error}", data)

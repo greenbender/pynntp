@@ -111,3 +111,20 @@ def test_check_trailer() -> None:
     part = f"=yend size=5 part=2 pcrc32={crc:08x} crc32=deadbeef".encode()
     assert check_trailer(part, 5, crc, part=True) is None
     assert check_trailer(part, 5, crc, part=False) is None  # part= in the trailer
+
+
+@pytest.mark.parametrize(
+    ("trailer", "problem"),
+    [
+        (b"=yend crc32=00000000", "no valid size"),
+        (b"=yend size=", "no valid size"),
+        (b"=yend size=5x", "no valid size"),
+        (b"=yend size=-5", "no valid size"),
+        (b"=yend size=5 crc32=000000000", "invalid crc32"),  # 9 digits
+        (b"=yend size=5 crc32=xyz", "invalid crc32"),
+        (b"=yend size=5 part=x pcrc32=0", "invalid part"),
+        (b"=yend size=5 part=1 pcrc32=xyz", "invalid pcrc32"),
+    ],
+)
+def test_check_trailer_malformed(trailer: bytes, problem: str) -> None:
+    assert problem in (check_trailer(trailer, 5, 0, part=False) or "")
