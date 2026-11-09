@@ -32,6 +32,12 @@ docker stop inn
 
 The tests post articles, so use a fresh container for each run.
 
+## Fault-injection tests
+
+`tests/faults` runs pynntp against a fake server that splits, delays, drops
+and garbles its replies. These tests are opt-in and need Go; see
+[tests/faults/README.md](tests/faults/README.md).
+
 ## Docs
 
 ```sh
