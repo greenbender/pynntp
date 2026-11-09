@@ -1,5 +1,5 @@
 """
-Basic yEnc decoder.
+yEnc decoding and trailer checks.
 Copyright (C) 2013-2020  Byron Platt
 
 This program is free software: you can redistribute it and/or modify
@@ -90,10 +90,7 @@ def check_trailer(trailer: bytes, size: int, crc32: int, *, part: bool) -> str |
 
 
 class YEnc:
-    """A basic yEnc decoder.
-
-    Keeps track of the CRC32 value as data is decoded.
-    """
+    """A yEnc decoder that keeps a running CRC32 of the decoded data."""
 
     def __init__(self) -> None:
         self.crc32 = 0
@@ -106,7 +103,7 @@ class YEnc:
         "=") is completed by the next call.
 
         Args:
-            buf: yEnc encoded data, excluding the =ybegin/=ypart/=yend lines.
+            buf: yEnc data, without the =ybegin, =ypart and =yend lines.
 
         Returns:
             The decoded bytes.

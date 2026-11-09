@@ -26,18 +26,14 @@ def test_nntp_client() -> None:
 
 
 def test_context_manager() -> None:
-    """
-    https://docs.python.org/3/reference/datamodel.html#context-managers
-    """
+    """The client works as a context manager and sends QUIT on exit."""
     with nntp.NNTPClient("localhost") as nntp_client:
         newsgroups = set(nntp_client.list_newsgroups())
         assert newsgroups == DEFAULT_NEWGROUPS
 
 
 def test_context_manager_on_close() -> None:
-    """
-    nntp_client.close() should normally not be called within the context manager.
-    """
+    """close() inside the with block is safe; __exit__ does nothing more."""
     with nntp.NNTPClient("localhost") as nntp_client:
         newsgroups = set(nntp_client.list_newsgroups())
         assert newsgroups == DEFAULT_NEWGROUPS
@@ -45,9 +41,7 @@ def test_context_manager_on_close() -> None:
 
 
 def test_context_manager_on_quit() -> None:
-    """
-    nntp_client.quit() should normally not be called within the context manager.
-    """
+    """quit() inside the with block is safe; __exit__ does nothing more."""
     with nntp.NNTPClient("localhost") as nntp_client:
         newsgroups = set(nntp_client.list_newsgroups())
         assert newsgroups == DEFAULT_NEWGROUPS

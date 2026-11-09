@@ -1,3 +1,5 @@
+"""NNTP client library with streaming, compressed and yEnc responses."""
+
 from .nntp import (
     BaseNNTPClient,
     NNTPClient,
