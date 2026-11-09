@@ -270,6 +270,7 @@ def test_command_line_limit(connect: Connect) -> None:
         (b"", lambda c: c.capabilities()),
         (b"", lambda c: c.mode_reader()),
         (b"", lambda c: c.compress()),
+        (b"", lambda c: c.login("fred")),
         (b"", lambda c: c.quit()),
         (b"", lambda c: c.date()),
         (b"", lambda c: c.help()),

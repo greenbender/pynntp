@@ -55,8 +55,9 @@ def test_compress_refused_stays_plain(connect: Connect) -> None:
         lambda c: c.mode_reader(),
         lambda c: c.command("AUTHINFO USER", "fred"),
         lambda c: c.command("starttls"),
+        lambda c: c.login("fred", "pw"),
     ],
-    ids=["compress", "mode_reader", "authinfo", "starttls"],
+    ids=["compress", "mode_reader", "authinfo", "starttls", "login"],
 )
 def test_forbidden_after_compress(
     connect: Connect, call: Callable[[nntp.NNTPClient], object]

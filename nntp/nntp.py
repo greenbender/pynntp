@@ -1218,7 +1218,7 @@ class NNTPClient(BaseNNTPClient):
         try:
             return int(parts[0]), parts[1]
         except (IndexError, ValueError) as e:
-            raise NNTPDataError(f"Invalid {verb} status") from e
+            raise NNTPDataError(f'Invalid {verb} status "{message}"') from e
 
     def _read_body(self, lines: Iterator[bytes], decode: bool | None = None) -> bytes:
         """Read an article body, decoding yEnc if decode is set or detected.
