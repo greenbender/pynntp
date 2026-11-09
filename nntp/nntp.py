@@ -1369,6 +1369,8 @@ class NNTPClient(BaseNNTPClient):
         Raises:
             NNTPDataError: If binary characters are detected in the message
                 body.
+            ValueError: If a header name or value is invalid (see
+                utils.unparse_headers). Nothing is sent to the server.
 
         Returns:
             A value that evaluates to true if posting the message succeeded.
@@ -1393,15 +1395,17 @@ class NNTPClient(BaseNNTPClient):
             this function converts line feeds to CRLF, embedded line feeds are
             not an issue)
         """
+        # TODO: Set some default headers? Require some headers?
+
+        # Validate headers before starting the POST, so a bad header can't
+        # leave the server waiting for an article.
+        hdrs = utils.unparse_headers(headers or {})
+
         code, message = self.command("POST")
         if code != 340:
             raise NNTPReplyError(code, message)
 
-        # TODO: Set some default headers? Require some headers?
-
         # send headers
-        headers = headers or {}
-        hdrs = utils.unparse_headers(headers)
         self.socket.sendall(hdrs.encode(self.encoding))
 
         if isinstance(body, str):

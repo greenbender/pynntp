@@ -118,7 +118,6 @@ max-args = 8                                      # Default: 5
 
 [tool.ruff.lint.per-file-ignores]
 "nntp/nntp.py" = ["A002", "ARG002"]
-"nntp/utils.py" = ["N806"]
 "tests/*" = ["S101", "S106", "S311"]
 
 [tool.ruff.lint.flake8-builtins]
