@@ -4,6 +4,10 @@
 
 ### Breaking changes
 
+- Requires Python 3.11 or newer; 3.9 and 3.10 are end-of-life (#114).
+- `SSLMode` is a `StrEnum`: `str(SSLMode.IMPLICIT)` is now `"implicit"`
+  rather than `"SSLMode.IMPLICIT"`. Comparisons with strings are unchanged
+  (#114).
 - `list_active()` and `newgroups()` returned the low and high water marks
   swapped; RFC 3977 orders them high, low. `Newsgroup.low` and
   `Newsgroup.high` are now correct (#111).
@@ -39,7 +43,7 @@
 - `reconnect()` reopens the connection with the same settings (#116).
 - `NNTPYEncError`, and `NNTPSyncError` exported from `nntp` (#112, #117).
 - Folded header values in `post()` (#111).
-- Tested on Python 3.14, 3.14 free-threaded and 3.15 (#115).
+- Tested on Python 3.11 to 3.15, including 3.14 free-threaded (#114, #115).
 
 ### Fixed
 

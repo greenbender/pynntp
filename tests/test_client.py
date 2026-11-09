@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import gzip
 import zlib
-from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Callable
+from collections.abc import Callable
+from datetime import UTC, datetime, timedelta, timezone
+from typing import TYPE_CHECKING
 
 import pytest
 
@@ -110,7 +111,7 @@ def dot_stuff(data: bytes) -> bytes:
 def test_status_codes(connect: Connect) -> None:
     client, sock = connect(WELCOME + MODE_READER + b"111 20240102030405\r\n")
     assert sock.sent == b"MODE READER\r\n"
-    assert client.date() == datetime(2024, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+    assert client.date() == datetime(2024, 1, 2, 3, 4, 5, tzinfo=UTC)
 
 
 @pytest.mark.parametrize(
@@ -314,7 +315,7 @@ def test_protocol_error_message_is_text(connect: Connect) -> None:
     "when",
     [
         datetime(2024, 1, 2, 3, 4, 5),  # noqa: DTZ001 - naive is taken as GMT
-        datetime(2024, 1, 2, 3, 4, 5, tzinfo=timezone.utc),
+        datetime(2024, 1, 2, 3, 4, 5, tzinfo=UTC),
         datetime(2024, 1, 2, 13, 4, 5, tzinfo=timezone(timedelta(hours=10))),
     ],
 )
@@ -483,7 +484,7 @@ def test_error_reply_keeps_connection(connect: Connect) -> None:
     client, _ = connect(WELCOME + MODE_READER + b"411 no such group\r\n" + DATE)
     with pytest.raises(nntp.NNTPTemporaryError):
         client.group("alt.nope")
-    assert client.date() == datetime(2024, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+    assert client.date() == datetime(2024, 1, 2, 3, 4, 5, tzinfo=UTC)
 
 
 def test_complete_responses_keep_connection(connect: Connect) -> None:
@@ -665,7 +666,7 @@ def test_yenc_article_validated(connect: Connect) -> None:
         (b"215 list\r\nalt.test x 1 y\r\n.\r\n", lambda c: list(c.list_active())),
         (
             b"231 new\r\nalt.test\r\n.\r\n",
-            lambda c: list(c.newgroups(datetime.now(timezone.utc))),
+            lambda c: list(c.newgroups(datetime.now(UTC))),
         ),
         (b"221 1 <a@b>\r\nnot a header\r\n.\r\n", lambda c: c.head(1)),
         (b"220 1 <a@b>\r\n continuation\r\n\r\nbody\r\n.\r\n", lambda c: c.article(1)),

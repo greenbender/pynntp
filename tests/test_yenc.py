@@ -71,7 +71,8 @@ def test_decode_matches_reference() -> None:
         cuts = sorted(rng.sample(range(len(buf) + 1), min(3, len(buf) + 1)))
         decoder = YEnc()
         out = b"".join(
-            decoder.decode(buf[a:b]) for a, b in zip([0, *cuts], [*cuts, len(buf)])
+            decoder.decode(buf[a:b])
+            for a, b in zip([0, *cuts], [*cuts, len(buf)], strict=True)
         )
         assert out == _reference_decode(buf), buf
         assert decoder.crc32 == zlib.crc32(out)

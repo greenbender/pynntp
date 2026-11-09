@@ -24,7 +24,7 @@ Documentation, including the API reference:
 pip install pynntp
 ```
 
-or `uv add pynntp`. Requires Python 3.9 or newer. The package is imported
+or `uv add pynntp`. Requires Python 3.11 or newer. The package is imported
 as `nntp`.
 
 ## Quickstart

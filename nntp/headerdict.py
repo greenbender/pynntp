@@ -50,7 +50,8 @@ class HeaderDict(MutableMapping[str, str]):
         skips the per-item work of __setitem__.
         """
         self = cls.__new__(cls)
-        self._items = dict(zip(keys, zip(names, values)))
+        # A line may have fewer values than names; missing fields are left out.
+        self._items = dict(zip(keys, zip(names, values, strict=False), strict=False))
         return self
 
     def __getitem__(self, key: str) -> str:

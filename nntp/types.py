@@ -1,10 +1,10 @@
 """Types used in the NNTP client API."""
 
-from enum import Enum
-from typing import NamedTuple, Union
+from enum import StrEnum
+from typing import NamedTuple
 
 # An article number, (first,) for first onwards, or (first, last).
-Range = Union[int, tuple[int], tuple[int, int]]
+Range = int | tuple[int] | tuple[int, int]
 
 
 class Newsgroup(NamedTuple):
@@ -20,7 +20,7 @@ class Newsgroup(NamedTuple):
     status: str
 
 
-class SSLMode(str, Enum):
+class SSLMode(StrEnum):
     """How a TLS connection is established."""
 
     IMPLICIT = "implicit"
