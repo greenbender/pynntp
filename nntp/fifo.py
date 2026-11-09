@@ -18,128 +18,92 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Generic, TypeVar
-
-if TYPE_CHECKING:
-    from typing_extensions import Self
-
-__all__ = ["BytesFifo", "Fifo", "TextFifo"]
+__all__ = ["BytesFifo"]
 
 
+_EOL = b"\r\n"
+
+# Consumed data is only dropped once it is both this large and more than half
+# the buffer, so the copy cost is amortized O(1) per byte.
 _DISCARD_SIZE = 0xFFFF
 
 
-T = TypeVar("T", str, bytes)
+class BytesFifo:
+    """FIFO byte buffer that reads CRLF-terminated lines.
 
+    Writes are queued and only joined into the buffer on the next read, so
+    many small writes are cheap. Iterating yields complete lines and stops at
+    the first incomplete one; iteration can resume after more data is written.
+    """
 
-class Fifo(Generic[T]):
-    empty: T
-    eol: T
-
-    def __init__(self, data: T | None = None) -> None:
-        self.buf: T = data or self.empty
-        self.buflist: list[T] = []
-        self.pos = 0
+    def __init__(self, data: bytes = b"") -> None:
+        self._buf = data
+        self._buflist: list[bytes] = []
+        self._pending = 0  # Total length of _buflist
+        self._pos = 0
 
     def __len__(self) -> int:
-        return len(self.buf) - self.pos
+        """Number of unread bytes, including queued writes."""
+        return len(self._buf) - self._pos + self._pending
 
-    def __iter__(self) -> Self:
+    def __iter__(self) -> BytesFifo:
         return self
 
-    def __next__(self) -> T:
+    def __next__(self) -> bytes:
         line = self.readline()
         if not line:
             raise StopIteration
         return line
 
-    def __discard(self) -> None:
-        if self.pos > _DISCARD_SIZE:
-            self.buf = self.buf[self.pos :]
-            self.pos = 0
+    def _append(self) -> None:
+        if self._buflist:
+            self._buf = self._buf[self._pos :] + b"".join(self._buflist)
+            self._buflist = []
+            self._pending = 0
+            self._pos = 0
 
-    def __append(self) -> None:
-        self.buf += self.empty.join(self.buflist)
-        self.buflist = []
+    def _advance(self, newpos: int) -> None:
+        if newpos > _DISCARD_SIZE and newpos * 2 > len(self._buf):
+            self._buf = self._buf[newpos:]
+            self._pos = 0
+        else:
+            self._pos = newpos
 
-    def clear(self) -> None:
-        self.buf = self.empty
-        self.buflist = []
-        self.pos = 0
+    def write(self, data: bytes) -> None:
+        """Append data to the end of the buffer."""
+        self._buflist.append(data)
+        self._pending += len(data)
 
-    def write(self, data: T) -> None:
-        self.buflist.append(data)
+    def read(self, length: int = 0) -> bytes:
+        """Remove and return up to length bytes.
 
-    def read(self, length: int = 0) -> T:
-        self.__append()
+        Args:
+            length: Maximum number of bytes to read. A length of 0 (the
+                default) reads all buffered data.
+        """
+        self._append()
         if 0 < length < len(self):
-            newpos = self.pos + length
-            data = self.buf[self.pos : newpos]
-            self.pos = newpos
-            self.__discard()
+            data = self._buf[self._pos : self._pos + length]
+            self._advance(self._pos + length)
             return data
-        data = self.buf[self.pos :]
-        self.clear()
+        data = self._buf[self._pos :]
+        self._buf = b""
+        self._pos = 0
         return data
 
-    def readline(self) -> T:
-        self.__append()
-        i = self.buf.find(self.eol, self.pos)
+    def readline(self) -> bytes:
+        """Remove and return one line, including its CRLF.
+
+        Returns:
+            The line, or b"" if no complete line is buffered yet.
+        """
+        # Hot path: called once per line of every response.
+        if self._buflist:
+            self._append()
+        buf, pos = self._buf, self._pos
+        i = buf.find(_EOL, pos)
         if i < 0:
-            return self.empty
-        newpos = i + len(self.eol)
-        data = self.buf[self.pos : newpos]
-        self.pos = newpos
-        self.__discard()
-        return data
-
-    def readuntil(self, token: T, size: int = 0) -> tuple[bool, T]:
-        self.__append()
-        i = self.buf.find(token, self.pos)
-        if i < 0:
-            index = max(len(token) - 1, size)
-            newpos = max(len(self.buf) - index, self.pos)
-            data = self.buf[self.pos : newpos]
-            self.pos = newpos
-            self.__discard()
-            return False, data
-        newpos = i + len(token)
-        data = self.buf[self.pos : newpos]
-        self.pos = newpos
-        self.__discard()
-        return True, data
-
-    def peek(self, length: int = 0) -> T:
-        self.__append()
-        if 0 < length < len(self):
-            newpos = self.pos + length
-            return self.buf[self.pos : newpos]
-        return self.buf[self.pos :]
-
-    def peekline(self) -> T:
-        self.__append()
-        i = self.buf.find(self.eol, self.pos)
-        if i < 0:
-            return self.empty
-        newpos = i + len(self.eol)
-        return self.buf[self.pos : newpos]
-
-    def peekuntil(self, token: T, size: int = 0) -> tuple[bool, T]:
-        self.__append()
-        i = self.buf.find(token, self.pos)
-        if i < 0:
-            index = max(len(token) - 1, size)
-            newpos = max(len(self.buf) - index, self.pos)
-            return False, self.buf[self.pos : newpos]
-        newpos = i + len(token)
-        return True, self.buf[self.pos : newpos]
-
-
-class TextFifo(Fifo[str]):
-    empty = ""
-    eol = "\r\n"
-
-
-class BytesFifo(Fifo[bytes]):
-    empty = b""
-    eol = b"\r\n"
+            return b""
+        newpos = i + len(_EOL)
+        self._advance(newpos)
+        return buf[pos:newpos]
