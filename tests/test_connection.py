@@ -546,3 +546,49 @@ def test_login_unexpected_multiline_reply_is_read(connect: Connect) -> None:
         client.login("u", "p")
     assert info.value.code == 222
     assert client.date().year == 2024  # Not 1999 from the unread block
+
+
+@pytest.mark.parametrize(
+    ("username", "password"), [("u" * 600, "p"), ("u", "S3cret" + "p" * 600)]
+)
+def test_login_too_long_sends_nothing(
+    connect: Connect, username: str, password: str
+) -> None:
+    """A credential too long for its command raises before anything is sent,
+    and the error message does not contain it."""
+    client, sock = connect(WELCOME + MODE_READER + DATE)
+    sock.sent = b""
+    with pytest.raises(ValueError, match="longer than 512") as info:
+        client.login(username, password)
+    assert sock.sent == b""
+    assert "u" * 600 not in str(info.value)
+    assert "S3cret" not in str(info.value)
+    assert client.date().year == 2024
+
+
+def test_480_login_too_long_sends_nothing(connect: Connect) -> None:
+    """The automatic login after a 480 checks the length before AUTHINFO USER."""
+    client, sock = connect(
+        WELCOME + MODE_READER + b"480 auth\r\n", username="u", password="S3cret" * 100
+    )
+    sock.sent = b""
+    with pytest.raises(ValueError, match="longer than 512") as info:
+        client.date()
+    assert sock.sent == b"DATE\r\n"
+    assert "S3cret" not in str(info.value)
+
+
+@pytest.mark.parametrize(
+    ("verb", "args"),
+    [("AUTHINFO PASS", "S3cret" + "p" * 600), ("AUTHINFO PASS", "S3cret\r\nQUIT")],
+)
+def test_raw_authinfo_errors_hide_credentials(
+    connect: Connect, verb: str, args: str
+) -> None:
+    client, sock = connect(WELCOME + MODE_READER)
+    sock.sent = b""
+    with pytest.raises(ValueError, match=r"AUTHINFO PASS \.\.\.") as info:
+        client.command(verb, args)
+    assert "S3cret" not in str(info.value)
+    assert "AUTHINFO PASS ..." in str(info.value)
+    assert sock.sent == b""

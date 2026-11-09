@@ -628,13 +628,15 @@ class BaseNNTPClient:
 
         cmd = f"{verb} {args}" if args else verb
         words = cmd.upper().split()[:2]
+        # Never put credentials into an error message
+        shown = f"{' '.join(cmd.split()[:2])} ..." if words[:1] == ["AUTHINFO"] else cmd
         if any(c in cmd for c in "\r\n\0"):
-            raise ValueError(f"Command contains CR, LF or NUL: {cmd!r}")
+            raise ValueError(f"Command contains CR, LF or NUL: {shown!r}")
         if self._deflate is not None and _after_compress_forbidden(words):
             raise NNTPError(f"{words[0]} is not allowed after COMPRESS (RFC 8054)")
         line = (cmd + "\r\n").encode(self.encoding, self.errors)
         if len(line) > _MAX_COMMAND:
-            raise ValueError(f"Command longer than {_MAX_COMMAND} octets: {cmd!r}")
+            raise ValueError(f"Command longer than {_MAX_COMMAND} octets: {shown!r}")
 
         with self._sync():
             self._send(line)
@@ -681,7 +683,8 @@ class BaseNNTPClient:
 
         Raises:
             ValueError: If there is no username, or a credential contains CR,
-                LF or NUL. Nothing is sent.
+                LF or NUL or makes its command longer than 512 octets. Nothing
+                is sent.
             NNTPReplyError: If the login is rejected, or a password is asked
                 for and there is none.
         """
@@ -691,6 +694,10 @@ class BaseNNTPClient:
             raise ValueError("No username to log in with")
         if any(c in username + password for c in "\r\n\0"):
             raise ValueError("Username or password contains CR, LF or NUL")
+        for verb, value in (("AUTHINFO USER", username), ("AUTHINFO PASS", password)):
+            line = f"{verb} {value}\r\n".encode(self.encoding, self.errors)
+            if len(line) > _MAX_COMMAND:
+                raise ValueError(f"{verb} would be longer than {_MAX_COMMAND} octets")
         self.username, self.password = username, password
         code, message = self._command("AUTHINFO USER", self.username)
         if code == 381:

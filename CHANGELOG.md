@@ -35,6 +35,10 @@ Found by go-while (#102).
 - A LIST ACTIVE.TIMES timestamp too large for `datetime` raised
   `OverflowError` or `OSError` instead of `NNTPDataError`;
   `utils.parse_epoch()` raises `ValueError` for it.
+- `login()` checks that both credentials fit the 512-octet command limit
+  before sending anything. A password that was too long used to be refused
+  only after `AUTHINFO USER` was sent, and the error message contained it.
+  Errors for AUTHINFO commands no longer include their arguments.
 
 ## 3.2.0 - 2026-11-09
 
