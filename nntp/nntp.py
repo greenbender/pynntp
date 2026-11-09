@@ -368,8 +368,9 @@ class BaseNNTPClient:
 
         Leading dots added by the server (dot-stuffing) are removed.
         """
-        lines = self._line()
-        while (line := next(lines)) != b".\r\n":
+        for line in self._line():
+            if line == b".\r\n":
+                break
             yield line[1:] if line.startswith(b".") else line
 
     def _info_gzip(self) -> Iterator[bytes]:
