@@ -272,12 +272,18 @@ def test_list_newsgroups_without_description(connect: Connect) -> None:
 
 @pytest.mark.parametrize(
     "reply",
-    [b"223 -5 <a@b>", b"223 +5 <a@b>", b"223 3", b"223 3 nothing", b"223 3 <no-at>"],
+    [b"223 -5 <a@b>", b"223 +5 <a@b>", b"223 3", b"223 3 nothing", b"223 3 <>"],
 )
 def test_stat_invalid_metadata(connect: Connect, reply: bytes) -> None:
     client, _ = connect(WELCOME + MODE_READER + reply + b"\r\n")
     with pytest.raises(nntp.NNTPDataError, match="Invalid STAT status"):
         client.stat(1)
+
+
+def test_stat_message_id_without_at(connect: Connect) -> None:
+    # RFC 3977 doesn't require "@"; INN serves such ids with laxmid
+    client, _ = connect(WELCOME + MODE_READER + b"223 3 <bnews.sri-arpa.865>\r\n")
+    assert client.stat(3) == (3, "<bnews.sri-arpa.865>")
 
 
 def test_stat_by_message_id_number_zero(connect: Connect) -> None:

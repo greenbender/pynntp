@@ -132,7 +132,6 @@ def _url_bool(name: str, value: str) -> bool:
 # RFC 3977 section 3.2: a status code is three digits, the first 1-5
 _STATUS_CODE_RE = re.compile(rb"[1-5][0-9]{2}")
 
-_MESSAGE_ID_RE = re.compile(r"<[^\s<>]+@[^\s<>]+>")
 _DIGITS_RE = re.compile(r"[0-9]+")
 
 # RFC 3977 3.4.1 (and 2980 for 282): replies followed by a multi-line block.
@@ -687,7 +686,7 @@ class BaseNNTPClient:
                 raise NNTPReplyError(code, f"{message} (no password)")
             code, message = self._command("AUTHINFO PASS", self.password)
         if code != 281:
-            raise NNTPReplyError(code, message)
+            self._unexpected(code, message)
 
     def close(self) -> None:
         """Close the connection without sending QUIT.

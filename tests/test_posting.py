@@ -134,6 +134,8 @@ def test_ihave_keeps_matching_message_id_header(connect: Connect) -> None:
         ("<a b>", {}),
         ("<a@b>\r\nQUIT", {}),
         ("<>", {}),
+        ("<caf\u00e9@b>", {}),  # Not US-ASCII
+        ("<" + "a" * 249 + ">", {}),  # Over 250 octets
         ("<a@b>", {"Message-ID": "<other@b>"}),
     ],
 )
