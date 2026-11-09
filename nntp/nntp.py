@@ -305,28 +305,17 @@ class BaseNNTPClient:
             data = self._deflate.compress(data) + self._deflate.flush(zlib.Z_SYNC_FLUSH)
         self.socket.sendall(data)
 
-    def _line(self) -> Iterator[bytes]:
-        """Yield lines from the buffer, reading from the socket when it runs out."""
-        while True:
-            line = self._buffer.readline()
-            if not line:
-                self._recv()
-                continue
-            yield line
+    def _readline(self) -> bytes:
+        """Read one line, receiving more data from the socket as needed."""
+        while not (line := self._buffer.readline()):
+            self._recv()
+        return line
 
-    def _buf(self, length: int = 0) -> Iterator[bytes]:
-        """Yield blocks from the buffer, reading from the socket when it runs out.
-
-        Args:
-            length: Maximum block size. 0 (the default) yields whatever is
-                buffered, or the next recv if the buffer is empty.
-        """
-        while True:
-            buf = self._buffer.read(length)
-            if not buf:
-                self._recv()
-                continue
-            yield buf
+    def _read(self) -> bytes:
+        """Read whatever is buffered, or the next recv if the buffer is empty."""
+        while not (data := self._buffer.read()):
+            self._recv()
+        return data
 
     def status(self) -> tuple[int, str]:
         """Read a status line.
@@ -340,7 +329,7 @@ class BaseNNTPClient:
             NNTPTemporaryError: For status codes 400-499.
             NNTPPermanentError: For status codes 500-599.
         """
-        line = next(self._line()).rstrip()
+        line = self._readline().rstrip()
         parts = line.split(None, 1)
 
         try:
@@ -368,9 +357,10 @@ class BaseNNTPClient:
 
         Leading dots added by the server (dot-stuffing) are removed.
         """
-        for line in self._line():
+        while True:
+            line = self._readline()
             if line == b".\r\n":
-                break
+                return
             yield line[1:] if line.startswith(b".") else line
 
     def _info_gzip(self) -> Iterator[bytes]:
@@ -387,7 +377,7 @@ class BaseNNTPClient:
 
         done, buf = False, BytesFifo()
         while not done:
-            chunk = next(self._buf())
+            chunk = self._read()
             if inflate.eof:
                 # Data after the end of the gzip stream (the terminator).
                 buf.write(chunk)
