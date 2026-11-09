@@ -30,13 +30,14 @@ peer with its faults. It prints its address, serves until stdin closes, then
 prints what it saw.
 
 `scenarios.py` holds the scenarios. For each one, `run()` starts the server and
-runs the client in a child process under a deadline and a memory limit. After
-the action the client sends DATE: a scenario passes when the client returns the
-right result, or raises an `NNTPError` or `OSError` and the connection is
-either still in sync (DATE gets the right reply) or marked broken (the next
-command raises `NNTPSyncError`). A hang, a wrong result, another exception or
-a connection out of sync fails, as does a failed server-side check (for
-example, the client sent AUTHINFO before TLS).
+runs the client in a child process under a deadline and (except on
+free-threaded builds) a memory limit. After the action the client sends DATE: a
+scenario passes when the client returns the right result, or raises an
+`NNTPError` or `OSError` and the connection is either still in sync (DATE gets
+the right reply) or marked broken (the next command raises `NNTPSyncError`). A
+hang, a wrong result, another exception or a connection out of sync fails, as
+does a failed server-side check (for example, the client sent AUTHINFO before
+TLS).
 
 ```python
 yield Scenario(

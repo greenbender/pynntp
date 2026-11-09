@@ -28,6 +28,7 @@ import resource
 import ssl
 import subprocess
 import sys
+import sysconfig
 import tempfile
 import time
 import zlib
@@ -2345,8 +2346,10 @@ def client_kwargs(sc: Scenario, ca: str) -> JSON:
 
 def run_client(sc: Scenario, host: str, port: int, ca: str) -> JSON:
     """Run the client side of sc; the result says why it failed, if it did."""
-    # A runaway client fails the scenario instead of exhausting the machine
-    resource.setrlimit(resource.RLIMIT_AS, (MEMORY_LIMIT, MEMORY_LIMIT))
+    # A runaway client fails the scenario instead of exhausting the machine.
+    # Not on free-threaded builds: their allocator reserves much address space.
+    if not sysconfig.get_config_var("Py_GIL_DISABLED"):
+        resource.setrlimit(resource.RLIMIT_AS, (MEMORY_LIMIT, MEMORY_LIMIT))
     t0 = time.monotonic()
     c = None
     value: object = None
