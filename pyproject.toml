@@ -134,6 +134,7 @@ exclude_patterns = [
     ".DS_Store",
     "docs/_build",
     "LICENSE.rst",
+    "README.md",  # Included by index.md
     "Thumbs.db",
 ]
 extensions = ["autoapi.extension", "myst_parser", "sphinx.ext.napoleon"]
