@@ -35,6 +35,10 @@ def test_status_codes(connect: Connect) -> None:
         (b"502 permission denied\r\n", nntp.NNTPPermanentError),
         (b"abc garbage\r\n", nntp.NNTPProtocolError),
         (b"600 out of range\r\n", nntp.NNTPProtocolError),
+        (b"0411 leading zero\r\n", nntp.NNTPProtocolError),
+        (b"+411 sign\r\n", nntp.NNTPProtocolError),
+        (b"4111 four digits\r\n", nntp.NNTPProtocolError),
+        (b"099 too low\r\n", nntp.NNTPProtocolError),
     ],
 )
 def test_status_errors(connect: Connect, line: bytes, error: type[Exception]) -> None:
@@ -357,3 +361,46 @@ def test_default_port(
     with pytest.raises(ConnectionRefusedError):
         nntp.NNTPClient("example.com", **kwargs)  # type: ignore[arg-type]
     assert addresses == [("example.com", port)]
+
+
+def test_starttls_480_never_logs_in(connect: Connect) -> None:
+    with pytest.raises(nntp.NNTPTemporaryError, match="before STARTTLS"):
+        connect(
+            WELCOME + b"480 auth first\r\n",
+            use_ssl=True,
+            ssl_mode=SSLMode.STARTTLS,
+            username="user",
+            password="pass",
+        )
+    assert FakeSocket.last.sent == b"STARTTLS\r\n"  # No password in clear text
+
+
+def test_login(connect: Connect) -> None:
+    client, sock = connect(WELCOME + MODE_READER + b"381 more\r\n" + b"281 ok\r\n")
+    sock.sent = b""
+    client.login("user", "pass")
+    assert sock.sent == b"AUTHINFO USER user\r\nAUTHINFO PASS pass\r\n"
+    assert (client.username, client.password) == ("user", "pass")
+
+
+def test_login_uses_constructor_credentials(connect: Connect) -> None:
+    server = WELCOME + MODE_READER + b"281 ok\r\n"
+    client, sock = connect(server, username="fred")
+    sock.sent = b""
+    client.login()
+    assert sock.sent == b"AUTHINFO USER fred\r\n"
+
+
+def test_login_without_username(connect: Connect) -> None:
+    client, sock = connect(WELCOME + MODE_READER)
+    sock.sent = b""
+    with pytest.raises(ValueError, match="No username"):
+        client.login()
+    assert sock.sent == b""
+
+
+def test_login_rejected(connect: Connect) -> None:
+    client, _ = connect(WELCOME + MODE_READER + b"381 more\r\n" + b"481 no\r\n")
+    with pytest.raises(nntp.NNTPTemporaryError) as info:
+        client.login("user", "bad")
+    assert info.value.code == 481

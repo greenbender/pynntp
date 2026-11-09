@@ -40,8 +40,9 @@ with nntp.NNTPClient(
     print(client.date())
 ```
 
-The username and password are only sent if the server asks for them, and in
-clear text unless TLS is used. With `use_ssl=True` the port defaults to 563;
+The username and password are only sent if the server asks for them (call
+`client.login()` to log in straight away), and in clear text unless TLS is
+used. With `use_ssl=True` the port defaults to 563;
 for STARTTLS on port 119 instead, also pass `ssl_mode=nntp.SSLMode.STARTTLS`.
 TLS certificates are verified;
 pass `ssl_context=` (an `ssl.SSLContext`) to trust a private CA or change other
@@ -72,7 +73,9 @@ Header and overview names are case-insensitive: `overview["Subject"]` and
 `overview["subject"]` are the same.
 
 To compress the whole connection on servers that support RFC 8054, call
-`client.compress()` after connecting and any login. Some servers instead
+`client.compress()` after connecting and logging in: servers that only ask for
+a login later can't get one once compression is on, so call `client.login()`
+first. Some servers instead
 offer compressed overview data: call `client.xfeature_compress_gzip()` once,
 or use `client.xzver()` instead of `xover()`.
 
