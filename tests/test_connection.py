@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import gc
 import ssl
-from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 
 import pytest
 
@@ -21,6 +22,9 @@ from tests.helpers import (
     Connect,
     FakeSocket,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 
 def test_status_codes(connect: Connect) -> None:
@@ -71,9 +75,8 @@ def test_auth_on_480(connect: Connect) -> None:
 
 def test_command_during_generator(connect: Connect) -> None:
     client, _ = connect(WELCOME + MODE_READER + b"215 list\r\nalt.test 2 1 y\r\n.\r\n")
-    groups = client.list_active()
-    next(groups)
-    with pytest.raises(NNTPSyncError):
+    client.list_active()  # Sent now; its response is still unread
+    with pytest.raises(NNTPSyncError, match="reconnect"):
         client.date()
 
 
@@ -283,13 +286,8 @@ def test_unexpected_reply_raises(
 ) -> None:
     client, _ = connect(WELCOME + MODE_READER + prefix + ODD + DATE)
 
-    def run() -> None:
-        result = call(client)
-        if isinstance(result, Iterator):
-            list(result)  # Generators send their command when iterated
-
     with pytest.raises(nntp.NNTPReplyError) as info:
-        run()
+        call(client)  # Iterator methods send their command when called
     assert info.value.code == 299
     assert client.date().year == 2024  # The status line was read; in sync
 
@@ -490,6 +488,56 @@ def test_480_logs_in_and_retries(connect: Connect) -> None:
     sock.sent = b""
     assert client.date().year == 2024
     assert sock.sent == b"DATE\r\nAUTHINFO USER u\r\nAUTHINFO PASS p\r\nDATE\r\n"
+
+
+@pytest.mark.parametrize(
+    ("prefix", "sent", "call"),
+    [
+        (b"", b"CAPABILITIES", lambda c: c.capabilities()),
+        (b"", b"NEWGROUPS ", lambda c: c.newgroups(datetime.now(UTC))),
+        (b"", b"NEWNEWS ", lambda c: c.newnews("*", datetime.now(UTC))),
+        (b"", b"LIST ACTIVE", lambda c: c.list("ACTIVE")),
+        (b"", b"LIST ACTIVE", lambda c: c.list_active()),
+        (b"", b"LIST ACTIVE.TIMES", lambda c: c.list_active_times()),
+        (b"", b"LIST HEADERS", lambda c: c.list_headers()),
+        (b"", b"LIST NEWSGROUPS", lambda c: c.list_newsgroups()),
+        (b"", b"LIST OVERVIEW.FMT", lambda c: c.list_overview_fmt()),
+        (b"", b"LIST EXTENSIONS", lambda c: c.list_extensions()),
+        (b"", b"LISTGROUP g", lambda c: c.listgroup("g")),
+        (b"", b"HDR Subject", lambda c: c.hdr("Subject")),
+        (b"", b"XHDR Subject", lambda c: c.xhdr("Subject")),
+        (b"", b"XZHDR Subject", lambda c: c.xzhdr("Subject")),
+        (OVERVIEW_FMT, b"XOVER", lambda c: c.xover()),
+        (OVERVIEW_FMT, b"XZVER", lambda c: c.xzver()),
+        (OVERVIEW_FMT, b"OVER", lambda c: c.over()),
+        (b"", b"XPAT Subject 1 *", lambda c: c.xpat("Subject", 1, "*")),
+    ],
+)
+def test_iterator_methods_send_when_called(
+    connect: Connect,
+    prefix: bytes,
+    sent: bytes,
+    call: Callable[[nntp.NNTPClient], object],
+) -> None:
+    client, sock = connect(WELCOME + MODE_READER + prefix + b"502 no\r\n" + DATE)
+    if prefix:
+        client.overview_fmt  # noqa: B018 - fetch the format first
+    sock.sent = b""
+    with pytest.raises(nntp.NNTPPermanentError):
+        call(client)  # Raised by the call, not on first next()
+    assert sock.sent.startswith(sent)
+    assert client.date().year == 2024
+
+
+def test_iterator_abandoned_before_reconnect(connect: Connect) -> None:
+    listing = b"215 list\r\nalt.test 2 1 y\r\nalt.more 2 1 y\r\n.\r\n"
+    client, _ = connect(WELCOME + MODE_READER + listing, WELCOME + MODE_READER + DATE)
+    groups = client.list_active()
+    next(groups)
+    client.reconnect()
+    del groups  # Closing the old iterator must not break the new connection
+    gc.collect()
+    assert client.date().year == 2024
 
 
 def test_login_unexpected_multiline_reply_is_read(connect: Connect) -> None:
