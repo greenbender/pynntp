@@ -4,6 +4,13 @@
 
 ### Breaking changes
 
+- The undocumented `PYNNTP_TLS_INSECURE` environment variable, which
+  disabled certificate checks, is gone. Pass an `ssl_context` instead (#123).
+- `xpat()` yields `(article number, header value)` like `hdr()`, not raw
+  lines (#123).
+- `xfeature_compress_gzip()` returns `None` rather than `True` (#123).
+- Command lines longer than 512 octets (RFC 3977) raise `ValueError` instead
+  of being sent (#123).
 - Requires Python 3.11 or newer; 3.9 and 3.10 are end-of-life (#114).
 - `SSLMode` is a `StrEnum`: `str(SSLMode.IMPLICIT)` is now `"implicit"`
   rather than `"SSLMode.IMPLICIT"`. Comparisons with strings are unchanged
@@ -35,6 +42,13 @@
 
 ### Added
 
+- `ssl_context` argument for TLS settings, such as a private CA (#123).
+- `command(..., expect=...)` raises `NNTPReplyError` for any other reply
+  (#123).
+- `HeaderDict`, `Newsgroup`, `Range` and `SSLMode` are exported from `nntp`
+  (#123).
+- Type hints are shipped for type checkers (`py.typed`), and the LICENSE is
+  included in the sdist and wheel (#123).
 - `ihave()` for the IHAVE command (#42).
 - `compress()` for RFC 8054 COMPRESS DEFLATE, compressing the whole
   connection (#41).
@@ -47,6 +61,11 @@
 
 ### Fixed
 
+- STARTTLS: data arriving with the 382 reply, before TLS starts, is rejected
+  rather than read later as if protected (#123).
+- A server asking for a login when no username is set no longer gets a bare
+  `AUTHINFO USER` (#123).
+- `LIST OVERVIEW.FMT` accepts `:full` in any case (#123).
 - Article lines starting with "." were returned twice, which corrupted yEnc
   bodies (#107, issue #99).
 - gzip-compressed responses could be corrupted or hang when the terminator
@@ -66,6 +85,8 @@
 
 ### Performance
 
+- yEnc bodies are decoded a block at a time: `body()` about 1.8x faster
+  (#123).
 - yEnc decoding about 4x faster (#107).
 - `BytesFifo` line reading linear rather than quadratic on large buffers
   (#108).

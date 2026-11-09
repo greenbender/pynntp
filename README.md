@@ -40,9 +40,11 @@ with nntp.NNTPClient(
     print(client.date())
 ```
 
-The username and password are only sent if the server asks for them. For
-STARTTLS on the plain port, pass `port=119, ssl_mode=SSLMode.STARTTLS` (from
-`nntp.types`). Leaving the `with` block sends QUIT.
+The username and password are only sent if the server asks for them, and in
+clear text unless TLS is used. For STARTTLS on the plain port, pass
+`port=119, ssl_mode=nntp.SSLMode.STARTTLS`. TLS certificates are verified;
+pass `ssl_context=` (an `ssl.SSLContext`) to trust a private CA or change other
+TLS settings. Leaving the `with` block sends QUIT.
 
 ### Browsing a group
 
