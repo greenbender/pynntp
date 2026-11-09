@@ -1,5 +1,6 @@
 """NNTP client library with streaming, compressed and yEnc responses."""
 
+from .headerdict import HeaderDict
 from .nntp import (
     BaseNNTPClient,
     NNTPClient,
@@ -12,9 +13,11 @@ from .nntp import (
     NNTPTemporaryError,
     NNTPYEncError,
 )
+from .types import Newsgroup, Range, SSLMode
 
 __all__ = [
     "BaseNNTPClient",
+    "HeaderDict",
     "NNTPClient",
     "NNTPDataError",
     "NNTPError",
@@ -24,4 +27,7 @@ __all__ = [
     "NNTPSyncError",
     "NNTPTemporaryError",
     "NNTPYEncError",
+    "Newsgroup",
+    "Range",
+    "SSLMode",
 ]

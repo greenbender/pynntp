@@ -1253,15 +1253,19 @@ class NNTPClient(BaseNNTPClient):
         if code != (225 if verb == "HDR" else 221):
             raise NNTPReplyError(code, message)
 
-        yz = verb == "XZHDR"
+        yield from self._number_values(verb, code, message, yz=verb == "XZHDR")
+
+    def _number_values(
+        self, verb: str, code: int, message: str, *, yz: bool = False
+    ) -> Iterator[tuple[int, str]]:
+        """Parse "<article number> <value>" lines, as sent by HDR and XPAT."""
         for line in self.info(code, message, yz=yz):
             parts = line.rstrip("\r\n").split(None, 1)
             try:
-                articleno = int(parts[0])
-                value = parts[1] if len(parts) > 1 else ""
-            except (IndexError, ValueError):
-                raise NNTPDataError(f"Invalid {verb} response")
-            yield articleno, value
+                number = int(parts[0])
+            except (IndexError, ValueError) as e:
+                raise NNTPDataError(f"Invalid {verb} response") from e
+            yield number, parts[1] if len(parts) > 1 else ""
 
     def hdr(
         self,
@@ -1413,7 +1417,7 @@ class NNTPClient(BaseNNTPClient):
         header: str,
         msgid_range: str | Range,
         *pattern: str,
-    ) -> Iterator[str]:
+    ) -> Iterator[tuple[int, str]]:
         """XPAT command.
 
         Finds articles whose header matches a pattern.
@@ -1427,10 +1431,11 @@ class NNTPClient(BaseNNTPClient):
             *pattern: The wildmat pattern(s), passed to the server as given.
 
         Yields:
-            Each matching line: the article number and header value.
+            The article number and header value of each matching article.
 
         Raises:
             NNTPReplyError: If there is no such article.
+            NNTPDataError: If a line can't be parsed.
         """
         args = " ".join([header, utils.unparse_msgid_range(msgid_range), *pattern])
 
@@ -1438,10 +1443,9 @@ class NNTPClient(BaseNNTPClient):
         if code != 221:
             raise NNTPReplyError(code, message)
 
-        for line in self.info(code, message):
-            yield line.strip()
+        yield from self._number_values("XPAT", code, message)
 
-    def xfeature_compress_gzip(self, terminator: bool = False) -> bool:
+    def xfeature_compress_gzip(self, terminator: bool = False) -> None:
         """XFEATURE COMPRESS GZIP command.
 
         Asks the server to gzip-compress multi-line responses from now on; they
@@ -1449,9 +1453,6 @@ class NNTPClient(BaseNNTPClient):
 
         Args:
             terminator: Put the terminating line inside the compressed data.
-
-        Returns:
-            True.
 
         Raises:
             NNTPReplyError: If the server does not support it.
@@ -1461,8 +1462,6 @@ class NNTPClient(BaseNNTPClient):
         code, message = self.command("XFEATURE COMPRESS GZIP", args)
         if code != 290:
             raise NNTPReplyError(code, message)
-
-        return True
 
     def post(
         self,

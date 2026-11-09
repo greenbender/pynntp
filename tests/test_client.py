@@ -988,3 +988,37 @@ def test_overview_fmt_full_is_case_insensitive(connect: Connect) -> None:
         ("bytes", False),
         ("Xref", True),
     ]
+
+
+def test_xpat(connect: Connect) -> None:
+    server = b"221 matches follow\r\n1 Re: hello\r\n7 hello again\r\n.\r\n"
+    client, sock = connect(WELCOME + MODE_READER + server)
+    assert list(client.xpat("Subject", (1, 9), "*hello*", "*bye*")) == [
+        (1, "Re: hello"),
+        (7, "hello again"),
+    ]
+    assert sock.sent.endswith(b"XPAT Subject 1-9 *hello* *bye*\r\n")
+
+
+def test_xpat_bad_line(connect: Connect) -> None:
+    client, _ = connect(WELCOME + MODE_READER + b"221 ok\r\nnope\r\n.\r\n")
+    with pytest.raises(nntp.NNTPDataError, match="Invalid XPAT response"):
+        list(client.xpat("Subject", 1, "*"))
+
+
+@pytest.mark.parametrize(
+    ("terminator", "sent"),
+    [(False, b"XFEATURE COMPRESS GZIP"), (True, b"XFEATURE COMPRESS GZIP TERMINATOR")],
+)
+def test_xfeature_compress_gzip(
+    connect: Connect, terminator: bool, sent: bytes
+) -> None:
+    client, sock = connect(WELCOME + MODE_READER + b"290 feature enabled\r\n")
+    client.xfeature_compress_gzip(terminator=terminator)
+    assert sock.sent.endswith(sent + b"\r\n")
+
+
+def test_top_level_exports() -> None:
+    assert nntp.SSLMode is SSLMode
+    assert nntp.Newsgroup is Newsgroup
+    assert nntp.HeaderDict is HeaderDict

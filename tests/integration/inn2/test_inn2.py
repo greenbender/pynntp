@@ -225,3 +225,10 @@ def test_compress() -> None:
         assert nntp_client.date().year >= 2024
         with pytest.raises(nntp.NNTPError, match="not allowed after COMPRESS"):
             nntp_client.mode_reader()
+
+
+def test_xpat() -> None:
+    with nntp.NNTPClient("localhost") as nntp_client:
+        _, first, last, _ = nntp_client.group("local.test")
+        matches = list(nntp_client.xpat("Subject", (first, last), "*local.test*"))
+        assert (1, "Test post to local.test") in matches
