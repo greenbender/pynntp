@@ -50,6 +50,7 @@ jobs:
     permissions:
       id-token: write
       contents: write
+      pull-requests: write
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -65,13 +66,14 @@ jobs:
       - name: Publish package
         uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
 
-      - name: Commit version change
+      - name: Open a pull request with the version change
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ github.event.release.tag_name }}
         run: |
           git config user.name "${{ github.actor }}"
           git config user.email "${{ github.actor_id }}+${{ github.actor }}@users.noreply.github.com"
-          git checkout -b v${{ github.event.release.tag_name }}
-          git commit -am "Bump version to ${{ github.event.release.ref_name }}"
-          gh pr create --title "Bump version to ${{ github.event.release.ref_name }}" --body "Bump version to ${{ github.event.release.ref_name }}" --base main
-          gh pr merge --auto
+          git checkout -b "bump-version-$VERSION"
+          git commit -am "Bump version to $VERSION"
+          git push -u origin "bump-version-$VERSION"
+          gh pr create --title "Bump version to $VERSION" --body "Bump version to $VERSION after the release." --base main
