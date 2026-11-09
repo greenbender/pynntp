@@ -26,8 +26,8 @@ jobs:
       id-token: write
 
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v7
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
 
       - name: Bump version
         run: |
@@ -52,8 +52,8 @@ jobs:
       contents: write
 
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v7
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
 
       - name: Bump version
         run: |
