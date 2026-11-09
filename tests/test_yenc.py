@@ -27,6 +27,12 @@ def test_crc32() -> None:
     assert trailer_crc32(b" crc32=00000000") == 0
     assert trailer_crc32(b" crc32=ffffffff") == 0xFFFFFFFF
     assert trailer_crc32(b" crc32=12345678") == 0x12345678
+    assert trailer_crc32(b" crc32=ABCDEF12") == 0xABCDEF12
+    assert trailer_crc32(b" crc32=abc1234") == 0xABC1234  # Leading zero dropped
+    assert trailer_crc32(b" crc=12345678") == 0x12345678
+    assert trailer_crc32(b" part=1 pcrc32=11111111 crc32=22222222") == 0x22222222
+    assert trailer_crc32(b" crc32=1234567890") is None  # Too long
+    assert trailer_crc32(b"=yend size=5") is None
 
 
 def test_decode(yenc1_plain: bytes, yenc1_encoded: bytes) -> None:

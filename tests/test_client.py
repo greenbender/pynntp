@@ -73,6 +73,14 @@ def yenc_encode(data: bytes, line_length: int = 128) -> bytes:
     return b"".join(lines)
 
 
+def dot_stuff(data: bytes) -> bytes:
+    """Escape lines starting with "." as an NNTP server does."""
+    return b"".join(
+        b"." + line if line.startswith(b".") else line
+        for line in data.splitlines(keepends=True)
+    )
+
+
 def test_status_codes(connect: Connect) -> None:
     client, sock = connect(WELCOME + MODE_READER + b"111 20240102030405\r\n")
     assert sock.sent == b"MODE READER\r\n"
@@ -138,11 +146,14 @@ def test_body_dot_unstuffing(connect: Connect) -> None:
 
 
 def test_body_yenc_autodetect(connect: Connect) -> None:
-    plain = bytes(range(256)) * 4
+    # 0x04 encodes to ".", so each of the first lines starts with a dot.
+    plain = (b"\x04" + b"a" * 127) * 4 + bytes(range(256)) * 4
+    encoded = yenc_encode(plain)
+    assert encoded.startswith(b".")
     server = (
-        b"222 1 <a@b>\r\n=ybegin line=128 size=1024 name=x\r\n"
-        + yenc_encode(plain)
-        + b"=yend size=1024\r\n.\r\n"
+        b"222 1 <a@b>\r\n=ybegin line=128 size=2048 name=x\r\n"
+        + dot_stuff(encoded)
+        + b"=yend size=2048\r\n.\r\n"
     )
     client, _ = connect(WELCOME + MODE_READER + server)
     assert client.body(1) == plain
@@ -208,7 +219,7 @@ def _xzver_server(crc: int | None = None) -> bytes:
     crc = zlib.crc32(raw) if crc is None else crc
     return (
         b"224 ok\r\n=ybegin line=128 size=0 name=x\r\n"
-        + yenc_encode(raw)
+        + dot_stuff(yenc_encode(raw))
         + f"=yend size={len(raw)} crc32={crc:08x}\r\n.\r\n".encode()
     )
 

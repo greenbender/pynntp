@@ -18,15 +18,14 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 from __future__ import annotations
 
-import binascii
 import re
-import struct
 import zlib
 
 __all__ = ["YEnc", "trailer_crc32"]
 
 
-_crc32_re = re.compile(b"\\s+crc(?:32)?=([0-9a-fA-F]{8})")
+# Some encoders drop leading zeros, so accept 1-8 hex digits.
+_crc32_re = re.compile(b"\\s+crc(?:32)?=([0-9a-fA-F]{1,8})\\b")
 
 # "=" escapes the following byte, whatever it is (including "=", CR, LF).
 _escape_re = re.compile(b"=(.)", re.DOTALL)
@@ -39,8 +38,7 @@ def trailer_crc32(trailer: bytes) -> int | None:
     match = _crc32_re.search(trailer)
     if not match:
         return None
-    buf = binascii.unhexlify(match.group(1))
-    return struct.unpack(">I", buf)[0]  # type: ignore[no-any-return]
+    return int(match.group(1), 16)
 
 
 class YEnc:
