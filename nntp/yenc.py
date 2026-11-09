@@ -21,11 +21,12 @@ from __future__ import annotations
 import re
 import zlib
 
-__all__ = ["YEnc", "trailer_crc32"]
+__all__ = ["YEnc", "check_trailer", "parse_keywords", "trailer_crc32"]
 
 
+_KEYWORD_RE = re.compile(rb"(\w+)=(\S*)")
 # Some encoders drop leading zeros, so accept 1-8 hex digits.
-_CRC32_RE = re.compile(rb"\s+crc(?:32)?=([0-9a-fA-F]{1,8})\b")
+_CRC32_RE = re.compile(r"[0-9a-fA-F]{1,8}")
 
 # "=" escapes the following byte, whatever it is (including "=", CR, LF).
 _ESCAPE_RE = re.compile(b"=(.)", re.DOTALL)
@@ -33,12 +34,59 @@ _PLAIN_TABLE = bytes((b - 42) & 0xFF for b in range(256))
 _ESCAPED_TABLE = bytes((b - 106) & 0xFF for b in range(256))
 
 
-def trailer_crc32(trailer: bytes) -> int | None:
-    """Extract the CRC32 value from a yEnc trailer."""
-    match = _CRC32_RE.search(trailer)
-    if not match:
+def parse_keywords(line: bytes) -> dict[str, str]:
+    """Parse the keyword=value pairs of a =ybegin, =ypart or =yend line.
+
+    The name keyword (on =ybegin) runs to the end of the line and may contain
+    spaces and "=", so it and anything after it is left out.
+    """
+    line = line.split(b" name=", 1)[0]
+    return {
+        key.decode("ascii"): value.decode("ascii", "replace")
+        for key, value in _KEYWORD_RE.findall(line)
+    }
+
+
+def trailer_crc32(trailer: bytes, *, part: bool = False) -> int | None:
+    """Extract the CRC32 value from a yEnc trailer.
+
+    Args:
+        trailer: The =yend line.
+        part: Return the CRC of this part (pcrc32) rather than of the whole
+            file (crc32), for multipart posts.
+    """
+    keywords = parse_keywords(trailer)
+    if part:
+        value = keywords.get("pcrc32")
+    else:
+        value = keywords.get("crc32", keywords.get("crc"))
+    if value is None or not _CRC32_RE.fullmatch(value):
         return None
-    return int(match.group(1), 16)
+    return int(value, 16)
+
+
+def check_trailer(trailer: bytes, size: int, crc32: int, *, part: bool) -> str | None:
+    """Check decoded data against a =yend trailer.
+
+    Args:
+        trailer: The =yend line.
+        size: Length of the decoded data.
+        crc32: CRC32 of the decoded data.
+        part: The data is one part of a multipart post, so it is checked
+            against pcrc32 rather than the whole-file crc32.
+
+    Returns:
+        A description of the first mismatch, or None if the data matches. A
+        size or CRC missing from the trailer is not checked.
+    """
+    keywords = parse_keywords(trailer)
+    expected_size = keywords.get("size", "")
+    if expected_size.isdigit() and int(expected_size) != size:
+        return f"decoded {size} bytes, trailer says {expected_size}"
+    expected_crc = trailer_crc32(trailer, part=part or "part" in keywords)
+    if expected_crc is not None and expected_crc != crc32:
+        return f"CRC32 is {crc32:08x}, trailer says {expected_crc:08x}"
+    return None
 
 
 class YEnc:

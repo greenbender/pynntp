@@ -172,10 +172,11 @@ def test_body_yenc_autodetect(connect: Connect) -> None:
     plain = (b"\x04" + b"a" * 127) * 4 + bytes(range(256)) * 4
     encoded = yenc_encode(plain)
     assert encoded.startswith(b".")
+    size = len(plain)
     server = (
-        b"222 1 <a@b>\r\n=ybegin line=128 size=2048 name=x\r\n"
+        f"222 1 <a@b>\r\n=ybegin line=128 size={size} name=x\r\n".encode()
         + dot_stuff(encoded)
-        + b"=yend size=2048\r\n.\r\n"
+        + f"=yend size={size} crc32={zlib.crc32(plain):08x}\r\n.\r\n".encode()
     )
     client, _ = connect(WELCOME + MODE_READER + server)
     assert client.body(1) == plain
@@ -539,3 +540,82 @@ def test_decompression_error_part_way_breaks_connection(connect: Connect) -> Non
         list(client.list("ACTIVE"))
     with pytest.raises(NNTPSyncError, match="reconnect"):
         client.date()
+
+
+def yenc_body(
+    plain: bytes,
+    *,
+    part: int | None = None,
+    trailer: str | None = None,
+    end: bool = True,
+) -> bytes:
+    """A BODY response holding plain as yEnc, single or one part of many.
+
+    trailer overrides the =yend keywords (default: correct size and CRC).
+    """
+    if part is None:
+        begin = f"=ybegin line=128 size={len(plain)} name=my file.bin\r\n"
+        trailer = trailer or f"size={len(plain)} crc32={zlib.crc32(plain):08x}"
+    else:
+        begin = f"=ybegin part={part} total=3 line=128 size=99999 name=f\r\n"
+        begin += f"=ypart begin=1 end={len(plain)}\r\n"
+        trailer = trailer or (
+            f"size={len(plain)} part={part} pcrc32={zlib.crc32(plain):08x}"
+            " crc32=deadbeef"  # Whole-file CRC: must not be compared to the part
+        )
+    return (
+        b"222 1 <a@b>\r\n"
+        + begin.encode()
+        + dot_stuff(yenc_encode(plain))
+        + (f"=yend {trailer}\r\n".encode() if end else b"")
+        + b".\r\n"
+    )
+
+
+PLAIN = bytes(range(256)) * 3
+
+
+@pytest.mark.parametrize("part", [None, 2])
+def test_yenc_valid(connect: Connect, part: int | None) -> None:
+    client, _ = connect(WELCOME + MODE_READER + yenc_body(PLAIN, part=part))
+    assert client.body(1) == PLAIN
+
+
+@pytest.mark.parametrize(
+    ("part", "trailer", "match"),
+    [
+        (None, "size=768 crc32=00000001", "CRC32 is"),
+        (None, "size=767 crc32=00000001", "decoded 768 bytes, trailer says 767"),
+        (2, "size=768 part=2 pcrc32=00000001", "CRC32 is"),
+    ],
+)
+def test_yenc_mismatch_keeps_connection(
+    connect: Connect, part: int | None, trailer: str, match: str
+) -> None:
+    server = yenc_body(PLAIN, part=part, trailer=trailer) + DATE
+    client, _ = connect(WELCOME + MODE_READER + server)
+    with pytest.raises(nntp.NNTPDataError, match=match):
+        client.body(1)
+    assert client.date().year == 2024  # Whole response was read; still in sync
+
+
+def test_yenc_missing_trailer(connect: Connect) -> None:
+    client, _ = connect(WELCOME + MODE_READER + yenc_body(PLAIN, end=False))
+    with pytest.raises(nntp.NNTPDataError, match="missing =yend"):
+        client.body(1)
+
+
+def test_yenc_trailer_without_crc_checks_size_only(connect: Connect) -> None:
+    server = yenc_body(PLAIN, trailer="size=768")
+    client, _ = connect(WELCOME + MODE_READER + server)
+    assert client.body(1) == PLAIN
+
+
+def test_yenc_article_validated(connect: Connect) -> None:
+    body = yenc_body(PLAIN, trailer="size=768 crc32=00000001")
+    article = (
+        b"220 1 <a@b>\r\nSubject: file yEnc (1/1)\r\n\r\n" + body.split(b"\r\n", 1)[1]
+    )
+    client, _ = connect(WELCOME + MODE_READER + article)
+    with pytest.raises(nntp.NNTPDataError, match="CRC32"):
+        client.article(1)
