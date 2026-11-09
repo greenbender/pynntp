@@ -5,8 +5,6 @@
 name: Faults
 
 on:
-  push:
-    branches: ["port/fault-tests"] # temporary, to register the workflow
   workflow_dispatch:
   schedule:
     - cron: "23 4 * * 1"
