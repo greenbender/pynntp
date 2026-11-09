@@ -23,7 +23,7 @@ dev = [
     "pre-commit>=3.8,<5.0",
     "pytest>=8.3.2,<9",
     "pytest-benchmark>=4,<6",
-    "ruff>=0.6.9,<0.10.0",
+    "ruff>=0.6.9,<0.18.0",
     "sphinx-pyproject",
 ]
 docs = ["myst-parser", "sphinx-autoapi", "sphinx-pyproject"]
