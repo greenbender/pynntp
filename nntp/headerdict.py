@@ -38,6 +38,19 @@ class HeaderDict(MutableMapping[str, str]):
         self._items: dict[str, tuple[str, str]] = {}  # casefold(name) -> item
         self.update(other, **kwargs)
 
+    @classmethod
+    def _from_fields(
+        cls, keys: tuple[str, ...], names: tuple[str, ...], values: Iterable[str]
+    ) -> HeaderDict:
+        """Build from casefolded keys and names computed once by the caller.
+
+        Used for XOVER, where every line has the same unique field names; this
+        skips the per-item work of __setitem__.
+        """
+        self = cls.__new__(cls)
+        self._items = dict(zip(keys, zip(names, values)))
+        return self
+
     def __getitem__(self, key: str) -> str:
         return self._items[key.casefold()][1]
 
