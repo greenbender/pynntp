@@ -1195,7 +1195,10 @@ class NNTPClient(BaseNNTPClient):
         header: str,
         msgid_range: str | Range | None = None,
     ) -> Iterator[tuple[int, str]]:
-        """XHDR command, the RFC 2980 form of HDR. See hdr()."""
+        """XHDR command, the RFC 2980 form of HDR. See hdr().
+
+        Prefer hdr() when the server lists HDR in its capabilities.
+        """
         return self._hdr(header, msgid_range, verb="XHDR")
 
     def xzhdr(
@@ -1259,6 +1262,8 @@ class NNTPClient(BaseNNTPClient):
         range: Range | None = None,
     ) -> Iterator[tuple[int, HeaderDict]]:
         """XOVER command.
+
+        Prefer over() when the server lists OVER in its capabilities.
 
         See <https://datatracker.ietf.org/doc/html/rfc2980#section-2.8>
 
