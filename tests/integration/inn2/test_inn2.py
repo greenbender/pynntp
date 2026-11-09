@@ -1,4 +1,6 @@
+import email.utils
 import os
+import time
 from datetime import datetime, timedelta, timezone
 from unittest import mock
 
@@ -168,3 +170,23 @@ def test_hdr_over_stat_listgroup() -> None:
         assert nntp_client.stat(msgid)[1] == msgid
         assert list(nntp_client.listgroup("local.test")) == [1]
         assert list(nntp_client.listgroup("local.test", (1, 1))) == [1]
+
+
+def test_ihave() -> None:
+    message_id = f"<ihave.{os.getpid()}.{time.time_ns()}@example.com>"
+    headers = {
+        "From": "a@example.com",
+        "Newsgroups": "local.test",
+        "Subject": "IHAVE test",
+        "Path": "example.com!not-for-mail",
+        "Date": email.utils.formatdate(),
+    }
+    with nntp.NNTPClient("localhost") as nntp_client:
+        capabilities = list(nntp_client.capabilities())
+        if "IHAVE" not in capabilities:
+            pytest.skip("The server does not offer IHAVE to this client")
+        nntp_client.ihave(message_id, headers, "IHAVE body\n")
+        with pytest.raises(nntp.NNTPTemporaryError) as info:
+            nntp_client.ihave(message_id, headers, "IHAVE body\n")
+        assert info.value.code == 435  # Duplicate: not wanted
+        assert nntp_client.stat(message_id)[1] == message_id

@@ -31,6 +31,7 @@ class FakeSocket:
         self.chunk = chunk
         self.sent = b""
         self.sends = 0
+        self.fail_after: int | None = None  # Raise on sends after this many
         self.closed = False
         FakeSocket.last = self
 
@@ -42,6 +43,8 @@ class FakeSocket:
     def sendall(self, data: bytes) -> None:
         if self.closed:
             raise OSError(9, "Bad file descriptor")
+        if self.fail_after is not None and self.sends >= self.fail_after:
+            raise OSError("send failed")
         self.sent += data
         self.sends += 1
 
@@ -276,11 +279,22 @@ def test_post_bad_header_sends_nothing(connect: Connect) -> None:
     assert sock.sent == b""
 
 
-def test_post_illegal_chars(connect: Connect) -> None:
-    client, sock = connect(WELCOME + MODE_READER + b"340 send\r\n" + b"240 ok\r\n")
-    with pytest.raises(nntp.NNTPDataError):
-        client.post({"Subject": "hi"}, b"good\nba\0d\nlost\n")
-    assert b"lost" not in sock.sent
+@pytest.mark.parametrize("body", [b"good\nba\0d\n", b"good\nbare\rcr\n"])
+def test_post_illegal_chars_sends_nothing(connect: Connect, body: bytes) -> None:
+    client, sock = connect(WELCOME + MODE_READER + DATE)
+    sock.sent = b""
+    with pytest.raises(nntp.NNTPDataError, match="CR or NUL"):
+        client.post({"Subject": "hi"}, body)
+    assert sock.sent == b""  # Not even POST: no half-posted article
+    assert client.date().year == 2024
+
+
+def test_post_large_body_spools(connect: Connect) -> None:
+    client, sock = connect(WELCOME + MODE_READER + b"340 send\r\n240 ok\r\n")
+    sock.sent = b""
+    body = b"y" * 1000 + b"\n"
+    client.post({"Subject": "hi"}, (body for _ in range(3000)))  # ~3 MB, on disk
+    assert sock.sent.endswith(body.replace(b"\n", b"\r\n") * 3000 + b".\r\n")
 
 
 def test_empty_status_line(connect: Connect) -> None:
@@ -501,8 +515,9 @@ def test_exit_with_broken_connection_just_closes(connect: Connect) -> None:
     assert b"QUIT" not in sock.sent
 
 
-def test_post_send_failure_breaks_connection(connect: Connect) -> None:
-    client, _sock = connect(WELCOME + MODE_READER + b"340 send\r\n")
+def test_post_body_read_failure_sends_nothing(connect: Connect) -> None:
+    client, sock = connect(WELCOME + MODE_READER + DATE)
+    sock.sent = b""
 
     def body() -> Iterator[bytes]:
         yield b"line\n"
@@ -510,6 +525,15 @@ def test_post_send_failure_breaks_connection(connect: Connect) -> None:
 
     with pytest.raises(OSError, match="disk read failed"):
         client.post({"Subject": "hi"}, body())
+    assert sock.sent == b""
+    assert client.date().year == 2024
+
+
+def test_post_send_failure_breaks_connection(connect: Connect) -> None:
+    client, sock = connect(WELCOME + MODE_READER + b"340 send\r\n")
+    sock.fail_after = sock.sends + 1  # POST goes out; the article does not
+    with pytest.raises(OSError, match="send failed"):
+        client.post({"Subject": "hi"}, b"line\n")
     with pytest.raises(NNTPSyncError, match="reconnect"):
         client.date()
 
@@ -717,3 +741,71 @@ def test_listgroup_bad_line(connect: Connect) -> None:
     client, _ = connect(WELCOME + MODE_READER + server)
     with pytest.raises(nntp.NNTPDataError, match="Invalid LISTGROUP line"):
         list(client.listgroup("alt.test"))
+
+
+IHAVE_OK = b"335 send it\r\n235 thanks\r\n"
+
+
+def test_ihave(connect: Connect) -> None:
+    client, sock = connect(WELCOME + MODE_READER + IHAVE_OK)
+    sock.sent = b""
+    client.ihave("<a@b>", {"Subject": "hi"}, b"body\n.dot\n")
+    assert sock.sent == (
+        b"IHAVE <a@b>\r\nSubject: hi\r\nMessage-ID: <a@b>\r\n\r\nbody\r\n..dot\r\n.\r\n"
+    )
+
+
+def test_ihave_keeps_matching_message_id_header(connect: Connect) -> None:
+    client, sock = connect(WELCOME + MODE_READER + IHAVE_OK)
+    sock.sent = b""
+    client.ihave("<a@b>", {"message-id": "<a@b>"}, b"x\n")
+    assert sock.sent.count(b"<a@b>") == 2  # The command and one header
+
+
+@pytest.mark.parametrize(
+    ("message_id", "headers"),
+    [
+        ("a@b", {}),
+        ("<a b>", {}),
+        ("<a@b>\r\nQUIT", {}),
+        ("<>", {}),
+        ("<a@b>", {"Message-ID": "<other@b>"}),
+    ],
+)
+def test_ihave_invalid_sends_nothing(
+    connect: Connect, message_id: str, headers: dict[str, str]
+) -> None:
+    client, sock = connect(WELCOME + MODE_READER)
+    sock.sent = b""
+    with pytest.raises(ValueError, match=r"(?i)message-id"):
+        client.ihave(message_id, headers, b"x\n")
+    assert sock.sent == b""
+
+
+@pytest.mark.parametrize(
+    ("server", "code"),
+    [
+        (b"435 not wanted\r\n", 435),
+        (b"436 try later\r\n", 436),
+        (b"335 send it\r\n437 rejected\r\n", 437),
+        (b"335 send it\r\n436 failed\r\n", 436),
+    ],
+)
+def test_ihave_refused_keeps_connection(
+    connect: Connect, server: bytes, code: int
+) -> None:
+    client, _ = connect(WELCOME + MODE_READER + server + DATE)
+    with pytest.raises(nntp.NNTPTemporaryError) as info:
+        client.ihave("<a@b>", {"Subject": "hi"}, b"x\n")
+    assert info.value.code == code
+    assert client.date().year == 2024
+
+
+@pytest.mark.parametrize("arg", ["alt.test\r\nQUIT", "alt.test\nQUIT", "alt\0test"])
+def test_command_rejects_line_breaks(connect: Connect, arg: str) -> None:
+    client, sock = connect(WELCOME + MODE_READER + DATE)
+    sock.sent = b""
+    with pytest.raises(ValueError, match="CR, LF or NUL"):
+        client.group(arg)
+    assert sock.sent == b""
+    assert client.date().year == 2024  # Nothing was sent; still usable
