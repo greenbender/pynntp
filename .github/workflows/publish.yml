@@ -29,9 +29,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
 
-      - name: Bump version
-        run: |
-          uv version --no-sync ${{ github.event.release.tag_name }}
+      - name: Set the pre-release version
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: uv version --no-sync "$TAG"
 
       - name: Build package
         run: uv build
@@ -49,31 +50,23 @@ jobs:
       url: https://pypi.org/p/pynntp
     permissions:
       id-token: write
-      contents: write
-      pull-requests: write
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
 
-      - name: Bump version
+      - name: Check the tag matches the version
+        env:
+          TAG: ${{ github.event.release.tag_name }}
         run: |
-          uv version --no-sync ${{ github.event.release.tag_name }}
+          version=$(uv version --short)
+          if [ "$version" != "$TAG" ]; then
+            echo "::error::Tag $TAG doesn't match version $version in pyproject.toml"
+            exit 1
+          fi
 
       - name: Build package
         run: uv build
 
       - name: Publish package
         uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
-
-      - name: Open a pull request with the version change
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          VERSION: ${{ github.event.release.tag_name }}
-        run: |
-          git config user.name "${{ github.actor }}"
-          git config user.email "${{ github.actor_id }}+${{ github.actor }}@users.noreply.github.com"
-          git checkout -b "bump-version-$VERSION"
-          git commit -am "Bump version to $VERSION"
-          git push -u origin "bump-version-$VERSION"
-          gh pr create --title "Bump version to $VERSION" --body "Bump version to $VERSION after the release." --base main

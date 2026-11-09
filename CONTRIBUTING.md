@@ -42,7 +42,10 @@ The build should have no warnings. Docstrings use the Google style.
 
 ## Releases
 
-Publishing a GitHub release tagged with the version (for example `3.0.0`)
-uploads it to PyPI and opens a pull request that bumps the version in
-`pyproject.toml`. A pre-release (for example `3.0.0rc1`) goes to TestPyPI
-instead. Update `CHANGELOG.md` before releasing.
+First merge a pull request that sets the version in `pyproject.toml` (run
+`uv version 3.1.0`, which also updates `uv.lock`) and dates the
+`CHANGELOG.md` section. Then publish a GitHub release on `main` tagged with
+that version, for example `3.1.0`; it is uploaded to PyPI, and the release
+fails if the tag and version differ. A pre-release (for example `3.2.0rc1`)
+goes to TestPyPI instead, built with the tag as its version. Only admins can
+create tags.
