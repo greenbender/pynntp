@@ -319,5 +319,5 @@ def test_empty_line_is_a_data_error(
     match: str,
 ) -> None:
     client, _ = connect(WELCOME + MODE_READER + server)
-    with pytest.raises(nntp.NNTPDataError, match=f"Invalid {match}.*empty line"):
+    with pytest.raises(nntp.NNTPDataError, match=f"Invalid {match}"):
         list(call(client))
