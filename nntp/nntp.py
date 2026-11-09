@@ -19,6 +19,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 from __future__ import annotations
 
 import io
+import itertools
 import re
 import socket
 import ssl
@@ -1092,43 +1093,66 @@ class NNTPClient(BaseNNTPClient):
             raise NNTPDataError(f"Invalid {verb} status") from e
 
     def _read_body(self, lines: Iterator[bytes], decode: bool | None = None) -> bytes:
-        """Read an article body, decoding and checking yEnc data.
+        """Read an article body, decoding yEnc if decode is set or detected.
 
-        Each yEnc block is checked against its =yend trailer: the size, and
-        pcrc32 for a part of a multipart post or crc32 otherwise. The whole
-        response is read before a mismatch is raised, so the connection stays in
-        sync.
+        Detection: the body is yEnc if its first non-blank line starts with
+        "=y". Every path reads the response to its end.
+
+        Raises:
+            NNTPYEncError: As for _decode_yenc().
+        """
+        if decode is not None:
+            return self._decode_yenc(lines) if decode else b"".join(lines)
+        blank: list[bytes] = []
+        for line in lines:
+            if line.startswith(b"=y"):
+                # Leading blank lines are not part of the yEnc data
+                return self._decode_yenc(itertools.chain([line], lines))
+            if line != b"\r\n":
+                return b"".join(itertools.chain(blank, [line], lines))
+            blank.append(line)
+        return b"".join(blank)
+
+    def _decode_yenc(self, lines: Iterator[bytes]) -> bytes:
+        """Decode yEnc lines, checking each block against its =yend trailer.
+
+        The size is checked, and pcrc32 for a part of a multipart post or
+        crc32 otherwise. The whole response is read before a mismatch is
+        raised, so the connection stays in sync.
 
         Raises:
             NNTPYEncError: If yEnc data does not match its trailer, or a =ybegin
                 has no =yend. The decoded body is in its data attribute.
         """
         body: list[bytes] = []
+        encoded: list[bytes] = []  # yEnc data lines not yet decoded
         decoder, size, multipart, open_block = YEnc(), 0, False, False
         error: str | None = None
-        for line in lines:
-            # detect yenc
-            if decode is None:
-                if line.startswith(b"=y"):
-                    decode = True
-                    del body[:]
-                elif line != b"\r\n":
-                    decode = False
 
-            if not decode:
-                body.append(line)
-            elif line.startswith(b"=ybegin"):
+        def decode_pending() -> None:
+            # Decoding a block in one call is much faster than line by line
+            nonlocal size
+            if encoded:
+                data = decoder.decode(b"".join(encoded))
+                encoded.clear()
+                size += len(data)
+                body.append(data)
+
+        for line in lines:
+            if line[:2] != b"=y":
+                encoded.append(line)
+                continue
+            decode_pending()
+            if line.startswith(b"=ybegin"):
                 decoder, size, open_block = YEnc(), 0, True
                 multipart = "part" in parse_keywords(line)
             elif line.startswith(b"=yend"):
                 mismatch = check_trailer(line, size, decoder.crc32, part=multipart)
                 error = error or mismatch
                 open_block = False
-            elif not line.startswith(b"=y"):  # Skip =ypart and other =y lines
-                data = decoder.decode(line)
-                size += len(data)
-                body.append(data)
+            # =ypart and other =y lines carry nothing to decode
 
+        decode_pending()
         if open_block:
             error = error or "missing =yend trailer"
         data = b"".join(body)

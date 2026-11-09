@@ -1022,3 +1022,32 @@ def test_top_level_exports() -> None:
     assert nntp.SSLMode is SSLMode
     assert nntp.Newsgroup is Newsgroup
     assert nntp.HeaderDict is HeaderDict
+
+
+def test_body_detection_leading_blank_lines(connect: Connect) -> None:
+    yenc = yenc_body(PLAIN).replace(b"222 1 <a@b>\r\n", b"222 1 <a@b>\r\n\r\n\r\n", 1)
+    plain = b"222 2 <b@c>\r\n\r\nhello\r\n.\r\n"
+    client, _ = connect(WELCOME + MODE_READER + yenc + plain + DATE)
+    assert client.body(1) == PLAIN  # Blank lines before yEnc are dropped
+    assert client.body(2) == b"\r\nhello\r\n"  # Kept in a plain body
+    assert client.date().year == 2024
+
+
+def test_body_decode_forced(connect: Connect) -> None:
+    raw = yenc_encode(b"raw bytes")  # No =ybegin/=yend lines at all
+    server = b"222 1 <a@b>\r\n" + raw + b".\r\n" + b"222 2 <b@c>\r\n=ybegin x\r\n.\r\n"
+    client, _ = connect(WELCOME + MODE_READER + server)
+    assert client.body(1, decode=True) == b"raw bytes"
+    assert client.body(2, decode=False) == b"=ybegin x\r\n"
+
+
+def test_body_two_yenc_blocks(connect: Connect) -> None:
+    first, second = b"first file", b"second file"
+    blocks = b"".join(
+        f"=ybegin line=128 size={len(p)} name=f\r\n".encode()
+        + yenc_encode(p)
+        + f"=yend size={len(p)} crc32={zlib.crc32(p):08x}\r\n".encode()
+        for p in (first, second)
+    )
+    client, _ = connect(WELCOME + MODE_READER + b"222 1 <a@b>\r\n" + blocks + b".\r\n")
+    assert client.body(1) == first + second
