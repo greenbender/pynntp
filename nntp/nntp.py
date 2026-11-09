@@ -718,7 +718,9 @@ class NNTPClient(BaseNNTPClient):
     processed as it arrives. The command is sent and its status line read when
     the method is called, so a reply error is raised there. Read each iterator
     to the end before issuing the next command; abandoning one part way leaves
-    the connection out of sync (see NNTPSyncError and reconnect()).
+    the connection out of sync (see NNTPSyncError and reconnect()). That
+    includes never reading it: calling e.g. xover() and dropping the result
+    blocks the connection until reconnect().
 
     Any command can raise NNTPReplyError (and its subclasses), NNTPSyncError,
     NNTPProtocolError or OSError. Commands that parse a response can also
@@ -1090,8 +1092,8 @@ class NNTPClient(BaseNNTPClient):
         def times() -> Iterator[tuple[str, datetime, str]]:
             for line in lines:
                 with self._data_errors("LIST ACTIVE.TIMES line"):
-                    time = utils.parse_active_time(line)
-                yield time
+                    name, created, creator = utils.parse_active_time(line)
+                yield name, created, creator
 
         return times()
 
@@ -1136,13 +1138,13 @@ class NNTPClient(BaseNNTPClient):
         """
         lines = self.list("NEWSGROUPS", args=pattern)
 
-        def descriptions() -> Iterator[tuple[str, str]]:
+        def groups() -> Iterator[tuple[str, str]]:
             for line in lines:
                 with self._data_errors("LIST NEWSGROUPS line"):
-                    description = utils.parse_newsgroup_description(line)
-                yield description
+                    name, description = utils.parse_newsgroup_description(line)
+                yield name, description
 
-        return descriptions()
+        return groups()
 
     def list_overview_fmt(self) -> Iterator[tuple[str, bool]]:
         """LIST OVERVIEW.FMT command.
@@ -1161,8 +1163,8 @@ class NNTPClient(BaseNNTPClient):
         def fields() -> Iterator[tuple[str, bool]]:
             for line in lines:
                 with self._data_errors("LIST OVERVIEW.FMT line"):
-                    field = utils.parse_overview_fmt(line)
-                yield field
+                    name, full = utils.parse_overview_fmt(line)
+                yield name, full
 
         return fields()
 
@@ -1505,8 +1507,8 @@ class NNTPClient(BaseNNTPClient):
         """Parse "<article number> <value>" lines, as sent by HDR and XPAT."""
         for line in lines:
             with self._data_errors(f"{verb} response"):
-                number_value = utils.parse_number_value(line)
-            yield number_value
+                number, value = utils.parse_number_value(line)
+            yield number, value
 
     def hdr(
         self,

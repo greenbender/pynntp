@@ -24,6 +24,9 @@
   connection broken when it is closed or garbage-collected.
 - An empty line in a LIST NEWSGROUPS response raised `IndexError` instead of
   `NNTPDataError`.
+- A LIST ACTIVE.TIMES timestamp too large for `datetime` raised
+  `OverflowError` or `OSError` instead of `NNTPDataError`;
+  `utils.parse_epoch()` raises `ValueError` for it.
 
 ## 3.2.0 - 2026-11-09
 

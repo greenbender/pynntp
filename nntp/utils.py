@@ -271,6 +271,9 @@ def parse_epoch(value: str | int) -> datetime:
         The time, in UTC.
 
     Raises:
-        ValueError: If the value is not an integer.
+        ValueError: If the value is not an integer, or is out of range.
     """
-    return datetime.fromtimestamp(int(value), tz=UTC)
+    try:
+        return datetime.fromtimestamp(int(value), tz=UTC)
+    except (OverflowError, OSError) as e:  # Too large for datetime or the OS
+        raise ValueError(f"Timestamp out of range: {value!r}") from e

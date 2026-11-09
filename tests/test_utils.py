@@ -289,3 +289,9 @@ def test_parse_number_value(line: str, expected: tuple[int, str]) -> None:
 def test_parse_number_value_invalid(line: str, match: str) -> None:
     with pytest.raises(ValueError, match=match):
         parse_number_value(line)
+
+
+@pytest.mark.parametrize("value", [10**17, 10**20, -(10**20)])
+def test_parse_epoch_out_of_range(value: int) -> None:
+    with pytest.raises(ValueError, match="out of range"):
+        parse_epoch(value)
