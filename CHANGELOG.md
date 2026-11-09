@@ -35,6 +35,12 @@ Found by go-while (#102).
 - A LIST ACTIVE.TIMES timestamp too large for `datetime` raised
   `OverflowError` or `OSError` instead of `NNTPDataError`;
   `utils.parse_epoch()` raises `ValueError` for it.
+- Response lines longer than 64 KiB, including lines decompressed from COMPRESS
+  DEFLATE, XFEATURE COMPRESS GZIP or XZVER/XZHDR data, raise `NNTPDataError`
+  and mark the connection out of sync, instead of being buffered without
+  limit. The limit is the `max_line_length` attribute, which can be changed on
+  the class or on a client. Decompression is done at most 64 KiB at a time, and
+  reading a long partial line is no longer quadratic.
 
 ## 3.2.0 - 2026-11-09
 

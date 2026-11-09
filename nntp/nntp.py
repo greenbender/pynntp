@@ -139,6 +139,8 @@ _DIGITS_RE = re.compile(r"[0-9]+")
 _MULTILINE = frozenset({100, 101, 215, 220, 221, 222, 224, 225, 230, 231, 282})
 
 _MAX_COMMAND = 512  # RFC 3977 3.1: command line length, including CRLF
+_MAX_LINE = 0x10000  # Default max_line_length: a response line, including CRLF
+_INFLATE_SIZE = 0x10000  # Most decompressed data produced at a time
 _SEND_SIZE = 0x10000  # Batch POST body lines into writes of about this size
 _SPOOL_SIZE = 0x100000  # Articles larger than this are prepared on disk
 
@@ -164,6 +166,22 @@ def _after_compress_forbidden(words: list[str]) -> bool:
 
 def _msgid_article(msgid_article: str | int | None) -> str | None:
     return None if msgid_article is None else str(msgid_article)
+
+
+def _inflate(inflate: _Decompress, data: bytes) -> bytes:
+    """Decompress at most _INFLATE_SIZE bytes of output.
+
+    Input that is not used yet is kept in inflate.unconsumed_tail and used
+    first on the next call. If the output is _INFLATE_SIZE bytes long, more may
+    be pending: call again, with b"" if there is no new input.
+
+    Raises:
+        NNTPDataError: If decompression fails.
+    """
+    try:
+        return inflate.decompress(inflate.unconsumed_tail + data, _INFLATE_SIZE)
+    except zlib.error as e:
+        raise NNTPDataError("Decompression failed") from e
 
 
 class NNTPError(Exception):
@@ -235,10 +253,16 @@ class BaseNNTPClient:
     Responses compressed with XFEATURE COMPRESS GZIP or as yEnc-encoded zlib
     (XZVER, XZHDR), and the whole connection after COMPRESS DEFLATE, are
     decompressed transparently.
+
+    A response line, after decompression and including its CRLF, may be at
+    most max_line_length octets long (64 KiB by default; set it on the class
+    or the instance to change it). A longer line raises NNTPDataError and
+    marks the connection out of sync, without reading the rest of the line.
     """
 
     encoding = "utf-8"
     errors = "surrogateescape"
+    max_line_length = _MAX_LINE
 
     def __init__(
         self,
@@ -288,6 +312,7 @@ class BaseNNTPClient:
         self._broken = False  # Closed, or unread/unknown data on the socket
         self._deflate: _Compress | None = None  # Set by COMPRESS (RFC 8054)
         self._inflate: _Decompress | None = None
+        self._inflate_more = False  # _inflate may have more output pending
 
         host = self._address[0]
         self.socket = socket.create_connection(self._address, timeout=self._timeout)
@@ -348,24 +373,33 @@ class BaseNNTPClient:
             NNTPError: If the server closed the connection.
             OSError: On socket errors, including timeouts.
         """
-        data = self.socket.recv(size)
-        if not data:
-            raise NNTPError("Failed to read from socket")
+        if self._inflate_more:
+            data = b""  # Take the pending decompressed data first
+        else:
+            data = self.socket.recv(size)
+            if not data:
+                raise NNTPError("Failed to read from socket")
         self._buffer.write(self._decompress(data))
 
     def _decompress(self, data: bytes) -> bytes:
-        """Inflate received data if COMPRESS is active."""
+        """Inflate received data if COMPRESS is active.
+
+        At most _INFLATE_SIZE bytes are returned; the rest is kept for the next
+        call, so a small compressed chunk can't fill memory before the line
+        length is checked.
+        """
         if self._inflate is None:
             return data
         try:
-            data = self._inflate.decompress(data)
-        except zlib.error as e:
+            data = _inflate(self._inflate, data)
+        except NNTPDataError:
             self.close()  # RFC 8054: close on corrupt compressed data
-            raise NNTPDataError("Decompression failed") from e
+            raise
         if self._inflate.unused_data:
             # The stream lasts as long as the connection; an end means corruption
             self.close()
             raise NNTPDataError("Decompression failed: data after end of stream")
+        self._inflate_more = len(data) == _INFLATE_SIZE
         return data
 
     def _send(self, data: bytes) -> None:
@@ -375,10 +409,31 @@ class BaseNNTPClient:
         self.socket.sendall(data)
 
     def _readline(self) -> bytes:
-        """Read one line, receiving more data from the socket as needed."""
+        """Read one line, receiving more data from the socket as needed.
+
+        Raises:
+            NNTPDataError: If the line is longer than max_line_length.
+        """
         while not (line := self._buffer.readline()):
+            if len(self._buffer) >= self.max_line_length:  # Too long, with CRLF
+                self._line_too_long()
             self._recv()
+        if len(line) > self.max_line_length:
+            self._line_too_long()
         return line
+
+    def _lines(self, buf: BytesFifo) -> Iterator[bytes]:
+        """Yield the complete lines in buf, checking their length as _readline()."""
+        while line := buf.readline():
+            if len(line) > self.max_line_length:
+                self._line_too_long()
+            yield line
+        if len(buf) >= self.max_line_length:
+            self._line_too_long()
+
+    def _line_too_long(self) -> NoReturn:
+        self._broken = True  # The rest of the line is unread
+        raise NNTPDataError(f"Line longer than {self.max_line_length} octets")
 
     def _read(self) -> bytes:
         """Read whatever is buffered, or the next recv if the buffer is empty."""
@@ -395,6 +450,7 @@ class BaseNNTPClient:
         Raises:
             NNTPError: If the server closed the connection.
             NNTPProtocolError: If the status line can't be parsed.
+            NNTPDataError: If the status line is longer than max_line_length.
             NNTPTemporaryError: For status codes 400-499.
             NNTPPermanentError: For status codes 500-599.
         """
@@ -432,23 +488,21 @@ class BaseNNTPClient:
         same as _info_plain() would give for the uncompressed response.
 
         Raises:
-            NNTPDataError: If decompression fails.
+            NNTPDataError: If decompression fails, or a line is too long.
         """
         inflate = zlib.decompressobj(15 + 32)
 
-        done, buf = False, BytesFifo()
+        done, more, buf = False, False, BytesFifo()
         while not done:
-            chunk = self._read()
             if inflate.eof:
                 # Data after the end of the gzip stream (the terminator).
-                buf.write(chunk)
+                buf.write(self._read())
             else:
-                try:
-                    buf.write(inflate.decompress(chunk))
-                except zlib.error as e:
-                    raise NNTPDataError("Decompression failed") from e
+                data = _inflate(inflate, b"" if more else self._read())
+                more = len(data) == _INFLATE_SIZE
+                buf.write(data)
                 buf.write(inflate.unused_data)
-            for line in buf:
+            for line in self._lines(buf):
                 if line == b".\r\n":
                     done = True
                     break
@@ -456,10 +510,8 @@ class BaseNNTPClient:
 
         # With TERMINATOR, the end of the gzip stream can follow the terminator
         while not inflate.eof:
-            try:
-                inflate.decompress(self._read())
-            except zlib.error as e:
-                raise NNTPDataError("Decompression failed") from e
+            data = _inflate(inflate, b"" if more else self._read())
+            more = len(data) == _INFLATE_SIZE
             buf.write(inflate.unused_data)
         # Anything left over belongs to the next reply
         self._buffer.write(buf.read())
@@ -472,7 +524,8 @@ class BaseNNTPClient:
 
         Raises:
             NNTPDataError: If the yEnc header or trailer is bad, the size or CRC
-                check fails, or decompression fails or ends early.
+                check fails, decompression fails or ends early, or a line is
+                too long.
         """
         decoder = YEnc()
         inflate = zlib.decompressobj(-15)
@@ -491,14 +544,13 @@ class BaseNNTPClient:
                 continue
             data = decoder.decode(line)
             size += len(data)
-            try:
-                data = inflate.decompress(data)
-            except zlib.error as e:
-                raise NNTPDataError("Decompression failed") from e
-            if not data:
-                continue
-            buf.write(data)
-            yield from buf
+            while True:
+                data = _inflate(inflate, data)
+                buf.write(data)
+                yield from self._lines(buf)
+                if len(data) < _INFLATE_SIZE:
+                    break
+                data = b""  # More output may be pending
 
         if not trailer:
             raise NNTPDataError("Missing yEnc trailer")
@@ -722,8 +774,8 @@ class NNTPClient(BaseNNTPClient):
     blocks the connection until reconnect().
 
     Any command can raise NNTPReplyError (and its subclasses), NNTPSyncError,
-    NNTPProtocolError or OSError. Commands that parse a response can also
-    raise NNTPDataError.
+    NNTPProtocolError, NNTPDataError (e.g. for a line longer than
+    max_line_length) or OSError.
     """
 
     def __init__(

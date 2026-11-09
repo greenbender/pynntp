@@ -27,19 +27,26 @@ _EOL = b"\r\n"
 # the buffer, so the copy cost is amortized O(1) per byte.
 _DISCARD_SIZE = 0xFFFF
 
+# A partial line longer than this is moved to the write queue, so it is not
+# searched again on every readline() until its CRLF arrives.
+_QUEUE_SIZE = 0x1000
+
 
 class BytesFifo:
     """FIFO byte buffer that reads CRLF-terminated lines.
 
-    Writes are queued and only joined into the buffer on the next read, so
-    many small writes are cheap. Iterating yields complete lines and stops at
-    the first incomplete one; iteration can resume after more data is written.
+    Writes are queued and only joined into the buffer once they complete a
+    line (or on read()), so many small writes are cheap and a long partial
+    line is not copied or searched again on every write. Iterating yields
+    complete lines and stops at the first incomplete one; iteration can resume
+    after more data is written.
     """
 
     def __init__(self, data: bytes = b"") -> None:
         self._buf = data
         self._buflist: list[bytes] = []
         self._pending = 0  # Total length of _buflist
+        self._eol_queued = False  # _buflist completes a line
         self._pos = 0
 
     def __len__(self) -> int:
@@ -60,6 +67,7 @@ class BytesFifo:
             self._buf = self._buf[self._pos :] + b"".join(self._buflist)
             self._buflist = []
             self._pending = 0
+            self._eol_queued = False
             self._pos = 0
 
     def _advance(self, newpos: int) -> None:
@@ -71,6 +79,17 @@ class BytesFifo:
 
     def write(self, data: bytes) -> None:
         """Append data to the end of the buffer."""
+        if not data:
+            return
+        if not self._eol_queued:
+            # The CRLF can also be split between the unread data and this write
+            if self._buflist:
+                prev = self._buflist[-1]
+            else:
+                prev = self._buf if self._pos < len(self._buf) else b""
+            self._eol_queued = _EOL in data or (
+                prev.endswith(b"\r") and data.startswith(b"\n")
+            )
         self._buflist.append(data)
         self._pending += len(data)
 
@@ -98,12 +117,18 @@ class BytesFifo:
             The line, or b"" if no complete line is buffered yet.
         """
         # Hot path: called once per line of every response.
-        if self._buflist:
-            self._append()
         buf, pos = self._buf, self._pos
         i = buf.find(_EOL, pos)
         if i < 0:
-            return b""
+            if not self._eol_queued:
+                if len(buf) - pos > _QUEUE_SIZE:
+                    self._buflist.insert(0, buf[pos:])
+                    self._pending += len(buf) - pos
+                    self._buf, self._pos = b"", 0
+                return b""
+            self._append()
+            buf, pos = self._buf, 0
+            i = buf.find(_EOL)
         newpos = i + len(_EOL)
         self._advance(newpos)
         return buf[pos:newpos]
