@@ -129,6 +129,9 @@ def _url_bool(name: str, value: str) -> bool:
     raise ValueError(f"Invalid URL {name}: {value!r}")
 
 
+# RFC 3977 section 3.2: a status code is three digits, the first 1-5
+_STATUS_CODE_RE = re.compile(rb"[1-5][0-9]{2}")
+
 _MAX_COMMAND = 512  # RFC 3977 3.1: command line length, including CRLF
 _SEND_SIZE = 0x10000  # Batch POST body lines into writes of about this size
 _SPOOL_SIZE = 0x100000  # Articles larger than this are prepared on disk
@@ -400,18 +403,10 @@ class BaseNNTPClient:
         """
         line = self._readline().rstrip()
         parts = line.split(None, 1)
-
-        try:
-            code, data = int(parts[0]), b""
-        except (IndexError, ValueError):
-            code = 0
-        if code < 100 or code >= 600:
+        if not parts or not _STATUS_CODE_RE.fullmatch(parts[0]):
             raise NNTPProtocolError(line.decode(self.encoding, self.errors))
-
-        if len(parts) > 1:
-            data = parts[1]
-
-        message = data.decode(self.encoding, self.errors)
+        code = int(parts[0])
+        message = parts[1].decode(self.encoding, self.errors) if len(parts) > 1 else ""
 
         if 400 <= code <= 499:
             raise NNTPTemporaryError(code, message)
@@ -610,18 +605,50 @@ class BaseNNTPClient:
             except NNTPTemporaryError as e:
                 if e.code != 480 or not self.username:
                     raise
+                if verb.upper() == "STARTTLS":
+                    # Logging in now would send the password before TLS
+                    raise NNTPTemporaryError(
+                        e.code, f"{e.message} (won't log in before STARTTLS)"
+                    ) from e
                 if self._deflate is not None:
                     # RFC 8054: never authenticate on a compressed connection
                     raise NNTPTemporaryError(
                         e.code, f"{e.message} (can't authenticate after COMPRESS)"
                     ) from e
 
+        self.login()
+        return self._command(verb, args)
+
+    def login(self, username: str | None = None, password: str | None = None) -> None:
+        """AUTHINFO USER and PASS commands.
+
+        Logs in now rather than waiting for the server to ask (480). Use it
+        before compress() on servers that only ask for a login later, since
+        AUTHINFO isn't allowed once compression is active. Without TLS the
+        credentials are sent in clear text.
+
+        See <https://datatracker.ietf.org/doc/html/rfc4643>
+
+        Args:
+            username: Username. Defaults to the constructor's; a value given
+                here replaces it, including for reconnect().
+            password: Password, likewise.
+
+        Raises:
+            ValueError: If there is no username.
+            NNTPReplyError: If the login is rejected.
+        """
+        if username is not None:
+            self.username = username
+        if password is not None:
+            self.password = password
+        if not self.username:
+            raise ValueError("No username to log in with")
         code, message = self._command("AUTHINFO USER", self.username)
         if code == 381:
             code, message = self._command("AUTHINFO PASS", self.password)
         if code != 281:
             raise NNTPReplyError(code, message)
-        return self._command(verb, args)
 
     def close(self) -> None:
         """Close the connection without sending QUIT.
@@ -1191,7 +1218,7 @@ class NNTPClient(BaseNNTPClient):
         try:
             return int(parts[0]), parts[1]
         except (IndexError, ValueError) as e:
-            raise NNTPDataError(f"Invalid {verb} status") from e
+            raise NNTPDataError(f'Invalid {verb} status "{message}"') from e
 
     def _read_body(self, lines: Iterator[bytes], decode: bool | None = None) -> bytes:
         """Read an article body, decoding yEnc if decode is set or detected.
@@ -1273,8 +1300,7 @@ class NNTPClient(BaseNNTPClient):
         Args:
             msgid_article: A message-id or article number. None (the default)
                 uses the current article.
-            decode: Decode yEnc. None (the default) detects it from the Subject
-                header and the body.
+            decode: Decode yEnc. None (the default) detects it from the body.
 
         Returns:
             The article number, headers and body. The body is bytes.
@@ -1289,22 +1315,19 @@ class NNTPClient(BaseNNTPClient):
             "ARTICLE", _msgid_article(msgid_article), expect=220
         )
 
-        parts = message.split(None, 1)
-        try:
-            articleno = int(parts[0])
-        except (IndexError, ValueError) as e:
-            raise NNTPDataError(f'Invalid ARTICLE status "{message}"') from e
-
         # Headers and body come from one response: parse_headers() stops at
         # the blank line and _read_body() reads the rest.
         lines = self._info(code, message)
         with _data_errors("article headers"):
             headers = utils.parse_headers(self._decode(lines))
-
-        if decode is None and "yEnc" in headers.get("subject", ""):
-            decode = True
-
         body = self._read_body(lines, decode=decode)
+
+        # Parsed only now, so a bad number never leaves the article unread
+        parts = message.split(None, 1)
+        try:
+            articleno = int(parts[0])
+        except (IndexError, ValueError) as e:
+            raise NNTPDataError(f'Invalid ARTICLE status "{message}"') from e
 
         return articleno, headers, body
 
@@ -1428,7 +1451,9 @@ class NNTPClient(BaseNNTPClient):
     def _overview_fields(self) -> tuple[tuple[str, bool], ...]:
         try:
             return tuple(self.list_overview_fmt())
-        except NNTPError:
+        except NNTPPermanentError:
+            # Not supported (5xx): use the default. Other errors propagate, so a
+            # temporary failure isn't cached as the format.
             names = ("Subject", "From", "Date", "Message-ID", "References")
             return tuple((name, False) for name in (*names, "Bytes", "Lines"))
 
@@ -1694,7 +1719,7 @@ class NNTPClient(BaseNNTPClient):
             body = io.BytesIO(body)
 
         with tempfile.SpooledTemporaryFile(max_size=_SPOOL_SIZE) as article:
-            article.write(hdrs.encode(self.encoding))
+            article.write(hdrs.encode(self.encoding, self.errors))
             for line in body:
                 if line.startswith(b"."):
                     line = b"." + line

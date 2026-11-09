@@ -1,5 +1,28 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- `login()` logs in straight away instead of waiting for the server to ask;
+  use it before `compress()` (RFC 4643).
+
+### Fixed
+
+- A 480 reply to STARTTLS no longer makes the client log in, which sent the
+  password in clear text before TLS was set up.
+- `article()` detects yEnc from the body only, as `body()` does; a "yEnc"
+  Subject no longer forces decoding of a plain body.
+- `article()` with a malformed article number in its 220 reply reads the
+  article before raising `NNTPDataError`, so the connection stays in sync.
+- Only a permanent (5xx) error to LIST OVERVIEW.FMT selects the default
+  overview format. Other errors are raised and the format is retried next
+  time instead of the default being cached.
+- POST and IHAVE encode headers with the client's `errors` policy
+  (`surrogateescape`), so headers read from an article can be sent back.
+- Status lines must start with exactly three digits, 1xx to 5xx (RFC 3977).
+  Codes such as `0411` or `+411` raise `NNTPProtocolError`.
+
 ## 3.0.0 - 2026-11-09
 
 ### Breaking changes

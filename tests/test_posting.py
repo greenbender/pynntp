@@ -23,6 +23,15 @@ def test_post(connect: Connect) -> None:
     assert sock.sent == b"POST\r\nSubject: hi\r\n\r\none\r\n..two\r\n.\r\n"
 
 
+def test_post_header_surrogateescape(connect: Connect) -> None:
+    client, sock = connect(
+        WELCOME + MODE_READER + b"340 send\r\n" + b"240 <new@id> posted\r\n"
+    )
+    sock.sent = b""
+    client.post({"Subject": "caf\udce9"}, b"x\n")  # As read with surrogateescape
+    assert b"Subject: caf\xe9\r\n" in sock.sent
+
+
 def test_post_bad_header_sends_nothing(connect: Connect) -> None:
     client, sock = connect(WELCOME + MODE_READER)
     sock.sent = b""

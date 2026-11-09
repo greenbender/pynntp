@@ -227,6 +227,14 @@ def test_compress() -> None:
             nntp_client.mode_reader()
 
 
+def test_login_refused_keeps_connection() -> None:
+    with nntp.NNTPClient("localhost") as nntp_client:
+        with pytest.raises(nntp.NNTPPermanentError) as info:
+            nntp_client.login("user", "secret")
+        assert info.value.code == 502  # The test server has no logins
+        assert nntp_client.date().year >= 2024
+
+
 def test_xpat() -> None:
     with nntp.NNTPClient("localhost") as nntp_client:
         _, first, last, _ = nntp_client.group("local.test")

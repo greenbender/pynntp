@@ -140,3 +140,11 @@ def test_xzhdr_empty_response(connect: Connect) -> None:
     client, _ = connect(WELCOME + MODE_READER + b"221 none\r\n.\r\n" + DATE)
     assert list(client.xzhdr("Subject", (1, 2))) == []
     assert client.date().year == 2024
+
+
+def test_overview_fmt_temporary_error_not_cached(connect: Connect) -> None:
+    server = b"400 busy\r\n" + OVERVIEW_FMT + b"224 ok\r\n.\r\n"
+    client, _ = connect(WELCOME + MODE_READER + server)
+    with pytest.raises(nntp.NNTPTemporaryError):
+        list(client.xover())
+    assert list(client.xover()) == []  # Retried, not cached as the default
