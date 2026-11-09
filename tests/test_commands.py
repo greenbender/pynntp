@@ -13,7 +13,7 @@ from nntp.types import Newsgroup, SSLMode
 from tests.helpers import LIST, MODE_READER, WELCOME, Connect
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterator
 
 
 def test_group(connect: Connect) -> None:
@@ -272,12 +272,18 @@ def test_list_newsgroups_without_description(connect: Connect) -> None:
 
 @pytest.mark.parametrize(
     "reply",
-    [b"223 -5 <a@b>", b"223 +5 <a@b>", b"223 3", b"223 3 nothing", b"223 3 <no-at>"],
+    [b"223 -5 <a@b>", b"223 +5 <a@b>", b"223 3", b"223 3 nothing", b"223 3 <>"],
 )
 def test_stat_invalid_metadata(connect: Connect, reply: bytes) -> None:
     client, _ = connect(WELCOME + MODE_READER + reply + b"\r\n")
     with pytest.raises(nntp.NNTPDataError, match="Invalid STAT status"):
         client.stat(1)
+
+
+def test_stat_message_id_without_at(connect: Connect) -> None:
+    # RFC 3977 doesn't require "@"; INN serves such ids with laxmid
+    client, _ = connect(WELCOME + MODE_READER + b"223 3 <bnews.sri-arpa.865>\r\n")
+    assert client.stat(3) == (3, "<bnews.sri-arpa.865>")
 
 
 def test_stat_by_message_id_number_zero(connect: Connect) -> None:
@@ -303,3 +309,21 @@ def test_newgroups_year_zero_padded(connect: Connect) -> None:
     sock.sent = b""
     assert list(client.newgroups(datetime(999, 1, 2, 3, 4, 5, tzinfo=UTC))) == []
     assert sock.sent == b"NEWGROUPS 09990102 030405 GMT\r\n"
+
+
+@pytest.mark.parametrize(
+    ("server", "call", "match"),
+    [
+        (b"215 groups\r\n\r\n.\r\n", lambda c: c.list_newsgroups(), "LIST NEWSGROUPS"),
+        (b"225 ok\r\n\r\n.\r\n", lambda c: c.hdr("Subject"), "HDR response"),
+    ],
+)
+def test_empty_line_is_a_data_error(
+    connect: Connect,
+    server: bytes,
+    call: Callable[[nntp.NNTPClient], Iterator[object]],
+    match: str,
+) -> None:
+    client, _ = connect(WELCOME + MODE_READER + server)
+    with pytest.raises(nntp.NNTPDataError, match=f"Invalid {match}"):
+        list(call(client))

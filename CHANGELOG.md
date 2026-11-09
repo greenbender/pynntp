@@ -1,5 +1,41 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- `utils.parse_active_time()`, `utils.parse_newsgroup_description()`,
+  `utils.parse_overview_fmt()` and `utils.parse_number_value()` parse LIST
+  ACTIVE.TIMES, LIST NEWSGROUPS, LIST OVERVIEW.FMT and HDR/XHDR/XPAT lines,
+  like `utils.parse_newsgroup()` does for LIST ACTIVE.
+
+### Changed
+
+- Methods that return an iterator (`capabilities()`, `newgroups()`,
+  `newnews()`, the `list_*()` methods, `listgroup()`, `hdr()`/`xhdr()`/
+  `xzhdr()`, `xover()`/`xzver()`/`over()` and `xpat()`) send their command and
+  read its status line when called, as `list()` already did, instead of on the
+  first `next()`. A reply error is raised by the call, and another command
+  issued before the iterator is read raises `NNTPSyncError` (#102).
+
+### Fixed
+
+Found by go-while (#102).
+
+- 3.2.0 added a second message-id pattern requiring `@`, which replaced the
+  RFC 3977 one: STAT, NEXT and LAST rejected valid message-ids without `@`
+  (served by INN with `laxmid`), and `ihave()` accepted non-ASCII message-ids
+  and ones over 250 octets. The RFC 3977 pattern is used everywhere again.
+- `login()` left an unexpected multi-line reply to AUTHINFO unread, so the
+  next command read its data as a reply.
+- An iterator abandoned before `reconnect()` no longer marks the new
+  connection broken when it is closed or garbage-collected.
+- An empty line in a LIST NEWSGROUPS response raised `IndexError` instead of
+  `NNTPDataError`.
+- A LIST ACTIVE.TIMES timestamp too large for `datetime` raised
+  `OverflowError` or `OSError` instead of `NNTPDataError`;
+  `utils.parse_epoch()` raises `ValueError` for it.
+
 ## 3.2.0 - 2026-11-09
 
 ### Changed
