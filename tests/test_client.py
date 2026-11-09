@@ -5,7 +5,7 @@ from __future__ import annotations
 import gzip
 import zlib
 from datetime import datetime, timedelta, timezone
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 
 import pytest
 
@@ -13,6 +13,9 @@ import nntp
 from nntp.headerdict import HeaderDict
 from nntp.nntp import NNTPSyncError
 from nntp.types import Newsgroup
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 WELCOME = b"200 server ready\r\n"
 MODE_READER = b"200 reader mode\r\n"
@@ -60,11 +63,20 @@ Connect = Callable[..., "tuple[nntp.NNTPClient, FakeSocket]"]
 
 @pytest.fixture
 def connect(monkeypatch: pytest.MonkeyPatch, chunk: int) -> Connect:
-    """Return a factory: connect(server_bytes) -> (client, fake_socket)."""
+    """Return a factory: connect(server_bytes) -> (client, fake_socket).
 
-    def factory(server: bytes, **kwargs: object) -> tuple[nntp.NNTPClient, FakeSocket]:
-        sock = FakeSocket(server, chunk)
-        monkeypatch.setattr("nntp.nntp.socket.create_connection", lambda *_, **__: sock)
+    Extra positional byte strings are served to later connections, made by
+    reconnect().
+    """
+
+    def factory(
+        server: bytes, *later: bytes, **kwargs: object
+    ) -> tuple[nntp.NNTPClient, FakeSocket]:
+        socks = [FakeSocket(data, chunk) for data in (server, *later)]
+        monkeypatch.setattr(
+            "nntp.nntp.socket.create_connection", lambda *_, **__: socks.pop(0)
+        )
+        sock = socks[0]
         return nntp.NNTPClient("example.com", **kwargs), sock  # type: ignore[arg-type]
 
     return factory
@@ -404,3 +416,88 @@ def test_exit_after_close_or_quit(connect: Connect, method: str) -> None:
 
 def test_sync_error_is_exported() -> None:
     assert nntp.NNTPSyncError is nntp.nntp.NNTPSyncError
+
+
+LIST = b"215 list\r\nalt.a 2 1 y\r\nalt.b 2 1 y\r\n.\r\n"
+DATE = b"111 20240102030405\r\n"
+
+
+def test_abandoned_response_breaks_connection(connect: Connect) -> None:
+    client, _ = connect(WELCOME + MODE_READER + LIST + DATE)
+    for _group in client.list_active():
+        break  # The rest of the response is left unread
+    with pytest.raises(NNTPSyncError, match="reconnect"):
+        client.date()
+
+
+def test_unread_response_blocks_commands(connect: Connect) -> None:
+    client, _ = connect(WELCOME + MODE_READER + LIST + DATE)
+    client.list("ACTIVE")  # Sent but never iterated: the response is unread
+    with pytest.raises(NNTPSyncError):
+        client.date()
+
+
+def test_data_error_part_way_breaks_connection(connect: Connect) -> None:
+    server = OVERVIEW_FMT + b"224 ok\r\n1\ta\tb\r\nbad\r\n2\tc\td\r\n.\r\n" + DATE
+    client, _ = connect(WELCOME + MODE_READER + server)
+    with pytest.raises(nntp.NNTPDataError):
+        list(client.xover())
+    with pytest.raises(NNTPSyncError, match="reconnect"):
+        client.date()
+
+
+def test_connection_lost_breaks_connection(connect: Connect) -> None:
+    client, _ = connect(WELCOME + MODE_READER + b"111 2024")  # Cut off
+    with pytest.raises(nntp.NNTPError, match="Failed to read"):
+        client.date()
+    with pytest.raises(NNTPSyncError, match="reconnect"):
+        client.date()
+
+
+def test_error_reply_keeps_connection(connect: Connect) -> None:
+    client, _ = connect(WELCOME + MODE_READER + b"411 no such group\r\n" + DATE)
+    with pytest.raises(nntp.NNTPTemporaryError):
+        client.group("alt.nope")
+    assert client.date() == datetime(2024, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+
+
+def test_complete_responses_keep_connection(connect: Connect) -> None:
+    article = b"220 1 <a@b>\r\nSubject: hi\r\n\r\nbody\r\n.\r\n"
+    head = b"221 1 <a@b>\r\nSubject: hi\r\n.\r\n"
+    client, _ = connect(WELCOME + MODE_READER + article + head + LIST + DATE)
+    assert client.article(1)[2] == b"body\r\n"
+    assert client.head(1) == {"subject": "hi"}
+    assert len(list(client.list_active())) == 2
+    assert client.date().year == 2024
+
+
+def test_reconnect(connect: Connect) -> None:
+    client, first = connect(WELCOME + MODE_READER + LIST, WELCOME + MODE_READER + DATE)
+    next(client.list_active())
+    with pytest.raises(NNTPSyncError):
+        client.date()
+    client.reconnect()
+    assert first.closed
+    assert client.date().year == 2024
+    assert FakeSocket.last.sent == b"MODE READER\r\nDATE\r\n"
+
+
+def test_exit_with_broken_connection_just_closes(connect: Connect) -> None:
+    client, sock = connect(WELCOME + MODE_READER + LIST)
+    with client:
+        next(client.list_active())
+    assert sock.closed
+    assert b"QUIT" not in sock.sent
+
+
+def test_post_send_failure_breaks_connection(connect: Connect) -> None:
+    client, _sock = connect(WELCOME + MODE_READER + b"340 send\r\n")
+
+    def body() -> Iterator[bytes]:
+        yield b"line\n"
+        raise OSError("disk read failed")
+
+    with pytest.raises(OSError, match="disk read failed"):
+        client.post({"Subject": "hi"}, body())
+    with pytest.raises(NNTPSyncError, match="reconnect"):
+        client.date()

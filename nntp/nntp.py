@@ -23,6 +23,7 @@ import os
 import socket
 import ssl
 import zlib
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from functools import cached_property
 from typing import TYPE_CHECKING, Literal
@@ -79,8 +80,10 @@ class NNTPError(Exception):
 class NNTPSyncError(NNTPError):
     """NNTP sync errors.
 
-    Generally raised when a command is issued while another command it still
-    active.
+    Raised when a command is issued while the response to a previous command
+    is still being read, or after a response was abandoned or failed part way
+    through, leaving unread data on the connection. Call reconnect() (or
+    close()) to recover.
     """
 
 
@@ -169,29 +172,62 @@ class BaseNNTPClient:
                 wrapper. See socket and ssl modules for further details.
             NNTPReplyError: On bad response code from server.
         """
-        self._buffer = BytesFifo()
-        self._generating = False
-
         self.username = username
         self.password = password
+        self._address = (host, port)
+        self._timeout = timeout
+        self._use_ssl = use_ssl
+        self._ssl_mode = ssl_mode
+        self._connect()
 
-        # connect
-        self.socket = socket.create_connection((host, port), timeout=timeout)
+    def _connect(self) -> None:
+        """Open the connection and read the welcome message."""
+        self._buffer = BytesFifo()
+        self._generating = False  # A multi-line response is being read
+        self._broken = False  # Unread or unknown data is left on the socket
+
+        host = self._address[0]
+        self.socket = socket.create_connection(self._address, timeout=self._timeout)
         try:
-            if use_ssl and ssl_mode == SSLMode.IMPLICIT:
+            if self._use_ssl and self._ssl_mode == SSLMode.IMPLICIT:
                 self._enable_tls(host)
 
             code, message = self.status()
             if code not in (200, 201):
                 raise NNTPReplyError(code, message)
 
-            if use_ssl and ssl_mode == SSLMode.STARTTLS:
+            if self._use_ssl and self._ssl_mode == SSLMode.STARTTLS:
                 code, message = self.command("STARTTLS")
                 if code != 382:
                     raise NNTPReplyError(code, message)
                 self._enable_tls(host)
         except BaseException:
             self.socket.close()
+            raise
+
+    def reconnect(self) -> None:
+        """Close the connection and open a new one with the same settings.
+
+        Use this to recover from NNTPSyncError. Session state such as the
+        selected group, the current article and XFEATURE settings is not
+        restored.
+        """
+        self.close()
+        self._connect()
+
+    @contextmanager
+    def _sync(self) -> Iterator[None]:
+        """Mark the connection broken if the wrapped exchange fails part way.
+
+        An NNTP error reply means the status line was read in full, so the
+        connection is still in sync.
+        """
+        try:
+            yield
+        except NNTPReplyError:
+            raise
+        except BaseException:
+            self._broken = True
             raise
 
     def _enable_tls(self, host: str) -> None:
@@ -316,14 +352,10 @@ class BaseNNTPClient:
             NNTPError: If data is required to be read from the socket and
                 fails.
         """
-        self._generating = True
-
         for line in self._line():
             if line == b".\r\n":
                 break
             yield line[1:] if line.startswith(b".") else line
-
-        self._generating = False
 
     def _info_gzip(self) -> Iterator[bytes]:
         """Generator for the lines of a compressed info (textual) response.
@@ -351,8 +383,6 @@ class BaseNNTPClient:
                 fails.
             NNTPDataError: If decompression fails.
         """
-        self._generating = True
-
         inflate = zlib.decompressobj(15 + 32)
 
         done, buf = False, BytesFifo()
@@ -372,8 +402,6 @@ class BaseNNTPClient:
                     done = True
                     break
                 yield line[1:] if line.startswith(b".") else line
-
-        self._generating = False
 
     def _info_yenczlib(self) -> Iterator[bytes]:
         """Generator for the lines of a compressed info (textual) response.
@@ -446,12 +474,27 @@ class BaseNNTPClient:
             message: The status message for the command response.
             yz: Use yenzlib decompression. Useful for xz* commands.
 
-        Yields:
-            A lines of the info response as bytes.
+        Returns:
+            An iterator over the lines of the info response as bytes. The
+            connection is busy until it is exhausted; if it is abandoned or
+            fails part way the connection is marked out of sync.
         """
         if "COMPRESS=GZIP" in message:
-            return self._info_gzip()
-        return self._info_yenczlib() if yz else self._info_plain()
+            lines = self._info_gzip()
+        else:
+            lines = self._info_yenczlib() if yz else self._info_plain()
+        self._generating = True  # Set now, not on first next()
+        return self._response(lines)
+
+    def _response(self, lines: Iterator[bytes]) -> Iterator[bytes]:
+        complete = False
+        try:
+            yield from lines
+            complete = True
+        finally:
+            self._generating = False
+            if not complete:
+                self._broken = True
 
     def info(self, code: int, message: str, yz: bool = False) -> Iterator[str]:
         """Dispatcher for the info generators.
@@ -464,11 +507,14 @@ class BaseNNTPClient:
             message: The status message for the command response.
             yz: Use yenzlib decompression. Useful for xz* commands.
 
-        Yields:
-            A line of the info response as a string.
+        Returns:
+            An iterator over the lines of the info response as strings. See
+            _info() for how it affects the connection state.
         """
-        for line in self._info(code, message, yz):
-            yield line.decode(self.encoding, self.errors)
+        return self._decode(self._info(code, message, yz))
+
+    def _decode(self, lines: Iterator[bytes]) -> Iterator[str]:
+        return (line.decode(self.encoding, self.errors) for line in lines)
 
     def command(self, verb: str, args: str | None = None) -> tuple[int, str]:
         """Call a command on the server.
@@ -495,25 +541,26 @@ class BaseNNTPClient:
             lead to undesirable results.
         """
         if self._generating:
-            raise NNTPSyncError("Command issued while a generator is active")
+            raise NNTPSyncError("Command issued while a response is being read")
+        if self._broken:
+            raise NNTPSyncError("Connection is out of sync; call reconnect()")
 
         cmd = f"{verb} {args}\r\n" if args else f"{verb}\r\n"
 
-        self.socket.sendall(cmd.encode(self.encoding))
+        with self._sync():
+            self.socket.sendall(cmd.encode(self.encoding))
+            try:
+                return self.status()
+            except NNTPTemporaryError as e:
+                if e.code != 480:
+                    raise
 
-        try:
-            code, message = self.status()
-        except NNTPTemporaryError as e:
-            if e.code != 480:
-                raise
-            code, message = self.command("AUTHINFO USER", self.username)
-            if code == 381:
-                code, message = self.command("AUTHINFO PASS", self.password)
-            if code != 281:
-                raise NNTPReplyError(code, message)
-            code, message = self.command(verb, args)
-
-        return code, message
+        code, message = self.command("AUTHINFO USER", self.username)
+        if code == 381:
+            code, message = self.command("AUTHINFO PASS", self.password)
+        if code != 281:
+            raise NNTPReplyError(code, message)
+        return self.command(verb, args)
 
     def close(self) -> None:
         """Closes the connection at the client.
@@ -580,6 +627,7 @@ class NNTPClient(BaseNNTPClient):
                 socket and ssl modules for further details.
             NNTPReplyError: On bad response code from server.
         """
+        self._reader = reader
         super().__init__(
             host=host,
             port=port,
@@ -589,7 +637,10 @@ class NNTPClient(BaseNNTPClient):
             use_ssl=use_ssl,
             ssl_mode=ssl_mode,
         )
-        if reader:
+
+    def _connect(self) -> None:
+        super()._connect()
+        if self._reader:
             try:
                 self.mode_reader()
             except BaseException:
@@ -608,6 +659,9 @@ class NNTPClient(BaseNNTPClient):
     ) -> Literal[False]:
         """Support for the 'with' context manager statement."""
         if self.socket.fileno() == -1:  # Already closed by close() or quit()
+            return False
+        if self._generating or self._broken:  # QUIT can't be sent; just close
+            self.close()
             return False
         try:
             self.quit()
@@ -1008,12 +1062,12 @@ class NNTPClient(BaseNNTPClient):
             raise NNTPDataError(f"Invalid {verb} status")
 
     # TODO: Validate yEnc
-    def _body(self, code: int, message: str, decode: bool | None = None) -> bytes:
+    def _read_body(self, lines: Iterator[bytes], decode: bool | None = None) -> bytes:
         decoder = YEnc()
 
         # read the body
         body: list[bytes] = []
-        for line in self._info(code, message):
+        for line in lines:
             # detect yenc
             if decode is None:
                 if line.startswith(b"=y"):
@@ -1070,14 +1124,15 @@ class NNTPClient(BaseNNTPClient):
         except (IndexError, ValueError):
             raise NNTPDataError(f'Invalid ARTICLE status "{message}"')
 
-        # headers
-        headers = utils.parse_headers(self.info(code, message))
+        # Headers and body come from one response: parse_headers() stops at
+        # the blank line and _read_body() reads the rest.
+        lines = self._info(code, message)
+        headers = utils.parse_headers(self._decode(lines))
 
         if decode is None and "yEnc" in headers.get("subject", ""):
             decode = True
 
-        # body
-        body = self._body(code, message, decode=decode)
+        body = self._read_body(lines, decode=decode)
 
         return articleno, headers, body
 
@@ -1135,7 +1190,7 @@ class NNTPClient(BaseNNTPClient):
         if code != 222:
             raise NNTPReplyError(code, message)
 
-        return self._body(code, message, decode=decode)
+        return self._read_body(self._info(code, message), decode=decode)
 
     def _hdr(
         self,
@@ -1400,6 +1455,28 @@ class NNTPClient(BaseNNTPClient):
         if code != 340:
             raise NNTPReplyError(code, message)
 
+        with self._sync():
+            illegal = self._send_article(hdrs, body)
+            code, message = self.status()
+
+        # check if illegal characters were detected
+        if illegal:
+            raise NNTPDataError("Illegal characters found")
+
+        # check status
+        if code != 240:
+            raise NNTPReplyError(code, message)
+
+        # return message-id possible
+        message_id = message.split(None, 1)[0] if message else ""
+        if message_id.startswith("<") and message_id.endswith(">"):
+            return message_id
+
+        return True
+
+    def _send_article(self, hdrs: str, body: str | bytes | Iterable[bytes]) -> bool:
+        """Send headers, body and terminator. Returns True if the body was cut
+        short at a line containing CR or NUL."""
         if isinstance(body, str):
             body = body.encode(self.encoding, self.errors)
         if isinstance(body, bytes):
@@ -1423,21 +1500,4 @@ class NNTPClient(BaseNNTPClient):
                 chunk, size = [], 0
         chunk.append(b".\r\n")
         self.socket.sendall(b"".join(chunk))
-
-        # get status
-        code, message = self.status()
-
-        # check if illegal characters were detected
-        if illegal:
-            raise NNTPDataError("Illegal characters found")
-
-        # check status
-        if code != 240:
-            raise NNTPReplyError(code, message)
-
-        # return message-id possible
-        message_id = message.split(None, 1)[0] if message else ""
-        if message_id.startswith("<") and message_id.endswith(">"):
-            return message_id
-
-        return True
+        return illegal
