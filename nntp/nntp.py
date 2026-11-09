@@ -156,7 +156,7 @@ class BaseNNTPClient:
     ) -> None:
         """Constructor for BasicNNTPClient.
 
-        Connects to usenet server and enters reader mode.
+        Connects to usenet server and reads the welcome message.
 
         Args:
             host: Hostname for usenet server.
@@ -183,8 +183,8 @@ class BaseNNTPClient:
     def _connect(self) -> None:
         """Open the connection and read the welcome message."""
         self._buffer = BytesFifo()
-        self._generating = False  # A multi-line response is being read
-        self._broken = False  # Unread or unknown data is left on the socket
+        self._reading = False  # A multi-line response is being read
+        self._broken = False  # Closed, or unread/unknown data on the socket
 
         host = self._address[0]
         self.socket = socket.create_connection(self._address, timeout=self._timeout)
@@ -202,7 +202,7 @@ class BaseNNTPClient:
                     raise NNTPReplyError(code, message)
                 self._enable_tls(host)
         except BaseException:
-            self.socket.close()
+            self.close()
             raise
 
     def reconnect(self) -> None:
@@ -483,7 +483,7 @@ class BaseNNTPClient:
             lines = self._info_gzip()
         else:
             lines = self._info_yenczlib() if yz else self._info_plain()
-        self._generating = True  # Set now, not on first next()
+        self._reading = True  # Set now, not on first next()
         return self._response(lines)
 
     def _response(self, lines: Iterator[bytes]) -> Iterator[bytes]:
@@ -492,7 +492,7 @@ class BaseNNTPClient:
             yield from lines
             complete = True
         finally:
-            self._generating = False
+            self._reading = False
             if not complete:
                 self._broken = True
 
@@ -540,10 +540,10 @@ class BaseNNTPClient:
             at a time by adding newlines to the verb as it will most likely
             lead to undesirable results.
         """
-        if self._generating:
+        if self._reading:
             raise NNTPSyncError("Command issued while a response is being read")
         if self._broken:
-            raise NNTPSyncError("Connection is out of sync; call reconnect()")
+            raise NNTPSyncError("Connection is closed or out of sync; call reconnect()")
 
         cmd = f"{verb} {args}\r\n" if args else f"{verb}\r\n"
 
@@ -565,9 +565,9 @@ class BaseNNTPClient:
     def close(self) -> None:
         """Closes the connection at the client.
 
-        Once this method has been called, no other methods of the NNTPClient
-        object should be called.
+        After this, only reconnect() can be used.
         """
+        self._broken = True
         self.socket.close()
 
 
@@ -577,13 +577,11 @@ class NNTPClient(BaseNNTPClient):
     Implements many of the commands that are commonly used by current usenet
     servers. Including handling commands that use compressed responses.
 
-    Implements generators for commands for which generators are likely to
-    yield (bad pun warning) performance gains. These gains will be in the form
-    of lower memory consumption and the added ability to process and receive
-    data in parallel. If you are using commands that can take a range as an
-    argument or can return large amounts of data there should be a _gen()
-    version of the command and it should be used in preference to the standard
-    version.
+    Commands that can return large amounts of data (LIST, XOVER, HDR, ...)
+    return iterators that stream the response, so memory use stays low and
+    data can be processed as it arrives. Read each one to the end before
+    issuing the next command; abandoning one part way leaves the connection
+    out of sync (see NNTPSyncError and reconnect()).
 
     Note: All commands can raise the following exceptions:
             NNTPError
@@ -658,9 +656,7 @@ class NNTPClient(BaseNNTPClient):
         exc_tb: TracebackType | None,
     ) -> Literal[False]:
         """Support for the 'with' context manager statement."""
-        if self.socket.fileno() == -1:  # Already closed by close() or quit()
-            return False
-        if self._generating or self._broken:  # QUIT can't be sent; just close
+        if self._reading or self._broken:  # Closed, or QUIT can't be sent
             self.close()
             return False
         try:
@@ -720,11 +716,10 @@ class NNTPClient(BaseNNTPClient):
 
         Tells the server to close the connection. After the server acknowledges
         the request to quit the connection is closed both at the server and
-        client. Only useful for graceful shutdown. If you are in a generator
-        use close() instead.
+        client. Only useful for graceful shutdown; if the connection is out of
+        sync use close() instead.
 
-        Once this method has been called, no other methods of the NNTPClient
-        object should be called.
+        After this, only reconnect() can be used.
 
         See <http://tools.ietf.org/html/rfc3977#section-5.4>
         """
@@ -732,7 +727,7 @@ class NNTPClient(BaseNNTPClient):
         if code != 205:
             raise NNTPReplyError(code, message)
 
-        self.socket.close()
+        self.close()
 
     # information commands
     def date(self) -> datetime:

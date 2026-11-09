@@ -501,3 +501,41 @@ def test_post_send_failure_breaks_connection(connect: Connect) -> None:
         client.post({"Subject": "hi"}, body())
     with pytest.raises(NNTPSyncError, match="reconnect"):
         client.date()
+
+
+def test_commands_after_close(connect: Connect) -> None:
+    client, _ = connect(WELCOME + MODE_READER)
+    client.close()
+    with pytest.raises(NNTPSyncError, match="closed"):
+        client.date()
+
+
+def test_reconnect_after_close(connect: Connect) -> None:
+    client, _ = connect(WELCOME + MODE_READER, WELCOME + MODE_READER + DATE)
+    client.close()
+    client.reconnect()
+    assert client.date().year == 2024
+
+
+def test_failed_reconnect_stays_broken(connect: Connect) -> None:
+    client, _ = connect(
+        WELCOME + MODE_READER,
+        b"400 try later\r\n",
+        WELCOME + MODE_READER + DATE,
+    )
+    client.close()
+    with pytest.raises(nntp.NNTPTemporaryError):
+        client.reconnect()
+    with pytest.raises(NNTPSyncError):
+        client.date()
+    client.reconnect()
+    assert client.date().year == 2024
+
+
+def test_decompression_error_part_way_breaks_connection(connect: Connect) -> None:
+    server = b"215 list COMPRESS=GZIP\r\n" + b"not gzip data" + b".\r\n" + DATE
+    client, _ = connect(WELCOME + MODE_READER + server)
+    with pytest.raises(nntp.NNTPDataError, match="Decompression failed"):
+        list(client.list("ACTIVE"))
+    with pytest.raises(NNTPSyncError, match="reconnect"):
+        client.date()
