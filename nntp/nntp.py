@@ -30,7 +30,7 @@ import zlib
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from functools import cached_property
-from typing import IO, TYPE_CHECKING, Literal, TypedDict
+from typing import IO, TYPE_CHECKING, Literal, NoReturn, TypedDict
 
 from . import utils
 from .fifo import BytesFifo
@@ -131,6 +131,10 @@ def _url_bool(name: str, value: str) -> bool:
 
 # RFC 3977 section 3.2: a status code is three digits, the first 1-5
 _STATUS_CODE_RE = re.compile(rb"[1-5][0-9]{2}")
+
+# RFC 3977 3.4.1 (and 2980 for 282): replies followed by a multi-line block.
+# 211 is left out: it is multi-line only for LISTGROUP.
+_MULTILINE = frozenset({100, 101, 215, 220, 221, 222, 224, 225, 230, 231, 282})
 
 _MAX_COMMAND = 512  # RFC 3977 3.1: command line length, including CRLF
 _SEND_SIZE = 0x10000  # Batch POST body lines into writes of about this size
@@ -552,7 +556,8 @@ class BaseNNTPClient:
         """Send a command and read its status line.
 
         If the server replies 480, AUTHINFO USER/PASS is sent and the command
-        retried. A full command line can also be passed as verb.
+        retried, except for AUTHINFO, MODE READER and STARTTLS, where the 480
+        is raised. A full command line can also be passed as verb.
 
         Args:
             verb: The command.
@@ -569,7 +574,8 @@ class BaseNNTPClient:
             NNTPSyncError: If a response is still being read, or the connection
                 is closed or out of sync.
             NNTPReplyError: If authentication fails, or the reply is not one
-                of expect.
+                of expect. A multi-line block after such a reply is read
+                first, so the connection stays in sync.
             NNTPTemporaryError: For status codes 400-499.
             NNTPPermanentError: For status codes 500-599.
             NNTPProtocolError: If the status line can't be parsed.
@@ -578,8 +584,15 @@ class BaseNNTPClient:
         if expect is not None:
             codes = (expect,) if isinstance(expect, int) else tuple(expect)
             if code not in codes:
-                raise NNTPReplyError(code, message)
+                self._unexpected(code, message)
         return code, message
+
+    def _unexpected(self, code: int, message: str) -> NoReturn:
+        """Raise NNTPReplyError, first reading any multi-line block that follows."""
+        if code in _MULTILINE:
+            for _ in self._info(code, message):
+                pass
+        raise NNTPReplyError(code, message)
 
     def _command(self, verb: str, args: str | None) -> tuple[int, str]:
         if self._reading:
@@ -588,13 +601,14 @@ class BaseNNTPClient:
             raise NNTPSyncError("Connection is closed or out of sync; call reconnect()")
 
         cmd = f"{verb} {args}" if args else verb
+        words = cmd.upper().split()[:2]
         if any(c in cmd for c in "\r\n\0"):
             raise ValueError(f"Command contains CR, LF or NUL: {cmd!r}")
         if self._deflate is not None and _after_compress_forbidden(cmd):
             raise NNTPError(
                 f"{cmd.split()[0]} is not allowed after COMPRESS (RFC 8054)"
             )
-        line = (cmd + "\r\n").encode(self.encoding)
+        line = (cmd + "\r\n").encode(self.encoding, self.errors)
         if len(line) > _MAX_COMMAND:
             raise ValueError(f"Command longer than {_MAX_COMMAND} octets: {cmd!r}")
 
@@ -603,9 +617,16 @@ class BaseNNTPClient:
             try:
                 return self.status()
             except NNTPTemporaryError as e:
-                if e.code != 480 or not self.username:
+                # No login for AUTHINFO itself (it would recurse), nor for
+                # MODE READER (RFC 4643 2.2: not allowed after a login)
+                if (
+                    e.code != 480
+                    or not self.username
+                    or words[:1] == ["AUTHINFO"]
+                    or words == ["MODE", "READER"]
+                ):
                     raise
-                if verb.upper() == "STARTTLS":
+                if words[:1] == ["STARTTLS"]:
                     # Logging in now would send the password before TLS
                     raise NNTPTemporaryError(
                         e.code, f"{e.message} (won't log in before STARTTLS)"
@@ -635,8 +656,10 @@ class BaseNNTPClient:
             password: Password, likewise.
 
         Raises:
-            ValueError: If there is no username.
-            NNTPReplyError: If the login is rejected.
+            ValueError: If there is no username, or a credential contains CR,
+                LF or NUL. Nothing is sent.
+            NNTPReplyError: If the login is rejected, or a password is asked
+                for and there is none.
         """
         if username is not None:
             self.username = username
@@ -644,8 +667,12 @@ class BaseNNTPClient:
             self.password = password
         if not self.username:
             raise ValueError("No username to log in with")
+        if any(c in self.username + self.password for c in "\r\n\0"):
+            raise ValueError("Username or password contains CR, LF or NUL")
         code, message = self._command("AUTHINFO USER", self.username)
         if code == 381:
+            if not self.password:
+                raise NNTPReplyError(code, f"{message} (no password)")
             code, message = self._command("AUTHINFO PASS", self.password)
         if code != 281:
             raise NNTPReplyError(code, message)
@@ -774,7 +801,12 @@ class NNTPClient(BaseNNTPClient):
         super()._connect()
         if self._reader:
             try:
-                self.mode_reader()
+                try:
+                    self.mode_reader()
+                except NNTPTemporaryError as e:
+                    if e.code != 480 or not self.username:
+                        raise
+                    self.login()  # RFC 4643 2.2: no MODE READER after logging in
             except BaseException:
                 self.close()
                 raise
@@ -789,15 +821,21 @@ class NNTPClient(BaseNNTPClient):
         exc_val: BaseException | None,
         exc_tb: TracebackType | None,
     ) -> Literal[False]:
-        """Send QUIT, or just close the connection if it is busy or out of sync."""
+        """Send QUIT, or just close the connection if it is busy or out of sync.
+
+        If QUIT fails, the connection is closed and the error raised, unless
+        the with block is already raising.
+        """
         if self._reading or self._broken:  # Closed, or QUIT can't be sent
             self.close()
             return False
         try:
             self.quit()
-        except NNTPError:
+        except (NNTPError, OSError):
             self.close()
-            raise
+            if exc_type is None:
+                raise
+            # Otherwise let the with block's own exception propagate
         return False
 
     # session administration commands
@@ -1701,7 +1739,7 @@ class NNTPClient(BaseNNTPClient):
                 code, message = self.status()
 
         if code != done:
-            raise NNTPReplyError(code, message)
+            self._unexpected(code, message)
         return message
 
     @contextmanager

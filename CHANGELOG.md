@@ -1,5 +1,30 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+Found by go-while (#102).
+
+- An unexpected reply with a multi-line block (e.g. 222 to HEAD, or to the
+  end of a POST) left the block unread, so the next command read a data line
+  as its reply. The block is now read before `NNTPReplyError` is raised.
+- `command()` only skipped the login before STARTTLS when the verb was exactly
+  `STARTTLS`; `command(" STARTTLS ")` or `command("", "STARTTLS")` still sent
+  the credentials in clear text. Commands are now matched by their first word.
+- A server answering AUTHINFO with 480 made the client log in again
+  recursively, until `RecursionError`.
+- After a 480 to MODE READER while connecting, the client logs in and no
+  longer repeats MODE READER (RFC 4643 2.2). A 480 to `mode_reader()` or a
+  raw MODE READER is raised; call `login()`.
+- `login()` rejects a username or password containing CR, LF or NUL before
+  sending anything, and raises rather than sending an empty `AUTHINFO PASS`.
+- Command arguments are encoded with the client's `errors` policy, so a group
+  name read from LIST ACTIVE with non-UTF-8 bytes can be selected.
+- A failing QUIT at the end of a `with` block no longer replaces the
+  exception raised inside the block.
+- `.coverage` was committed by mistake; it is now ignored.
+
 ## 3.1.0 - 2026-11-09
 
 ### Added
