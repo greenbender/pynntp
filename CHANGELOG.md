@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Changed
+
+- The default TLS context requires TLS 1.2 or newer. Python leaves the
+  minimum to OpenSSL's configuration, which may allow TLS 1.0 and 1.1. A
+  given `ssl_context` is used as it is.
+
 ### Fixed
 
 Found by go-while (#102).
