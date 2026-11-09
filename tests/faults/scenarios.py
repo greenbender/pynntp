@@ -409,15 +409,8 @@ def store_over_check(v: Any) -> bool:  # noqa: ANN401
 # Open bugs: these scenarios fail on the current code
 
 
-LOGIN_UNDRAINED = (
-    "login() raises on an unexpected multi-line reply without reading it, so the "
-    "next command gets its lines"
-)
 UNREAD_DATA = (
     "data the server sent after a reply is taken as the reply to the next command"
-)
-STALE_ITERATOR = (
-    "a response iterator closed after reconnect() marks the new connection broken"
 )
 
 
@@ -828,7 +821,6 @@ def code_scenarios() -> Iterator[Scenario]:
         lambda c: c.login("u", "p"),
         reply_error,
         RAW,
-        known=LOGIN_UNDRAINED,
     )
     # A server bug: the client must time out and mark the connection broken
     yield Scenario(
@@ -2063,7 +2055,6 @@ def malformed_scenarios() -> Iterator[Scenario]:
         lambda c: c.stat("<abc>"),
         Ok((0, "<abc>")),
         RAW,
-        known="stat() rejects a message-id without @, which RFC 3977 allows",
     )
     yield Scenario(
         "malformed/over-nonnumeric-row",
@@ -2185,7 +2176,6 @@ def session_scenarios() -> Iterator[Scenario]:
         stale_iterator,
         Ok(((3, 1, 3, "alt.test"), (3, 1, 3, "alt.test"))),
         probe="store",
-        known=STALE_ITERATOR,
     )
     yield Scenario(
         "session/iterator-variable-reused-after-reconnect",
@@ -2193,7 +2183,6 @@ def session_scenarios() -> Iterator[Scenario]:
         rebind,
         Ok(["alt.empty", "alt.test"]),
         probe="store",
-        known=STALE_ITERATOR,
     )
     bad = store_cfg()
     bad["store"]["articles"].append(
@@ -2211,9 +2200,6 @@ def session_scenarios() -> Iterator[Scenario]:
         header_error,
         Ok(pred=lambda v: v[0] == v[1] == (4, 1, 9, "alt.test"), desc="both succeed"),
         probe="store",
-        known=STALE_ITERATOR + " (the iterator article() leaves after a header "
-        "parse error; on some Python versions only)",
-        known_strict=False,
     )
     # Misuse, but it shows that iterators are not bound to their connection
     yield Scenario(
