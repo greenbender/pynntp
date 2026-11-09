@@ -47,7 +47,7 @@ def unparse_range(obj: Range) -> str:
     Raises:
         ValueError: If obj is not one of those forms.
     """
-    if isinstance(obj, int):
+    if isinstance(obj, int) and not isinstance(obj, bool):
         return str(obj)
 
     if isinstance(obj, tuple):

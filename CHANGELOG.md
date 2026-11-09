@@ -42,6 +42,8 @@
 
 ### Added
 
+- `port` defaults to 563 with implicit TLS (119 otherwise), and `timeout`
+  accepts a float or `None` (#123).
 - `ssl_context` argument for TLS settings, such as a private CA (#123).
 - `command(..., expect=...)` raises `NNTPReplyError` for any other reply
   (#123).
@@ -61,6 +63,10 @@
 
 ### Fixed
 
+- An empty XZVER or XZHDR response raised `RuntimeError`; it now yields
+  nothing. XZVER/XZHDR trailers are also checked for size, like `body()`
+  (#123).
+- `unparse_range(True)` returned `"True"`; booleans are now rejected (#123).
 - STARTTLS: data arriving with the 382 reply, before TLS starts, is rejected
   rather than read later as if protected (#123).
 - A server asking for a login when no username is set no longer gets a bare

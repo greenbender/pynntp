@@ -34,7 +34,7 @@ from . import utils
 from .fifo import BytesFifo
 from .headerdict import HeaderDict
 from .types import SSLMode
-from .yenc import YEnc, check_trailer, parse_keywords, trailer_crc32
+from .yenc import YEnc, check_trailer, parse_keywords
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Iterator, Mapping
@@ -176,11 +176,11 @@ class BaseNNTPClient:
     def __init__(
         self,
         host: str,
-        port: int = 119,
+        port: int | None = None,
         username: str = "",
         password: str = "",
         *,
-        timeout: int = 30,
+        timeout: float | None = 30,
         use_ssl: bool = False,
         ssl_mode: SSLMode = SSLMode.IMPLICIT,
         ssl_context: ssl.SSLContext | None = None,
@@ -189,11 +189,11 @@ class BaseNNTPClient:
 
         Args:
             host: Server hostname.
-            port: Server port.
+            port: Server port. Defaults to 563 for implicit TLS, otherwise 119.
             username: Username, sent if the server asks for authentication.
                 Without TLS it is sent in clear text, as is the password.
             password: Password, sent if the server asks for authentication.
-            timeout: Socket timeout in seconds.
+            timeout: Socket timeout in seconds, or None to wait forever.
             use_ssl: Use TLS.
             ssl_mode: IMPLICIT (TLS from the start, usually port 563) or STARTTLS.
             ssl_context: TLS settings, e.g. to trust a private CA. Defaults to
@@ -205,6 +205,8 @@ class BaseNNTPClient:
         """
         self.username = username
         self.password = password
+        if port is None:
+            port = 563 if use_ssl and ssl_mode == SSLMode.IMPLICIT else 119
         self._address = (host, port)
         self._timeout = timeout
         self._use_ssl = use_ssl
@@ -400,25 +402,26 @@ class BaseNNTPClient:
         give for the uncompressed command.
 
         Raises:
-            NNTPDataError: If the yEnc header or trailer is bad, the CRC check
-                fails or decompression fails.
+            NNTPDataError: If the yEnc header or trailer is bad, the size or CRC
+                check fails or decompression fails.
         """
-
         decoder = YEnc()
         inflate = zlib.decompressobj(-15)
+        lines = self._info_plain()
 
-        # header
-        header = next(self._info_plain())
+        header = next(lines, None)
+        if header is None:  # An empty response
+            return
         if not header.startswith(b"=ybegin"):
             raise NNTPDataError("Bad yEnc header")
 
-        # data
-        buf, trailer = BytesFifo(), b""
-        for line in self._info_plain():
+        buf, trailer, size = BytesFifo(), b"", 0
+        for line in lines:
             if line.startswith(b"=yend"):
                 trailer = line
                 continue
             data = decoder.decode(line)
+            size += len(data)
             try:
                 data = inflate.decompress(data)
             except zlib.error as e:
@@ -428,18 +431,10 @@ class BaseNNTPClient:
             buf.write(data)
             yield from buf
 
-        # trailer
         if not trailer:
             raise NNTPDataError("Missing yEnc trailer")
-
-        # expected crc32
-        crc32 = trailer_crc32(trailer)
-        if crc32 is None:
-            raise NNTPDataError("Bad yEnc trailer")
-
-        # check crc32
-        if crc32 != decoder.crc32:
-            raise NNTPDataError("Bad yEnc CRC")
+        if mismatch := check_trailer(trailer, size, decoder.crc32, part=False):
+            raise NNTPDataError(f"Bad yEnc data: {mismatch}")
 
     def _info(self, code: int, message: str, yz: bool = False) -> Iterator[bytes]:
         """Return the lines of a multi-line response as bytes.
@@ -587,11 +582,11 @@ class NNTPClient(BaseNNTPClient):
     def __init__(
         self,
         host: str,
-        port: int = 119,
+        port: int | None = None,
         username: str = "",
         password: str = "",
         *,
-        timeout: int = 30,
+        timeout: float | None = 30,
         use_ssl: bool = False,
         ssl_mode: SSLMode = SSLMode.IMPLICIT,
         ssl_context: ssl.SSLContext | None = None,
@@ -601,11 +596,11 @@ class NNTPClient(BaseNNTPClient):
 
         Args:
             host: Server hostname.
-            port: Server port.
+            port: Server port. Defaults to 563 for implicit TLS, otherwise 119.
             username: Username, sent if the server asks for authentication.
                 Without TLS it is sent in clear text, as is the password.
             password: Password, sent if the server asks for authentication.
-            timeout: Socket timeout in seconds.
+            timeout: Socket timeout in seconds, or None to wait forever.
             use_ssl: Use TLS.
             ssl_mode: IMPLICIT (TLS from the start, usually port 563) or STARTTLS.
             ssl_context: TLS settings, e.g. to trust a private CA. Defaults to
@@ -672,9 +667,7 @@ class NNTPClient(BaseNNTPClient):
         Yields:
             Each capability line, starting with VERSION.
         """
-        args = keyword
-
-        code, message = self.command("CAPABILITIES", args, expect=101)
+        code, message = self.command("CAPABILITIES", keyword, expect=101)
 
         for line in self.info(code, message):
             yield line.strip()
@@ -969,9 +962,7 @@ class NNTPClient(BaseNNTPClient):
             NNTPReplyError: If there is no such newsgroup.
             NNTPDataError: If the reply can't be parsed.
         """
-        args = name
-
-        _, message = self.command("GROUP", args, expect=211)
+        _, message = self.command("GROUP", name, expect=211)
 
         parts = message.split(None, 4)
         try:
@@ -1285,7 +1276,8 @@ class NNTPClient(BaseNNTPClient):
                 (first, last) range. None (the default) uses the current article.
 
         Yields:
-            The article number and field value for each article.
+            The article number and field value for each article. The number is
+            0 when a message-id is given.
 
         Raises:
             NNTPReplyError: If there is no such article.
@@ -1488,8 +1480,6 @@ class NNTPClient(BaseNNTPClient):
                 carry. Nothing is sent.
             NNTPReplyError: If posting is not allowed or fails.
         """
-        # TODO: Set some default headers? Require some headers?
-
         # Validate headers before starting the POST, so a bad header can't
         # leave the server waiting for an article.
         hdrs = utils.unparse_headers(headers or {})

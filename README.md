@@ -35,14 +35,15 @@ as `nntp`.
 import nntp
 
 with nntp.NNTPClient(
-    "news.example.com", 563, "user", "password", use_ssl=True
+    "news.example.com", username="user", password="secret", use_ssl=True
 ) as client:
     print(client.date())
 ```
 
 The username and password are only sent if the server asks for them, and in
-clear text unless TLS is used. For STARTTLS on the plain port, pass
-`port=119, ssl_mode=nntp.SSLMode.STARTTLS`. TLS certificates are verified;
+clear text unless TLS is used. With `use_ssl=True` the port defaults to 563;
+for STARTTLS on port 119 instead, also pass `ssl_mode=nntp.SSLMode.STARTTLS`.
+TLS certificates are verified;
 pass `ssl_context=` (an `ssl.SSLContext`) to trust a private CA or change other
 TLS settings. Leaving the `with` block sends QUIT.
 

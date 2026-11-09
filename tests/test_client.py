@@ -1176,7 +1176,7 @@ def test_xzhdr(connect: Connect) -> None:
     [
         (b"224 ok\r\nnot a ybegin line\r\n.\r\n", "Bad yEnc header"),
         (b"224 ok\r\n=ybegin line=128 size=0 name=x\r\n.\r\n", "Missing yEnc trailer"),
-        (yenczlib(b"224", XOVER_LINES, trailer="=yend size=1"), "Bad yEnc trailer"),
+        (yenczlib(b"224", XOVER_LINES, trailer="=yend size=1"), "trailer says 1"),
         (
             b"224 ok\r\n=ybegin line=128 size=0 name=x\r\n"
             + yenc_encode(b"\xff\xff not deflate")
@@ -1264,3 +1264,40 @@ def test_raw_command(connect: Connect) -> None:
     client, sock = connect(WELCOME + MODE_READER + b"283 whatever\r\n")
     assert client.command("XSOMETHING", "arg") == (283, "whatever")
     assert sock.sent.endswith(b"XSOMETHING arg\r\n")
+
+
+def test_xzver_empty_response(connect: Connect) -> None:
+    server = OVERVIEW_FMT + b"224 none\r\n.\r\n" + DATE
+    client, _ = connect(WELCOME + MODE_READER + server)
+    assert list(client.xzver((1, 2))) == []
+    assert client.date().year == 2024  # Read to the end; still in sync
+
+
+def test_xzhdr_empty_response(connect: Connect) -> None:
+    client, _ = connect(WELCOME + MODE_READER + b"221 none\r\n.\r\n" + DATE)
+    assert list(client.xzhdr("Subject", (1, 2))) == []
+    assert client.date().year == 2024
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "port"),
+    [
+        ({}, 119),
+        ({"use_ssl": True}, 563),
+        ({"use_ssl": True, "ssl_mode": SSLMode.STARTTLS}, 119),
+        ({"port": 1119, "use_ssl": True}, 1119),
+    ],
+)
+def test_default_port(
+    monkeypatch: pytest.MonkeyPatch, kwargs: dict[str, object], port: int
+) -> None:
+    addresses = []
+
+    def refuse(address: tuple[str, int], **_: object) -> FakeSocket:
+        addresses.append(address)
+        raise ConnectionRefusedError
+
+    monkeypatch.setattr("nntp.nntp.socket.create_connection", refuse)
+    with pytest.raises(ConnectionRefusedError):
+        nntp.NNTPClient("example.com", **kwargs)  # type: ignore[arg-type]
+    assert addresses == [("example.com", port)]

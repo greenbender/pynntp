@@ -34,7 +34,6 @@ dev = [
     "mypy>=1.11.2",
     "pre-commit>=3.8",
     "pytest>=8.3.2",
-    "pytest-benchmark>=4",
     "ruff>=0.17.4",
     "sphinx-pyproject",
 ]
