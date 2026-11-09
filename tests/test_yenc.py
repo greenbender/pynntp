@@ -1,3 +1,5 @@
+import random
+import zlib
 from pathlib import Path
 
 import pytest
@@ -25,6 +27,12 @@ def test_crc32() -> None:
     assert trailer_crc32(b" crc32=00000000") == 0
     assert trailer_crc32(b" crc32=ffffffff") == 0xFFFFFFFF
     assert trailer_crc32(b" crc32=12345678") == 0x12345678
+    assert trailer_crc32(b" crc32=ABCDEF12") == 0xABCDEF12
+    assert trailer_crc32(b" crc32=abc1234") == 0xABC1234  # Leading zero dropped
+    assert trailer_crc32(b" crc=12345678") == 0x12345678
+    assert trailer_crc32(b" part=1 pcrc32=11111111 crc32=22222222") == 0x22222222
+    assert trailer_crc32(b" crc32=1234567890") is None  # Too long
+    assert trailer_crc32(b"=yend size=5") is None
 
 
 def test_decode(yenc1_plain: bytes, yenc1_encoded: bytes) -> None:
@@ -39,3 +47,31 @@ def test_decode(yenc1_plain: bytes, yenc1_encoded: bytes) -> None:
         plain += decoder.decode(line)
     assert plain == yenc1_plain
     assert decoder.crc32 == 0xDED29F4F
+
+
+def _reference_decode(buf: bytes) -> bytes:
+    """The original byte-at-a-time decoder."""
+    data, escape = bytearray(), False
+    for b in buf:
+        if escape:
+            data.append((b - 106) & 0xFF)
+            escape = False
+        elif b == 0x3D:
+            escape = True
+        elif b not in {0x0D, 0x0A}:
+            data.append((b - 42) & 0xFF)
+    return bytes(data)
+
+
+def test_decode_matches_reference() -> None:
+    rng = random.Random(0)
+    alphabet = b"=\r\nabc\x00\xff"  # Heavy on escapes and line endings
+    for _ in range(500):
+        buf = bytes(rng.choice(alphabet) for _ in range(rng.randrange(40)))
+        cuts = sorted(rng.sample(range(len(buf) + 1), min(3, len(buf) + 1)))
+        decoder = YEnc()
+        out = b"".join(
+            decoder.decode(buf[a:b]) for a, b in zip([0, *cuts], [*cuts, len(buf)])
+        )
+        assert out == _reference_decode(buf), buf
+        assert decoder.crc32 == zlib.crc32(out)
