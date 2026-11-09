@@ -811,6 +811,9 @@ class NNTPClient(BaseNNTPClient):
     ) -> Iterator[tuple[str, str]]:
         """LIST NEWSGROUPS command.
 
+        Servers may leave out groups that have no description; use
+        list_active() to find every group.
+
         See <https://datatracker.ietf.org/doc/html/rfc3977#section-7.6.6>
 
         Args:
@@ -895,6 +898,43 @@ class NNTPClient(BaseNNTPClient):
 
         return total, first, last, group
 
+    def listgroup(
+        self, name: str | None = None, range: Range | None = None
+    ) -> Iterator[int]:
+        """LISTGROUP command.
+
+        Selects a newsgroup, like group(), and lists its article numbers.
+
+        See <https://datatracker.ietf.org/doc/html/rfc3977#section-6.1.2>
+
+        Args:
+            name: The newsgroup. None (the default) uses the selected group.
+            range: Only list these article numbers: an article number, or a
+                (first,) or (first, last) range. Requires name.
+
+        Yields:
+            Each article number.
+
+        Raises:
+            ValueError: If range is given without name.
+            NNTPReplyError: If there is no such newsgroup, or none selected.
+            NNTPDataError: If a line can't be parsed.
+        """
+        if range is not None and name is None:
+            raise ValueError("LISTGROUP needs a group name to use a range")
+        args = name
+        if range is not None:
+            args = f"{name} {utils.unparse_range(range)}"
+
+        code, message = self.command("LISTGROUP", args)
+        if code != 211:
+            raise NNTPReplyError(code, message)
+
+        for line in self.info(code, message):
+            with _data_errors("LISTGROUP line"):
+                number = int(line)
+            yield number
+
     def next(self) -> tuple[int, str]:
         """NEXT command.
 
@@ -928,8 +968,29 @@ class NNTPClient(BaseNNTPClient):
         """
         return self._select("LAST")
 
-    def _select(self, verb: str) -> tuple[int, str]:
-        code, message = self.command(verb)
+    def stat(self, msgid_article: str | int | None = None) -> tuple[int, str]:
+        """STAT command.
+
+        Checks that an article exists, and selects it if given by number.
+
+        See <https://datatracker.ietf.org/doc/html/rfc3977#section-6.2.4>
+
+        Args:
+            msgid_article: A message-id or article number. None (the default)
+                uses the current article.
+
+        Returns:
+            The article number and message-id. The number is 0 when a
+            message-id is given.
+
+        Raises:
+            NNTPReplyError: If there is no such article.
+            NNTPDataError: If the reply can't be parsed.
+        """
+        return self._select("STAT", _msgid_article(msgid_article))
+
+    def _select(self, verb: str, args: str | None = None) -> tuple[int, str]:
+        code, message = self.command(verb, args)
         if code != 223:
             raise NNTPReplyError(code, message)
 
@@ -1093,7 +1154,7 @@ class NNTPClient(BaseNNTPClient):
             args += " " + utils.unparse_msgid_range(msgid_range)
 
         code, message = self.command(verb, args)
-        if code != 221:
+        if code != (225 if verb == "HDR" else 221):
             raise NNTPReplyError(code, message)
 
         yz = verb == "XZHDR"
@@ -1134,7 +1195,10 @@ class NNTPClient(BaseNNTPClient):
         header: str,
         msgid_range: str | Range | None = None,
     ) -> Iterator[tuple[int, str]]:
-        """XHDR command, the RFC 2980 form of HDR. See hdr()."""
+        """XHDR command, the RFC 2980 form of HDR. See hdr().
+
+        Prefer hdr() when the server lists HDR in its capabilities.
+        """
         return self._hdr(header, msgid_range, verb="XHDR")
 
     def xzhdr(
@@ -1160,7 +1224,7 @@ class NNTPClient(BaseNNTPClient):
 
     def _xover(
         self,
-        range: Range | None = None,
+        range: str | Range | None = None,
         verb: str = "XOVER",
     ) -> Iterator[tuple[int, HeaderDict]]:
         # get overview fmt before entering generator
@@ -1171,7 +1235,7 @@ class NNTPClient(BaseNNTPClient):
 
         args = None
         if range is not None:
-            args = utils.unparse_range(range)
+            args = utils.unparse_msgid_range(range)
 
         code, message = self.command(verb, args)
         if code != 224:
@@ -1199,6 +1263,8 @@ class NNTPClient(BaseNNTPClient):
     ) -> Iterator[tuple[int, HeaderDict]]:
         """XOVER command.
 
+        Prefer over() when the server lists OVER in its capabilities.
+
         See <https://datatracker.ietf.org/doc/html/rfc2980#section-2.8>
 
         Args:
@@ -1221,6 +1287,30 @@ class NNTPClient(BaseNNTPClient):
     ) -> Iterator[tuple[int, HeaderDict]]:
         """XZVER command, a compressed XOVER. See xover()."""
         return self._xover(range, verb="XZVER")
+
+    def over(
+        self,
+        msgid_range: str | Range | None = None,
+    ) -> Iterator[tuple[int, HeaderDict]]:
+        """OVER command, the RFC 3977 form of XOVER.
+
+        See <https://datatracker.ietf.org/doc/html/rfc3977#section-8.3>
+
+        Args:
+            msgid_range: A message-id, an article number, or a (first,) or
+                (first, last) range. None (the default) uses the current
+                article.
+
+        Yields:
+            The article number and overview fields of each article, as for
+            xover(). The article number is 0 when a message-id is given.
+
+        Raises:
+            NNTPReplyError: If there is no such article or no newsgroup
+                selected.
+            NNTPDataError: If a line can't be parsed.
+        """
+        return self._xover(msgid_range, verb="OVER")
 
     def xpat(
         self,

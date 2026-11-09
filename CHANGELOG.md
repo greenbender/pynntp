@@ -26,6 +26,8 @@
 
 ### Added
 
+- `over()`, `stat()` and `listgroup()` for the RFC 3977 OVER, STAT and
+  LISTGROUP commands (#43, #45, #46).
 - `reconnect()` reopens the connection with the same settings (#116).
 - `NNTPYEncError`, and `NNTPSyncError` exported from `nntp` (#112, #117).
 - Folded header values in `post()` (#111).
@@ -37,6 +39,7 @@
   bodies (#107, issue #99).
 - gzip-compressed responses could be corrupted or hang when the terminator
   was split across reads (#107).
+- `hdr()` always failed: it expected reply 221, but HDR replies 225 (#43).
 - `newgroups()` and `newnews()` always failed: the timestamp used "UTC" where
   servers require "GMT" (#112).
 - An abandoned or failed response left the connection unusable;
