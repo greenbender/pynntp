@@ -1,6 +1,6 @@
 [project]
 name = "pynntp"
-version = "2.0.1"
+version = "3.0.0"
 description = "NNTP Library (including compressed headers)"
 authors = [{ name = "Byron Platt", email = "byron.platt@gmail.com" }]
 license = "GPL-3.0-or-later"
