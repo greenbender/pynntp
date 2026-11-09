@@ -54,7 +54,7 @@ fault-injection run and the INN integration runs.
 | [P-32](#p-32-huge-list-activetimes-timestamps) | Low | Huge LIST ACTIVE.TIMES timestamps raised `OSError`/`OverflowError` | fixed (#138) |
 | [P-33](#p-33-listgroup-211-metadata-not-checked) | — | LISTGROUP doesn't check its 211 line | won't fix (not used) |
 | [P-34](#p-34-tls-minimum-left-to-openssl) | Low | The default TLS context leaves the minimum version to OpenSSL's configuration | PR (#142) |
-| [P-35](#p-35-integration-tests-assume-the-docker-image) | Low | The integration tests assume a fresh `greenbender/inn` container | open |
+| [P-35](#p-35-integration-tests-assume-the-docker-image) | Low | The integration tests assume a fresh `greenbender/inn` container | PR (#144) |
 
 ## Details
 
@@ -204,5 +204,5 @@ TLS 1.2 on some systems, "anything" on others. Fix in #142.
 On a stock INN (Ubuntu inn2 2.7.2 and 2.7.4, INN 2.8 from source) 10 to 11 integration tests
 fail because of server state, not the client: port 563 not listening, groups that already hold
 articles, the NEWGROUPS cutoff date, `483 Encryption required` instead of 502 for a plain-text
-login, INN 2.8's descriptions ending in a period. A fix with a CI job against Ubuntu's inn2 is
-prepared on go-while/pynntp, branch `port/inn-integration`.
+login, INN 2.8's descriptions ending in a period. Fix, with a CI job against Ubuntu's inn2, in
+#144.
