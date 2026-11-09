@@ -6,6 +6,7 @@ import gzip
 import zlib
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta, timezone
+from typing import TYPE_CHECKING
 
 import pytest
 
@@ -13,6 +14,9 @@ import nntp
 from nntp.headerdict import HeaderDict
 from nntp.nntp import NNTPSyncError
 from nntp.types import Newsgroup
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 WELCOME = b"200 server ready\r\n"
 MODE_READER = b"200 reader mode\r\n"
@@ -28,6 +32,7 @@ class FakeSocket:
         self.chunk = chunk
         self.sent = b""
         self.sends = 0
+        self.fail_after: int | None = None  # Raise on sends after this many
         self.closed = False
         FakeSocket.last = self
 
@@ -39,6 +44,8 @@ class FakeSocket:
     def sendall(self, data: bytes) -> None:
         if self.closed:
             raise OSError(9, "Bad file descriptor")
+        if self.fail_after is not None and self.sends >= self.fail_after:
+            raise OSError("send failed")
         self.sent += data
         self.sends += 1
 
@@ -60,17 +67,27 @@ Connect = Callable[..., "tuple[nntp.NNTPClient, FakeSocket]"]
 
 @pytest.fixture
 def connect(monkeypatch: pytest.MonkeyPatch, chunk: int) -> Connect:
-    """Return a factory: connect(server_bytes) -> (client, fake_socket)."""
+    """Return a factory: connect(server_bytes) -> (client, fake_socket).
 
-    def factory(server: bytes, **kwargs: object) -> tuple[nntp.NNTPClient, FakeSocket]:
-        sock = FakeSocket(server, chunk)
-        monkeypatch.setattr("nntp.nntp.socket.create_connection", lambda *_, **__: sock)
+    Extra positional byte strings are served to later connections, made by
+    reconnect().
+    """
+
+    def factory(
+        server: bytes, *later: bytes, **kwargs: object
+    ) -> tuple[nntp.NNTPClient, FakeSocket]:
+        socks = [FakeSocket(data, chunk) for data in (server, *later)]
+        monkeypatch.setattr(
+            "nntp.nntp.socket.create_connection", lambda *_, **__: socks.pop(0)
+        )
+        sock = socks[0]
         return nntp.NNTPClient("example.com", **kwargs), sock  # type: ignore[arg-type]
 
     return factory
 
 
 def yenc_encode(data: bytes, line_length: int = 128) -> bytes:
+    """yEnc-encode data into CRLF-terminated lines (no =ybegin/=yend)."""
     lines, line = [], bytearray()
     for b in data:
         e = (b + 42) & 0xFF
@@ -160,10 +177,11 @@ def test_body_yenc_autodetect(connect: Connect) -> None:
     plain = (b"\x04" + b"a" * 127) * 4 + bytes(range(256)) * 4
     encoded = yenc_encode(plain)
     assert encoded.startswith(b".")
+    size = len(plain)
     server = (
-        b"222 1 <a@b>\r\n=ybegin line=128 size=2048 name=x\r\n"
+        f"222 1 <a@b>\r\n=ybegin line=128 size={size} name=x\r\n".encode()
         + dot_stuff(encoded)
-        + b"=yend size=2048\r\n.\r\n"
+        + f"=yend size={size} crc32={zlib.crc32(plain):08x}\r\n.\r\n".encode()
     )
     client, _ = connect(WELCOME + MODE_READER + server)
     assert client.body(1) == plain
@@ -262,11 +280,22 @@ def test_post_bad_header_sends_nothing(connect: Connect) -> None:
     assert sock.sent == b""
 
 
-def test_post_illegal_chars(connect: Connect) -> None:
-    client, sock = connect(WELCOME + MODE_READER + b"340 send\r\n" + b"240 ok\r\n")
-    with pytest.raises(nntp.NNTPDataError):
-        client.post({"Subject": "hi"}, b"good\nba\0d\nlost\n")
-    assert b"lost" not in sock.sent
+@pytest.mark.parametrize("body", [b"good\nba\0d\n", b"good\nbare\rcr\n"])
+def test_post_illegal_chars_sends_nothing(connect: Connect, body: bytes) -> None:
+    client, sock = connect(WELCOME + MODE_READER + DATE)
+    sock.sent = b""
+    with pytest.raises(nntp.NNTPDataError, match="CR or NUL"):
+        client.post({"Subject": "hi"}, body)
+    assert sock.sent == b""  # Not even POST: no half-posted article
+    assert client.date().year == 2024
+
+
+def test_post_large_body_spools(connect: Connect) -> None:
+    client, sock = connect(WELCOME + MODE_READER + b"340 send\r\n240 ok\r\n")
+    sock.sent = b""
+    body = b"y" * 1000 + b"\n"
+    client.post({"Subject": "hi"}, (body for _ in range(3000)))  # ~3 MB, on disk
+    assert sock.sent.endswith(body.replace(b"\n", b"\r\n") * 3000 + b".\r\n")
 
 
 def test_empty_status_line(connect: Connect) -> None:
@@ -350,15 +379,24 @@ def test_article_bad_status(connect: Connect) -> None:
         client.article()
 
 
-@pytest.mark.parametrize("verb", ["hdr", "xhdr"])
-def test_hdr(connect: Connect, verb: str) -> None:
-    client, sock = connect(WELCOME + MODE_READER + b"221 ok\r\n1 hello\r\n2\r\n.\r\n")
+@pytest.mark.parametrize(("verb", "code"), [("hdr", b"225"), ("xhdr", b"221")])
+def test_hdr(connect: Connect, verb: str, code: bytes) -> None:
+    server = code + b" ok\r\n1 hello\r\n2\r\n.\r\n"
+    client, sock = connect(WELCOME + MODE_READER + server)
     assert list(getattr(client, verb)("Subject", (1, 2))) == [(1, "hello"), (2, "")]
     assert sock.sent.endswith(verb.upper().encode() + b" Subject 1-2\r\n")
 
 
+@pytest.mark.parametrize(("verb", "code"), [("hdr", b"221"), ("xhdr", b"225")])
+def test_hdr_wrong_code(connect: Connect, verb: str, code: bytes) -> None:
+    # HDR answers 225 (RFC 3977), XHDR 221 (RFC 2980); the other is an error
+    client, _ = connect(WELCOME + MODE_READER + code + b" ok\r\n.\r\n")
+    with pytest.raises(nntp.NNTPReplyError):
+        list(getattr(client, verb)("Subject"))
+
+
 def test_hdr_bad_line(connect: Connect) -> None:
-    client, _ = connect(WELCOME + MODE_READER + b"221 ok\r\nx y\r\n.\r\n")
+    client, _ = connect(WELCOME + MODE_READER + b"225 ok\r\nx y\r\n.\r\n")
     with pytest.raises(nntp.NNTPDataError, match="Invalid HDR response"):
         list(client.hdr("Subject"))
 
@@ -404,3 +442,509 @@ def test_exit_after_close_or_quit(connect: Connect, method: str) -> None:
 
 def test_sync_error_is_exported() -> None:
     assert nntp.NNTPSyncError is nntp.nntp.NNTPSyncError
+
+
+LIST = b"215 list\r\nalt.a 2 1 y\r\nalt.b 2 1 y\r\n.\r\n"
+DATE = b"111 20240102030405\r\n"
+
+
+def test_abandoned_response_breaks_connection(connect: Connect) -> None:
+    client, _ = connect(WELCOME + MODE_READER + LIST + DATE)
+    for _group in client.list_active():
+        break  # The rest of the response is left unread
+    with pytest.raises(NNTPSyncError, match="reconnect"):
+        client.date()
+
+
+def test_unread_response_blocks_commands(connect: Connect) -> None:
+    client, _ = connect(WELCOME + MODE_READER + LIST + DATE)
+    client.list("ACTIVE")  # Sent but never iterated: the response is unread
+    with pytest.raises(NNTPSyncError):
+        client.date()
+
+
+def test_data_error_part_way_breaks_connection(connect: Connect) -> None:
+    server = OVERVIEW_FMT + b"224 ok\r\n1\ta\tb\r\nbad\r\n2\tc\td\r\n.\r\n" + DATE
+    client, _ = connect(WELCOME + MODE_READER + server)
+    with pytest.raises(nntp.NNTPDataError):
+        list(client.xover())
+    with pytest.raises(NNTPSyncError, match="reconnect"):
+        client.date()
+
+
+def test_connection_lost_breaks_connection(connect: Connect) -> None:
+    client, _ = connect(WELCOME + MODE_READER + b"111 2024")  # Cut off
+    with pytest.raises(nntp.NNTPError, match="Failed to read"):
+        client.date()
+    with pytest.raises(NNTPSyncError, match="reconnect"):
+        client.date()
+
+
+def test_error_reply_keeps_connection(connect: Connect) -> None:
+    client, _ = connect(WELCOME + MODE_READER + b"411 no such group\r\n" + DATE)
+    with pytest.raises(nntp.NNTPTemporaryError):
+        client.group("alt.nope")
+    assert client.date() == datetime(2024, 1, 2, 3, 4, 5, tzinfo=UTC)
+
+
+def test_complete_responses_keep_connection(connect: Connect) -> None:
+    article = b"220 1 <a@b>\r\nSubject: hi\r\n\r\nbody\r\n.\r\n"
+    head = b"221 1 <a@b>\r\nSubject: hi\r\n.\r\n"
+    client, _ = connect(WELCOME + MODE_READER + article + head + LIST + DATE)
+    assert client.article(1)[2] == b"body\r\n"
+    assert client.head(1) == {"subject": "hi"}
+    assert len(list(client.list_active())) == 2
+    assert client.date().year == 2024
+
+
+def test_reconnect(connect: Connect) -> None:
+    client, first = connect(WELCOME + MODE_READER + LIST, WELCOME + MODE_READER + DATE)
+    next(client.list_active())
+    with pytest.raises(NNTPSyncError):
+        client.date()
+    client.reconnect()
+    assert first.closed
+    assert client.date().year == 2024
+    assert FakeSocket.last.sent == b"MODE READER\r\nDATE\r\n"
+
+
+def test_exit_with_broken_connection_just_closes(connect: Connect) -> None:
+    client, sock = connect(WELCOME + MODE_READER + LIST)
+    with client:
+        next(client.list_active())
+    assert sock.closed
+    assert b"QUIT" not in sock.sent
+
+
+def test_post_body_read_failure_sends_nothing(connect: Connect) -> None:
+    client, sock = connect(WELCOME + MODE_READER + DATE)
+    sock.sent = b""
+
+    def body() -> Iterator[bytes]:
+        yield b"line\n"
+        raise OSError("disk read failed")
+
+    with pytest.raises(OSError, match="disk read failed"):
+        client.post({"Subject": "hi"}, body())
+    assert sock.sent == b""
+    assert client.date().year == 2024
+
+
+def test_post_send_failure_breaks_connection(connect: Connect) -> None:
+    client, sock = connect(WELCOME + MODE_READER + b"340 send\r\n")
+    sock.fail_after = sock.sends + 1  # POST goes out; the article does not
+    with pytest.raises(OSError, match="send failed"):
+        client.post({"Subject": "hi"}, b"line\n")
+    with pytest.raises(NNTPSyncError, match="reconnect"):
+        client.date()
+
+
+def test_commands_after_close(connect: Connect) -> None:
+    client, _ = connect(WELCOME + MODE_READER)
+    client.close()
+    with pytest.raises(NNTPSyncError, match="closed"):
+        client.date()
+
+
+def test_reconnect_after_close(connect: Connect) -> None:
+    client, _ = connect(WELCOME + MODE_READER, WELCOME + MODE_READER + DATE)
+    client.close()
+    client.reconnect()
+    assert client.date().year == 2024
+
+
+def test_failed_reconnect_stays_broken(connect: Connect) -> None:
+    client, _ = connect(
+        WELCOME + MODE_READER,
+        b"400 try later\r\n",
+        WELCOME + MODE_READER + DATE,
+    )
+    client.close()
+    with pytest.raises(nntp.NNTPTemporaryError):
+        client.reconnect()
+    with pytest.raises(NNTPSyncError):
+        client.date()
+    client.reconnect()
+    assert client.date().year == 2024
+
+
+def test_decompression_error_part_way_breaks_connection(connect: Connect) -> None:
+    server = b"215 list COMPRESS=GZIP\r\n" + b"not gzip data" + b".\r\n" + DATE
+    client, _ = connect(WELCOME + MODE_READER + server)
+    with pytest.raises(nntp.NNTPDataError, match="Decompression failed"):
+        list(client.list("ACTIVE"))
+    with pytest.raises(NNTPSyncError, match="reconnect"):
+        client.date()
+
+
+def yenc_body(
+    plain: bytes,
+    *,
+    part: int | None = None,
+    trailer: str | None = None,
+    end: bool = True,
+) -> bytes:
+    """A BODY response holding plain as yEnc, single or one part of many.
+
+    trailer overrides the =yend keywords (default: correct size and CRC);
+    end=False leaves out the =yend line.
+    """
+    if part is None:
+        begin = f"=ybegin line=128 size={len(plain)} name=my file.bin\r\n"
+        trailer = trailer or f"size={len(plain)} crc32={zlib.crc32(plain):08x}"
+    else:
+        begin = f"=ybegin part={part} total=3 line=128 size=99999 name=f\r\n"
+        begin += f"=ypart begin=1 end={len(plain)}\r\n"
+        trailer = trailer or (
+            f"size={len(plain)} part={part} pcrc32={zlib.crc32(plain):08x}"
+            " crc32=deadbeef"  # Whole-file CRC: must not be compared to the part
+        )
+    return (
+        b"222 1 <a@b>\r\n"
+        + begin.encode()
+        + dot_stuff(yenc_encode(plain))
+        + (f"=yend {trailer}\r\n".encode() if end else b"")
+        + b".\r\n"
+    )
+
+
+PLAIN = bytes(range(256)) * 3
+
+
+@pytest.mark.parametrize("part", [None, 2])
+def test_yenc_valid(connect: Connect, part: int | None) -> None:
+    client, _ = connect(WELCOME + MODE_READER + yenc_body(PLAIN, part=part))
+    assert client.body(1) == PLAIN
+
+
+@pytest.mark.parametrize(
+    ("part", "trailer", "match"),
+    [
+        (None, "size=768 crc32=00000001", "CRC32 is"),
+        (None, "size=767 crc32=00000001", "decoded 768 bytes, trailer says 767"),
+        (2, "size=768 part=2 pcrc32=00000001", "CRC32 is"),
+    ],
+)
+def test_yenc_mismatch_keeps_connection(
+    connect: Connect, part: int | None, trailer: str, match: str
+) -> None:
+    server = yenc_body(PLAIN, part=part, trailer=trailer) + DATE
+    client, _ = connect(WELCOME + MODE_READER + server)
+    with pytest.raises(nntp.NNTPYEncError, match=match) as info:
+        client.body(1)
+    assert info.value.data == PLAIN  # Kept for e.g. par2 repair
+    assert isinstance(info.value, nntp.NNTPDataError)
+    assert client.date().year == 2024  # Whole response was read; still in sync
+
+
+def test_yenc_missing_trailer(connect: Connect) -> None:
+    client, _ = connect(WELCOME + MODE_READER + yenc_body(PLAIN, end=False))
+    with pytest.raises(nntp.NNTPDataError, match="missing =yend"):
+        client.body(1)
+
+
+def test_yenc_trailer_without_crc_checks_size_only(connect: Connect) -> None:
+    server = yenc_body(PLAIN, trailer="size=768")
+    client, _ = connect(WELCOME + MODE_READER + server)
+    assert client.body(1) == PLAIN
+
+
+def test_yenc_article_validated(connect: Connect) -> None:
+    body = yenc_body(PLAIN, trailer="size=768 crc32=00000001")
+    article = (
+        b"220 1 <a@b>\r\nSubject: file yEnc (1/1)\r\n\r\n" + body.split(b"\r\n", 1)[1]
+    )
+    client, _ = connect(WELCOME + MODE_READER + article)
+    with pytest.raises(nntp.NNTPDataError, match="CRC32"):
+        client.article(1)
+
+
+@pytest.mark.parametrize(
+    ("server", "call"),
+    [
+        (b"111 not-a-date\r\n", lambda c: c.date()),
+        (b"215 list\r\nalt.test x 1 y\r\n.\r\n", lambda c: list(c.list_active())),
+        (
+            b"231 new\r\nalt.test\r\n.\r\n",
+            lambda c: list(c.newgroups(datetime.now(UTC))),
+        ),
+        (b"221 1 <a@b>\r\nnot a header\r\n.\r\n", lambda c: c.head(1)),
+        (b"220 1 <a@b>\r\n continuation\r\n\r\nbody\r\n.\r\n", lambda c: c.article(1)),
+    ],
+    ids=["date", "list_active", "newgroups", "head", "article"],
+)
+def test_unparseable_response_raises_data_error(
+    connect: Connect, server: bytes, call: Callable[[nntp.NNTPClient], object]
+) -> None:
+    client, _ = connect(WELCOME + MODE_READER + server)
+    with pytest.raises(nntp.NNTPDataError, match="Invalid"):
+        call(client)
+
+
+@pytest.mark.parametrize(
+    ("arg", "sent"), [((1, 2), b"OVER 1-2"), ("<a@b>", b"OVER <a@b>"), (None, b"OVER")]
+)
+def test_over(connect: Connect, arg: object, sent: bytes) -> None:
+    server = OVERVIEW_FMT + b"224 ok\r\n" + XOVER_LINES + b".\r\n"
+    client, sock = connect(WELCOME + MODE_READER + server)
+    _check_xover(list(client.over(arg)))  # type: ignore[arg-type]
+    assert sock.sent.endswith(sent + b"\r\n")
+
+
+@pytest.mark.parametrize(
+    ("arg", "sent", "reply"),
+    [
+        (5, b"STAT 5", b"223 5 <a@b> status"),
+        ("<a@b>", b"STAT <a@b>", b"223 0 <a@b> status"),
+        (None, b"STAT", b"223 5 <a@b> status"),
+    ],
+)
+def test_stat(connect: Connect, arg: object, sent: bytes, reply: bytes) -> None:
+    client, sock = connect(WELCOME + MODE_READER + reply + b"\r\n")
+    number, msgid = client.stat(arg)  # type: ignore[arg-type]
+    assert (number, msgid) == (int(reply.split()[1]), "<a@b>")
+    assert sock.sent.endswith(sent + b"\r\n")
+
+
+def test_stat_no_article(connect: Connect) -> None:
+    client, _ = connect(WELCOME + MODE_READER + b"423 no such article\r\n")
+    with pytest.raises(nntp.NNTPTemporaryError):
+        client.stat(99)
+
+
+@pytest.mark.parametrize(
+    ("name", "numbers", "sent"),
+    [
+        ("alt.test", None, b"LISTGROUP alt.test"),
+        ("alt.test", (2, 3), b"LISTGROUP alt.test 2-3"),
+        (None, None, b"LISTGROUP"),
+    ],
+)
+def test_listgroup(
+    connect: Connect, name: str | None, numbers: tuple[int, int] | None, sent: bytes
+) -> None:
+    server = b"211 3 1 3 alt.test list follows\r\n1\r\n2\r\n3\r\n.\r\n"
+    client, sock = connect(WELCOME + MODE_READER + server)
+    assert list(client.listgroup(name, numbers)) == [1, 2, 3]
+    assert sock.sent.endswith(sent + b"\r\n")
+
+
+def test_listgroup_range_needs_name(connect: Connect) -> None:
+    client, sock = connect(WELCOME + MODE_READER)
+    sock.sent = b""
+    with pytest.raises(ValueError, match="group name"):
+        list(client.listgroup(range=(1, 2)))
+    assert sock.sent == b""
+
+
+def test_listgroup_bad_line(connect: Connect) -> None:
+    server = b"211 1 1 1 alt.test\r\nnot-a-number\r\n.\r\n"
+    client, _ = connect(WELCOME + MODE_READER + server)
+    with pytest.raises(nntp.NNTPDataError, match="Invalid LISTGROUP line"):
+        list(client.listgroup("alt.test"))
+
+
+IHAVE_OK = b"335 send it\r\n235 thanks\r\n"
+
+
+def test_ihave(connect: Connect) -> None:
+    client, sock = connect(WELCOME + MODE_READER + IHAVE_OK)
+    sock.sent = b""
+    client.ihave("<a@b>", {"Subject": "hi"}, b"body\n.dot\n")
+    assert sock.sent == (
+        b"IHAVE <a@b>\r\nSubject: hi\r\nMessage-ID: <a@b>\r\n\r\nbody\r\n..dot\r\n.\r\n"
+    )
+
+
+def test_ihave_keeps_matching_message_id_header(connect: Connect) -> None:
+    client, sock = connect(WELCOME + MODE_READER + IHAVE_OK)
+    sock.sent = b""
+    client.ihave("<a@b>", {"message-id": "<a@b>"}, b"x\n")
+    assert sock.sent.count(b"<a@b>") == 2  # The command and one header
+
+
+@pytest.mark.parametrize(
+    ("message_id", "headers"),
+    [
+        ("a@b", {}),
+        ("<a b>", {}),
+        ("<a@b>\r\nQUIT", {}),
+        ("<>", {}),
+        ("<a@b>", {"Message-ID": "<other@b>"}),
+    ],
+)
+def test_ihave_invalid_sends_nothing(
+    connect: Connect, message_id: str, headers: dict[str, str]
+) -> None:
+    client, sock = connect(WELCOME + MODE_READER)
+    sock.sent = b""
+    with pytest.raises(ValueError, match=r"(?i)message-id"):
+        client.ihave(message_id, headers, b"x\n")
+    assert sock.sent == b""
+
+
+@pytest.mark.parametrize(
+    ("server", "code"),
+    [
+        (b"435 not wanted\r\n", 435),
+        (b"436 try later\r\n", 436),
+        (b"335 send it\r\n437 rejected\r\n", 437),
+        (b"335 send it\r\n436 failed\r\n", 436),
+    ],
+)
+def test_ihave_refused_keeps_connection(
+    connect: Connect, server: bytes, code: int
+) -> None:
+    client, _ = connect(WELCOME + MODE_READER + server + DATE)
+    with pytest.raises(nntp.NNTPTemporaryError) as info:
+        client.ihave("<a@b>", {"Subject": "hi"}, b"x\n")
+    assert info.value.code == code
+    assert client.date().year == 2024
+
+
+@pytest.mark.parametrize("arg", ["alt.test\r\nQUIT", "alt.test\nQUIT", "alt\0test"])
+def test_command_rejects_line_breaks(connect: Connect, arg: str) -> None:
+    client, sock = connect(WELCOME + MODE_READER + DATE)
+    sock.sent = b""
+    with pytest.raises(ValueError, match="CR, LF or NUL"):
+        client.group(arg)
+    assert sock.sent == b""
+    assert client.date().year == 2024  # Nothing was sent; still usable
+
+
+def deflated(*responses: bytes) -> bytes:
+    """Server responses as one raw-deflate stream, flushed after each."""
+    compressor = zlib.compressobj(wbits=-15)
+    return b"".join(
+        compressor.compress(r) + compressor.flush(zlib.Z_SYNC_FLUSH) for r in responses
+    )
+
+
+def sent_after_compress(sock: FakeSocket) -> bytes:
+    """What the client sent after COMPRESS DEFLATE, decompressed."""
+    marker = b"COMPRESS DEFLATE\r\n"
+    compressed = sock.sent[sock.sent.index(marker) + len(marker) :]
+    return zlib.decompressobj(wbits=-15).decompress(compressed)
+
+
+COMPRESS_OK = b"206 Compression active\r\n"
+
+
+def test_compress(connect: Connect) -> None:
+    server = COMPRESS_OK + deflated(DATE, LIST, b"340 send\r\n", b"240 <n@x> ok\r\n")
+    client, sock = connect(WELCOME + MODE_READER + server)
+    client.compress()
+    assert client.date().year == 2024
+    assert [g.name for g in client.list_active()] == ["alt.a", "alt.b"]
+    assert client.post({"Subject": "hi"}, b".body\n") == "<n@x>"
+    assert sent_after_compress(sock) == (
+        b"DATE\r\nLIST ACTIVE\r\nPOST\r\nSubject: hi\r\n\r\n..body\r\n.\r\n"
+    )
+
+
+def test_compress_refused_stays_plain(connect: Connect) -> None:
+    server = b"403 Unable to activate compression\r\n" + DATE
+    client, _ = connect(WELCOME + MODE_READER + server)
+    with pytest.raises(nntp.NNTPTemporaryError):
+        client.compress()
+    assert client.date().year == 2024  # Plain text, still in sync
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda c: c.command("COMPRESS", "DEFLATE"),
+        lambda c: c.mode_reader(),
+        lambda c: c.command("AUTHINFO USER", "fred"),
+        lambda c: c.command("starttls"),
+    ],
+    ids=["compress", "mode_reader", "authinfo", "starttls"],
+)
+def test_forbidden_after_compress(
+    connect: Connect, call: Callable[[nntp.NNTPClient], object]
+) -> None:
+    client, sock = connect(WELCOME + MODE_READER + COMPRESS_OK + deflated(DATE))
+    client.compress()
+    sent = sock.sent
+    with pytest.raises(nntp.NNTPError, match="not allowed after COMPRESS"):
+        call(client)
+    assert sock.sent == sent  # Nothing was sent
+    assert client.date().year == 2024
+
+
+def test_no_login_after_compress(connect: Connect) -> None:
+    server = COMPRESS_OK + deflated(b"480 Authentication required\r\n", DATE)
+    client, sock = connect(
+        WELCOME + MODE_READER + server, username="fred", password="flintstone"
+    )
+    client.compress()
+    with pytest.raises(nntp.NNTPTemporaryError, match="can't authenticate"):
+        client.group("alt.test")
+    assert b"AUTHINFO" not in sent_after_compress(sock)
+    assert client.date().year == 2024
+
+
+def test_corrupt_compressed_data_closes(connect: Connect) -> None:
+    client, sock = connect(WELCOME + MODE_READER + COMPRESS_OK + b"\xff\xff\xff\xff")
+
+    def compress_then_date() -> None:
+        # compress() raises if the bad bytes arrive with the 206, else date()
+        client.compress()
+        client.date()
+
+    with pytest.raises(nntp.NNTPDataError, match="Decompression failed"):
+        compress_then_date()
+    assert sock.closed
+
+
+def test_reconnect_drops_compression(connect: Connect) -> None:
+    client, _ = connect(
+        WELCOME + MODE_READER + COMPRESS_OK + deflated(DATE),
+        WELCOME + MODE_READER + DATE,
+    )
+    client.compress()
+    client.reconnect()
+    assert client.date().year == 2024  # Plain text again
+    assert FakeSocket.last.sent == b"MODE READER\r\nDATE\r\n"
+
+
+def test_data_after_end_of_stream_closes(connect: Connect) -> None:
+    compressor = zlib.compressobj(wbits=-15)
+    ended = compressor.compress(DATE) + compressor.flush()  # Z_FINISH ends it
+    server = COMPRESS_OK + ended + deflated(DATE)
+    client, sock = connect(WELCOME + MODE_READER + server)
+
+    def compress_then_dates() -> None:
+        client.compress()
+        client.date()
+        client.date()
+
+    with pytest.raises(nntp.NNTPDataError, match="after end of stream"):
+        compress_then_dates()
+    assert sock.closed
+
+
+def test_no_compress_over_tls_compression(connect: Connect) -> None:
+    client, sock = connect(WELCOME + MODE_READER)
+    sock.compression = lambda: "zlib"  # type: ignore[attr-defined]
+    sent = sock.sent
+    with pytest.raises(nntp.NNTPError, match="TLS-level compression"):
+        client.compress()
+    assert sock.sent == sent
+
+
+def test_compress_twice(connect: Connect) -> None:
+    client, sock = connect(WELCOME + MODE_READER + COMPRESS_OK)
+    client.compress()
+    sent = sock.sent
+    with pytest.raises(nntp.NNTPError, match="already active"):
+        client.compress()
+    assert sock.sent == sent
+
+
+def test_gzip_response_inside_compress(connect: Connect) -> None:
+    inner = b"224 ok COMPRESS=GZIP\r\n" + gzip.compress(XOVER_LINES) + b".\r\n"
+    server = COMPRESS_OK + deflated(OVERVIEW_FMT, inner)
+    client, _ = connect(WELCOME + MODE_READER + server)
+    client.compress()
+    _check_xover(list(client.xover((1, 2))))

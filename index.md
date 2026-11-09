@@ -1,7 +1,8 @@
-# pynntp documentation
-```{toctree}
-:maxdepth: 2
-:caption: index.md
+```{include} README.md
+```
 
-README.md
+```{toctree}
+:hidden:
+
+CHANGELOG.md
 ```

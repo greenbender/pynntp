@@ -1,4 +1,6 @@
+import email.utils
 import os
+import time
 from datetime import UTC, datetime, timedelta
 from unittest import mock
 
@@ -26,18 +28,14 @@ def test_nntp_client() -> None:
 
 
 def test_context_manager() -> None:
-    """
-    https://docs.python.org/3/reference/datamodel.html#context-managers
-    """
+    """The client works as a context manager and sends QUIT on exit."""
     with nntp.NNTPClient("localhost") as nntp_client:
         newsgroups = set(nntp_client.list_newsgroups())
         assert newsgroups == DEFAULT_NEWGROUPS
 
 
 def test_context_manager_on_close() -> None:
-    """
-    nntp_client.close() should normally not be called within the context manager.
-    """
+    """close() inside the with block is safe; __exit__ does nothing more."""
     with nntp.NNTPClient("localhost") as nntp_client:
         newsgroups = set(nntp_client.list_newsgroups())
         assert newsgroups == DEFAULT_NEWGROUPS
@@ -45,9 +43,7 @@ def test_context_manager_on_close() -> None:
 
 
 def test_context_manager_on_quit() -> None:
-    """
-    nntp_client.quit() should normally not be called within the context manager.
-    """
+    """quit() inside the with block is safe; __exit__ does nothing more."""
     with nntp.NNTPClient("localhost") as nntp_client:
         newsgroups = set(nntp_client.list_newsgroups())
         assert newsgroups == DEFAULT_NEWGROUPS
@@ -159,3 +155,57 @@ def test_xover_full_field() -> None:
         # Xref is a "full" field: the "Xref: " prefix is stripped.
         assert overview["xref"].endswith(" local.test:1")
         assert not overview["xref"].lower().startswith("xref")
+
+
+def test_hdr_over_stat_listgroup() -> None:
+    with nntp.NNTPClient("localhost") as nntp_client:
+        _, first, last, _ = nntp_client.group("local.test")
+        subject = "Test post to local.test"
+        assert list(nntp_client.hdr("Subject", (first, last))) == [(1, subject)]
+        assert list(nntp_client.xhdr("Subject", (first, last))) == [(1, subject)]
+        [(number, overview)] = nntp_client.over((first, last))
+        assert (number, overview["subject"]) == (1, subject)
+        msgid = overview["message-id"]
+        assert nntp_client.stat(1) == (1, msgid)
+        assert nntp_client.stat(msgid)[1] == msgid
+        assert list(nntp_client.listgroup("local.test")) == [1]
+        assert list(nntp_client.listgroup("local.test", (1, 1))) == [1]
+
+
+def test_ihave() -> None:
+    message_id = f"<ihave.{os.getpid()}.{time.time_ns()}@example.com>"
+    headers = {
+        "From": "a@example.com",
+        "Newsgroups": "local.test",
+        "Subject": "IHAVE test",
+        "Path": "example.com!not-for-mail",
+        "Date": email.utils.formatdate(),
+    }
+    with nntp.NNTPClient("localhost") as nntp_client:
+        capabilities = list(nntp_client.capabilities())
+        if "IHAVE" not in capabilities:
+            pytest.skip("The server does not offer IHAVE to this client")
+        nntp_client.ihave(message_id, headers, "IHAVE body\n")
+        with pytest.raises(nntp.NNTPTemporaryError) as info:
+            nntp_client.ihave(message_id, headers, "IHAVE body\n")
+        assert info.value.code == 435  # Duplicate: not wanted
+        assert nntp_client.stat(message_id)[1] == message_id
+
+
+def test_compress() -> None:
+    with nntp.NNTPClient("localhost") as nntp_client:
+        if "COMPRESS DEFLATE" not in list(nntp_client.capabilities()):
+            pytest.skip("The server does not offer COMPRESS DEFLATE")
+        nntp_client.compress()
+        assert "COMPRESS DEFLATE" not in list(nntp_client.capabilities())
+        nntp_client.post(
+            {"From": "a@example.com", "Newsgroups": "local.test", "Subject": "zip"},
+            "compressed body\n" * 100,
+        )
+        _, first, last, _ = nntp_client.group("local.test")
+        overviews = list(nntp_client.xover((first, last)))
+        number = next(n for n, o in overviews if o["subject"] == "zip")
+        assert nntp_client.body(number) == b"compressed body\r\n" * 100
+        assert nntp_client.date().year >= 2024
+        with pytest.raises(nntp.NNTPError, match="not allowed after COMPRESS"):
+            nntp_client.mode_reader()

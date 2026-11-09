@@ -134,11 +134,11 @@ exclude_patterns = [
     ".DS_Store",
     "docs/_build",
     "LICENSE.rst",
+    "README.md",  # Included by index.md
     "Thumbs.db",
 ]
-extensions = ["autoapi.extension", "myst_parser"]
+extensions = ["autoapi.extension", "myst_parser", "sphinx.ext.napoleon"]
 
-html_static_path = ["_static"]
 html_theme = "alabaster"
 
 myst_enable_extensions = [

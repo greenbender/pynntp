@@ -1,5 +1,5 @@
 """
-Case-insentitive ordered mapping for headers.
+Case-insensitive ordered mapping for headers.
 Copyright (C) 2013-2024  Byron Platt
 
 This program is free software: you can redistribute it and/or modify

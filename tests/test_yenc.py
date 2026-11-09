@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from nntp.fifo import BytesFifo
-from nntp.yenc import YEnc, trailer_crc32
+from nntp.yenc import YEnc, check_trailer, parse_keywords, trailer_crc32
 
 
 @pytest.fixture
@@ -76,3 +76,38 @@ def test_decode_matches_reference() -> None:
         )
         assert out == _reference_decode(buf), buf
         assert decoder.crc32 == zlib.crc32(out)
+
+
+def test_parse_keywords() -> None:
+    line = b"=ybegin part=1 total=2 line=128 size=500 name=my part=9 file.bin"
+    # name runs to the end of the line; "part=9" in it must not override part
+    assert parse_keywords(line) == {
+        "part": "1",
+        "total": "2",
+        "line": "128",
+        "size": "500",
+    }
+
+
+def test_trailer_part_crc32() -> None:
+    trailer = b"=yend size=5 part=1 pcrc32=11111111 crc32=22222222"
+    assert trailer_crc32(trailer, part=True) == 0x11111111
+    assert trailer_crc32(trailer) == 0x22222222
+    assert trailer_crc32(b"=yend size=5 crc32=22222222", part=True) is None
+
+
+def test_check_trailer() -> None:
+    crc = zlib.crc32(b"hello")
+    assert (
+        check_trailer(f"=yend size=5 crc32={crc:08x}".encode(), 5, crc, part=False)
+        is None
+    )
+    assert check_trailer(b"=yend size=5", 5, crc, part=False) is None
+    assert check_trailer(b"=yend size=6", 5, crc, part=False) == (
+        "decoded 5 bytes, trailer says 6"
+    )
+    assert "CRC32" in check_trailer(b"=yend size=5 crc32=1", 5, crc, part=False)  # type: ignore[operator]
+    # A part is checked against pcrc32, never the whole-file crc32
+    part = f"=yend size=5 part=2 pcrc32={crc:08x} crc32=deadbeef".encode()
+    assert check_trailer(part, 5, crc, part=True) is None
+    assert check_trailer(part, 5, crc, part=False) is None  # part= in the trailer
