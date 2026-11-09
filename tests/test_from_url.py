@@ -11,7 +11,7 @@ import pytest
 import nntp
 from nntp import SSLMode
 from nntp.nntp import FromURLOptions
-from tests.helpers import DATE, MODE_READER, WELCOME, FakeSocket
+from tests.helpers import DATE, WELCOME, FakeSocket
 
 TIMEOUT = 5.5
 
@@ -129,7 +129,7 @@ def test_invalid_urls(init_args: dict[str, Any], url: str, match: str) -> None:
 
 
 def test_connects_and_logs_in(monkeypatch: pytest.MonkeyPatch) -> None:
-    server = WELCOME + b"480 auth\r\n381 pass\r\n281 ok\r\n" + MODE_READER + DATE
+    server = WELCOME + b"480 auth\r\n381 pass\r\n281 ok\r\n" + DATE
     sock = FakeSocket(server, 4096)
     addresses = []
 
