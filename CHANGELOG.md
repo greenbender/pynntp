@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- Methods that return an iterator (`capabilities()`, `newgroups()`,
+  `newnews()`, the `list_*()` methods, `listgroup()`, `hdr()`/`xhdr()`/
+  `xzhdr()`, `xover()`/`xzver()`/`over()` and `xpat()`) send their command and
+  read its status line when called, as `list()` already did, instead of on the
+  first `next()`. A reply error is raised by the call, and another command
+  issued before the iterator is read raises `NNTPSyncError` (#102).
+
+### Fixed
+
+- An iterator abandoned before `reconnect()` no longer marks the new
+  connection broken when it is closed or garbage-collected.
+- An empty line in a LIST NEWSGROUPS response raised `IndexError` instead of
+  `NNTPDataError`.
+
 ## 3.2.0 - 2026-11-09
 
 ### Changed

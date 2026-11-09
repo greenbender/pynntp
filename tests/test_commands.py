@@ -13,7 +13,7 @@ from nntp.types import Newsgroup, SSLMode
 from tests.helpers import LIST, MODE_READER, WELCOME, Connect
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterator
 
 
 def test_group(connect: Connect) -> None:
@@ -303,3 +303,21 @@ def test_newgroups_year_zero_padded(connect: Connect) -> None:
     sock.sent = b""
     assert list(client.newgroups(datetime(999, 1, 2, 3, 4, 5, tzinfo=UTC))) == []
     assert sock.sent == b"NEWGROUPS 09990102 030405 GMT\r\n"
+
+
+@pytest.mark.parametrize(
+    ("server", "call", "match"),
+    [
+        (b"215 groups\r\n\r\n.\r\n", lambda c: c.list_newsgroups(), "LIST NEWSGROUPS"),
+        (b"225 ok\r\n\r\n.\r\n", lambda c: c.hdr("Subject"), "HDR response"),
+    ],
+)
+def test_empty_line_is_a_data_error(
+    connect: Connect,
+    server: bytes,
+    call: Callable[[nntp.NNTPClient], Iterator[object]],
+    match: str,
+) -> None:
+    client, _ = connect(WELCOME + MODE_READER + server)
+    with pytest.raises(nntp.NNTPDataError, match=f"Invalid {match}.*empty line"):
+        list(call(client))
