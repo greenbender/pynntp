@@ -59,17 +59,12 @@ def test_connection_closed(connect: Connect) -> None:
 
 def test_auth_on_480(connect: Connect) -> None:
     _, sock = connect(
-        WELCOME
-        + b"480 auth required\r\n"
-        + b"381 more auth\r\n"
-        + b"281 ok\r\n"
-        + b"200 reader mode\r\n",
+        WELCOME + b"480 auth required\r\n" + b"381 more auth\r\n" + b"281 ok\r\n",
         username="user",
         password="pass",
     )
-    assert sock.sent == (
-        b"MODE READER\r\nAUTHINFO USER user\r\nAUTHINFO PASS pass\r\nMODE READER\r\n"
-    )
+    # RFC 4643 2.2: no MODE READER after logging in
+    assert sock.sent == b"MODE READER\r\nAUTHINFO USER user\r\nAUTHINFO PASS pass\r\n"
 
 
 def test_auth_rejected(connect: Connect) -> None:
@@ -316,9 +311,9 @@ def test_exit_when_quit_fails_closes_and_raises(connect: Connect) -> None:
 
 
 def test_auth_user_alone_accepted(connect: Connect) -> None:
-    server = WELCOME + b"480 auth\r\n" + b"281 ok\r\n" + MODE_READER
+    server = WELCOME + b"480 auth\r\n" + b"281 ok\r\n"
     _, sock = connect(server, username="fred")
-    assert sock.sent == b"MODE READER\r\nAUTHINFO USER fred\r\nMODE READER\r\n"
+    assert sock.sent == b"MODE READER\r\nAUTHINFO USER fred\r\n"
 
 
 def test_auth_unexpected_reply(connect: Connect) -> None:
@@ -405,3 +400,101 @@ def test_login_rejected(connect: Connect) -> None:
     with pytest.raises(nntp.NNTPTemporaryError) as info:
         client.login("user", "bad")
     assert info.value.code == 481
+
+
+@pytest.mark.parametrize("call", ["head", "next"])
+def test_unexpected_multiline_reply_is_read(connect: Connect, call: str) -> None:
+    # A 222 data line that looks like a DATE reply must not be read as one
+    server = b"222 1 <a@b>\r\n111 19990101000000\r\n.\r\n" + DATE
+    client, _ = connect(WELCOME + MODE_READER + server)
+    with pytest.raises(nntp.NNTPReplyError) as info:
+        getattr(client, call)()
+    assert info.value.code == 222
+    assert client.date().year == 2024
+
+
+def test_unexpected_multiline_final_post_reply_is_read(connect: Connect) -> None:
+    server = b"340 send\r\n" + b"220 0 <a@b>\r\n111 19990101000000\r\n.\r\n" + DATE
+    client, _ = connect(WELCOME + MODE_READER + server)
+    with pytest.raises(nntp.NNTPReplyError) as info:
+        client.post({"Subject": "s"}, b"x\n")
+    assert info.value.code == 220
+    assert client.date().year == 2024
+
+
+def test_480_to_authinfo_does_not_recurse(connect: Connect) -> None:
+    server = WELCOME + MODE_READER + b"480 again\r\n" * 2 + DATE
+    client, sock = connect(server, username="u", password="p")
+    sock.sent = b""
+    with pytest.raises(nntp.NNTPTemporaryError):
+        client.date()
+    assert sock.sent == b"DATE\r\nAUTHINFO USER u\r\n"
+    assert client.date().year == 2024
+
+
+def test_mode_reader_480_is_raised(connect: Connect) -> None:
+    client, sock = connect(WELCOME + MODE_READER + b"480 auth\r\n", username="u")
+    sock.sent = b""
+    with pytest.raises(nntp.NNTPTemporaryError):
+        client.command("mode  reader")  # Any spelling; login() is the caller's call
+    assert sock.sent == b"mode  reader\r\n"
+
+
+def test_480_on_setup_without_username_closes(connect: Connect) -> None:
+    with pytest.raises(nntp.NNTPTemporaryError):
+        connect(WELCOME + b"480 auth\r\n")
+    assert FakeSocket.last.closed
+
+
+@pytest.mark.parametrize(("verb", "args"), [(" STARTTLS ", None), ("", "starttls")])
+def test_raw_starttls_480_never_logs_in(
+    connect: Connect, verb: str, args: str | None
+) -> None:
+    client, sock = connect(WELCOME + MODE_READER + b"480 auth\r\n", username="u")
+    sock.sent = b""
+    with pytest.raises(nntp.NNTPTemporaryError, match="before STARTTLS"):
+        client.command(verb, args)
+    assert b"AUTHINFO" not in sock.sent
+
+
+def test_command_args_surrogateescape(connect: Connect) -> None:
+    client, sock = connect(WELCOME + MODE_READER + b"211 1 1 1 caf\xe9\r\n")
+    sock.sent = b""
+    client.group("caf\udce9")  # A name as decoded from LIST ACTIVE
+    assert sock.sent == b"GROUP caf\xe9\r\n"
+
+
+@pytest.mark.parametrize(("user", "password"), [("u", "a\nb"), ("u\r", "p")])
+def test_login_bad_credentials_sends_nothing(
+    connect: Connect, user: str, password: str
+) -> None:
+    client, sock = connect(WELCOME + MODE_READER)
+    sock.sent = b""
+    with pytest.raises(ValueError, match="CR, LF or NUL"):
+        client.login(user, password)
+    assert sock.sent == b""
+
+
+def test_login_password_asked_but_none(connect: Connect) -> None:
+    client, sock = connect(WELCOME + MODE_READER + b"381 more\r\n")
+    sock.sent = b""
+    with pytest.raises(nntp.NNTPReplyError, match="no password") as info:
+        client.login("u")
+    assert info.value.code == 381
+    assert sock.sent == b"AUTHINFO USER u\r\n"  # No bare AUTHINFO PASS
+
+
+@pytest.mark.parametrize("error", [b"400 cannot quit\r\n", b""])
+def test_exit_keeps_the_with_block_exception(connect: Connect, error: bytes) -> None:
+    client, sock = connect(WELCOME + MODE_READER + error)
+    with pytest.raises(KeyError), client:
+        raise KeyError("mine")
+    assert sock.closed
+
+
+def test_480_logs_in_and_retries(connect: Connect) -> None:
+    server = WELCOME + MODE_READER + b"480 auth\r\n381 more\r\n281 ok\r\n" + DATE
+    client, sock = connect(server, username="u", password="p")
+    sock.sent = b""
+    assert client.date().year == 2024
+    assert sock.sent == b"DATE\r\nAUTHINFO USER u\r\nAUTHINFO PASS p\r\nDATE\r\n"

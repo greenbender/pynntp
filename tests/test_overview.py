@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import gzip
+import zlib
 
 import pytest
 
@@ -16,6 +17,7 @@ from tests.helpers import (
     XOVER_LINES,
     Connect,
     check_xover,
+    dot_stuff,
     xzver_server,
     yenc_encode,
     yenczlib,
@@ -39,6 +41,41 @@ def test_xover_gzip(connect: Connect, terminator: bool) -> None:
         WELCOME + MODE_READER + OVERVIEW_FMT + b"224 ok COMPRESS=GZIP\r\n" + payload
     )
     check_xover(list(client.xover((1, 2))))
+
+
+@pytest.mark.parametrize("terminator", [False, True])
+def test_xover_gzip_next_reply_in_sync(connect: Connect, terminator: bool) -> None:
+    # The gzip trailer can arrive after the decompressed terminator
+    if terminator:
+        payload = gzip.compress(XOVER_LINES + b".\r\n")
+    else:
+        payload = gzip.compress(XOVER_LINES) + b".\r\n"
+    server = OVERVIEW_FMT + b"224 ok COMPRESS=GZIP\r\n" + payload + DATE
+    client, _ = connect(WELCOME + MODE_READER + server)
+    check_xover(list(client.xover((1, 2))))
+    assert client.date().year == 2024
+
+
+def test_xover_gzip_bad_trailer_after_terminator(connect: Connect) -> None:
+    payload = bytearray(gzip.compress(XOVER_LINES + b".\r\n"))
+    payload[-8] ^= 0xFF  # Corrupt the gzip CRC, which follows the terminator
+    server = OVERVIEW_FMT + b"224 ok COMPRESS=GZIP\r\n" + bytes(payload)
+    client, _ = connect(WELCOME + MODE_READER + server)
+    with pytest.raises(nntp.NNTPDataError, match="Decompression failed"):
+        list(client.xover((1, 2)))
+
+
+def test_xzver_truncated_stream(connect: Connect) -> None:
+    deflate = zlib.compressobj(wbits=-15)
+    raw = (deflate.compress(XOVER_LINES) + deflate.flush())[:-6]
+    server = (
+        b"224 ok\r\n=ybegin line=128 size=0 name=x\r\n"
+        + dot_stuff(yenc_encode(raw, 128))
+        + f"=yend size={len(raw)} crc32={zlib.crc32(raw):08x}\r\n.\r\n".encode()
+    )
+    client, _ = connect(WELCOME + MODE_READER + OVERVIEW_FMT + server)
+    with pytest.raises(nntp.NNTPDataError, match="truncated"):
+        list(client.xzver((1, 2)))
 
 
 def test_xzver(connect: Connect) -> None:

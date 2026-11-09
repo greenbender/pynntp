@@ -2,10 +2,45 @@
 
 ## Unreleased
 
+### Changed
+
+- `body(decode=True)` and `article(decode=True)` raise `NNTPYEncError` when
+  the body has no `=ybegin` line, instead of returning plain text run through
+  the yEnc decoder (#102).
+
 ### Fixed
 
-Parsing findings from go-while (#102):
+Found by go-while (#102).
 
+- An unexpected reply with a multi-line block (e.g. 222 to HEAD, or to the
+  end of a POST) left the block unread, so the next command read a data line
+  as its reply. The block is now read before `NNTPReplyError` is raised.
+- `command()` only skipped the login before STARTTLS when the verb was exactly
+  `STARTTLS`; `command(" STARTTLS ")` or `command("", "STARTTLS")` still sent
+  the credentials in clear text. Commands are now matched by their first word.
+- A server answering AUTHINFO with 480 made the client log in again
+  recursively, until `RecursionError`.
+- After a 480 to MODE READER while connecting, the client logs in and no
+  longer repeats MODE READER (RFC 4643 2.2). A 480 to `mode_reader()` or a
+  raw MODE READER is raised; call `login()`.
+- `login()` rejects a username or password containing CR, LF or NUL before
+  sending anything, and raises rather than sending an empty `AUTHINFO PASS`.
+- Command arguments are encoded with the client's `errors` policy, so a group
+  name read from LIST ACTIVE with non-UTF-8 bytes can be selected.
+- A failing QUIT at the end of a `with` block no longer replaces the
+  exception raised inside the block.
+- `.coverage` was committed by mistake; it is now ignored.
+- Text outside a yEnc block, such as a signature after `=yend`, was decoded
+  into the data. It is now dropped.
+- yEnc detection needs `=ybegin ` at the start of the body; a plain body
+  starting with `=ybeginners guide` was treated as yEnc and raised.
+- yEnc trailers must have a valid `size=`; an invalid `crc32=`, `pcrc32=` or
+  `part=` (e.g. 9 hex digits) is reported rather than ignored.
+- XFEATURE COMPRESS GZIP TERMINATOR: when the end of the gzip stream arrived
+  after the decompressed terminator, it was left unread and the next reply
+  failed to parse.
+- XZVER/XZHDR: a DEFLATE stream that ends early raises `NNTPDataError` instead
+  of silently dropping the last, partial row.
 - `post()` returned `True` for INN's `240 Article received <id>`: the
   message-id was only looked for in the first word. It is now found anywhere
   in the reply.
