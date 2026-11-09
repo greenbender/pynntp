@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import gzip
 import zlib
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from datetime import UTC, datetime, timedelta, timezone
-from typing import TYPE_CHECKING
 
 import pytest
 
@@ -14,9 +13,6 @@ import nntp
 from nntp.headerdict import HeaderDict
 from nntp.nntp import NNTPSyncError
 from nntp.types import Newsgroup, SSLMode
-
-if TYPE_CHECKING:
-    from collections.abc import Iterator
 
 WELCOME = b"200 server ready\r\n"
 MODE_READER = b"200 reader mode\r\n"
@@ -1051,3 +1047,220 @@ def test_body_two_yenc_blocks(connect: Connect) -> None:
     )
     client, _ = connect(WELCOME + MODE_READER + b"222 1 <a@b>\r\n" + blocks + b".\r\n")
     assert client.body(1) == first + second
+
+
+ODD = b"299 unexpected\r\n"  # A success code no command expects
+
+
+@pytest.mark.parametrize(
+    ("prefix", "call"),
+    [
+        (b"", lambda c: c.capabilities()),
+        (b"", lambda c: c.mode_reader()),
+        (b"", lambda c: c.compress()),
+        (b"", lambda c: c.quit()),
+        (b"", lambda c: c.date()),
+        (b"", lambda c: c.help()),
+        (b"", lambda c: c.newgroups(datetime.now(UTC))),
+        (b"", lambda c: c.newnews("*", datetime.now(UTC))),
+        (b"", lambda c: c.list_active()),
+        (b"", lambda c: c.group("g")),
+        (b"", lambda c: c.listgroup("g")),
+        (b"", lambda c: c.next()),
+        (b"", lambda c: c.stat(1)),
+        (b"", lambda c: c.article(1)),
+        (b"", lambda c: c.head(1)),
+        (b"", lambda c: c.body(1)),
+        (b"", lambda c: c.hdr("Subject")),
+        (b"503 no fmt\r\n", lambda c: c.xover()),
+        (b"", lambda c: c.xpat("Subject", 1, "*")),
+        (b"", lambda c: c.xfeature_compress_gzip()),
+        (b"", lambda c: c.post({"Subject": "x"}, b"x\n")),
+        (b"", lambda c: c.ihave("<a@b>", {"Subject": "x"}, b"x\n")),
+    ],
+)
+def test_unexpected_reply_raises(
+    connect: Connect, prefix: bytes, call: Callable[[nntp.NNTPClient], object]
+) -> None:
+    client, _ = connect(WELCOME + MODE_READER + prefix + ODD + DATE)
+
+    def run() -> None:
+        result = call(client)
+        if isinstance(result, Iterator):
+            list(result)  # Generators send their command when iterated
+
+    with pytest.raises(nntp.NNTPReplyError) as info:
+        run()
+    assert info.value.code == 299
+    assert client.date().year == 2024  # The status line was read; in sync
+
+
+def test_help(connect: Connect) -> None:
+    server = b"100 help follows\r\nARTICLE\r\nBODY\r\n.\r\n"
+    client, _ = connect(WELCOME + MODE_READER + server)
+    assert client.help() == "ARTICLE\r\nBODY\r\n"
+
+
+def test_list_active_times(connect: Connect) -> None:
+    server = b"215 times\r\nalt.test 1641048001 news@example.com\r\n.\r\n"
+    client, sock = connect(WELCOME + MODE_READER + server)
+    assert list(client.list_active_times()) == [
+        ("alt.test", datetime(2022, 1, 1, 14, 40, 1, tzinfo=UTC), "news@example.com")
+    ]
+    assert sock.sent.endswith(b"LIST ACTIVE.TIMES\r\n")
+
+
+@pytest.mark.parametrize("line", [b"alt.test", b"alt.test notatime who"])
+def test_list_active_times_bad_line(connect: Connect, line: bytes) -> None:
+    client, _ = connect(WELCOME + MODE_READER + b"215 times\r\n" + line + b"\r\n.\r\n")
+    with pytest.raises(nntp.NNTPDataError, match=r"ACTIVE\.TIMES"):
+        list(client.list_active_times())
+
+
+@pytest.mark.parametrize(
+    ("variant", "sent"), [(None, b"LIST HEADERS"), ("MSGID", b"LIST HEADERS MSGID")]
+)
+def test_list_headers(connect: Connect, variant: str | None, sent: bytes) -> None:
+    server = b"215 headers\r\nSubject\r\n:bytes\r\n.\r\n"
+    client, sock = connect(WELCOME + MODE_READER + server)
+    assert list(client.list_headers(variant)) == ["Subject", ":bytes"]  # type: ignore[arg-type]
+    assert sock.sent.endswith(sent + b"\r\n")
+
+
+def test_list_extensions(connect: Connect) -> None:
+    server = b"202 extensions\r\nOVER\r\nHDR\r\n.\r\n"
+    client, sock = connect(WELCOME + MODE_READER + server)
+    assert list(client.list_extensions()) == ["OVER", "HDR"]
+    assert sock.sent.endswith(b"LIST EXTENSIONS\r\n")
+
+
+@pytest.mark.parametrize("line", [b"Subject:extra:", b"Subject:bogus"])
+def test_overview_fmt_bad_line(connect: Connect, line: bytes) -> None:
+    client, _ = connect(WELCOME + MODE_READER + b"215 fmt\r\n" + line + b"\r\n.\r\n")
+    with pytest.raises(nntp.NNTPDataError, match=r"OVERVIEW\.FMT"):
+        list(client.list_overview_fmt())
+
+
+def test_group_bad_reply(connect: Connect) -> None:
+    client, _ = connect(WELCOME + MODE_READER + b"211 x y z alt.test\r\n")
+    with pytest.raises(nntp.NNTPDataError, match="Invalid GROUP"):
+        client.group("alt.test")
+
+
+def yenczlib(
+    code: bytes, payload: bytes, trailer: str | None = None, line_length: int = 128
+) -> bytes:
+    """An XZVER/XZHDR response: payload deflated, then yEnc-encoded."""
+    deflate = zlib.compressobj(wbits=-15)
+    raw = deflate.compress(payload) + deflate.flush()
+    if trailer is None:
+        trailer = f"=yend size={len(raw)} crc32={zlib.crc32(raw):08x}"
+    return (
+        code
+        + b" ok\r\n=ybegin line=128 size=0 name=x\r\n"
+        + dot_stuff(yenc_encode(raw, line_length))
+        + trailer.encode()
+        + b"\r\n.\r\n"
+    )
+
+
+def test_xzhdr(connect: Connect) -> None:
+    server = yenczlib(b"221", b"1 hello\r\n2 world\r\n")
+    client, sock = connect(WELCOME + MODE_READER + server)
+    assert list(client.xzhdr("Subject", (1, 2))) == [(1, "hello"), (2, "world")]
+    assert sock.sent.endswith(b"XZHDR Subject 1-2\r\n")
+
+
+@pytest.mark.parametrize(
+    ("server", "match"),
+    [
+        (b"224 ok\r\nnot a ybegin line\r\n.\r\n", "Bad yEnc header"),
+        (b"224 ok\r\n=ybegin line=128 size=0 name=x\r\n.\r\n", "Missing yEnc trailer"),
+        (yenczlib(b"224", XOVER_LINES, trailer="=yend size=1"), "Bad yEnc trailer"),
+        (
+            b"224 ok\r\n=ybegin line=128 size=0 name=x\r\n"
+            + yenc_encode(b"\xff\xff not deflate")
+            + b"=yend size=1 crc32=00000000\r\n.\r\n",
+            "Decompression failed",
+        ),
+    ],
+)
+def test_xzver_errors(connect: Connect, server: bytes, match: str) -> None:
+    client, _ = connect(WELCOME + MODE_READER + OVERVIEW_FMT + server)
+    with pytest.raises(nntp.NNTPDataError, match=match):
+        list(client.xzver((1, 2)))
+
+
+def test_exit_when_quit_fails_closes_and_raises(connect: Connect) -> None:
+    client, sock = connect(WELCOME + MODE_READER + b"400 cannot quit\r\n")
+    with pytest.raises(nntp.NNTPTemporaryError), client:
+        pass
+    assert sock.closed
+
+
+def test_auth_user_alone_accepted(connect: Connect) -> None:
+    server = WELCOME + b"480 auth\r\n" + b"281 ok\r\n" + MODE_READER
+    _, sock = connect(server, username="fred")
+    assert sock.sent == b"MODE READER\r\nAUTHINFO USER fred\r\nMODE READER\r\n"
+
+
+def test_auth_unexpected_reply(connect: Connect) -> None:
+    server = WELCOME + b"480 auth\r\n" + b"381 pass\r\n" + b"250 odd\r\n"
+    with pytest.raises(nntp.NNTPReplyError) as info:
+        connect(server, username="fred", password="pw")
+    assert info.value.code == 250
+
+
+def test_no_reader_mode(connect: Connect) -> None:
+    client, sock = connect(WELCOME + DATE, reader=False)
+    assert client.date().year == 2024
+    assert sock.sent == b"DATE\r\n"
+
+
+def test_list_without_keyword(connect: Connect) -> None:
+    client, sock = connect(WELCOME + MODE_READER + LIST)
+    assert len(list(client.list())) == 2
+    assert sock.sent.endswith(b"MODE READER\r\nLIST\r\n")
+
+
+def test_list_newsgroups_without_description(connect: Connect) -> None:
+    server = b"215 groups\r\nalt.test A test group\r\nalt.bare\r\n.\r\n"
+    client, _ = connect(WELCOME + MODE_READER + server)
+    assert list(client.list_newsgroups()) == [
+        ("alt.test", "A test group"),
+        ("alt.bare", ""),
+    ]
+
+
+def test_body_only_blank_lines(connect: Connect) -> None:
+    client, _ = connect(WELCOME + MODE_READER + b"222 1 <a@b>\r\n\r\n\r\n.\r\n")
+    assert client.body(1) == b"\r\n\r\n"
+
+
+def test_xover_short_line_missing_full_field(connect: Connect) -> None:
+    fmt = b"215 fmt\r\nSubject:\r\nXref:full\r\n.\r\n"
+    server = fmt + b"224 ok\r\n1\ts1\r\n.\r\n"
+    client, _ = connect(WELCOME + MODE_READER + server)
+    assert list(client.xover((1,))) == [(1, HeaderDict({"subject": "s1"}))]
+
+
+def test_post_unexpected_final_reply(connect: Connect) -> None:
+    server = b"340 send\r\n" + ODD + DATE
+    client, _ = connect(WELCOME + MODE_READER + server)
+    with pytest.raises(nntp.NNTPReplyError) as info:
+        client.post({"Subject": "x"}, b"x\n")
+    assert info.value.code == 299
+    assert client.date().year == 2024
+
+
+def test_xzver_tiny_lines(connect: Connect) -> None:
+    # One byte per yEnc line: many lines inflate to nothing on their own
+    server = yenczlib(b"224", XOVER_LINES, line_length=1)
+    client, _ = connect(WELCOME + MODE_READER + OVERVIEW_FMT + server)
+    _check_xover(list(client.xzver((1, 2))))
+
+
+def test_raw_command(connect: Connect) -> None:
+    client, sock = connect(WELCOME + MODE_READER + b"283 whatever\r\n")
+    assert client.command("XSOMETHING", "arg") == (283, "whatever")
+    assert sock.sent.endswith(b"XSOMETHING arg\r\n")
