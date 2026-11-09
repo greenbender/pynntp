@@ -1,5 +1,6 @@
 # This workflow will install Python dependencies, do type checking, and
-# run tests with a variety of Python versions.
+# run tests with a variety of Python versions. The integration tests run
+# against the greenbender/inn image and against Ubuntu's inn2 package.
 
 name: Check
 
@@ -38,3 +39,20 @@ jobs:
         run: uv run mypy --strict .
       - name: Run tests
         run: uv run pytest
+
+  test-inn2:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          python-version: "3.14"
+          enable-cache: true
+      - name: Set up INN
+        run: sudo tests/integration/inn2/setup.sh
+      - name: Install dependencies
+        run: uv sync --locked
+      - name: Run integration tests
+        run: uv run pytest -rs tests/integration
+        env:
+          PYNNTP_TLS_CAFILE: /etc/news/pynntp-cert.pem
