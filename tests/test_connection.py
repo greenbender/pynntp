@@ -220,11 +220,10 @@ def test_command_rejects_line_breaks(connect: Connect, arg: str) -> None:
     assert client.date().year == 2024  # Nothing was sent; still usable
 
 
-def test_starttls_rejects_data_after_reply(connect: Connect, chunk: int) -> None:
+@pytest.mark.parametrize("chunk", [4096])  # The injected reply must arrive in one read
+def test_starttls_rejects_data_after_reply(connect: Connect) -> None:
     # A man-in-the-middle appends a fake reply to the plaintext 382. If it
     # arrives in a later read it goes to the TLS handshake instead, and fails.
-    if chunk < 64:
-        pytest.skip("The injected reply must arrive in the same read")
     injected = b"200 hi\r\n382 go ahead\r\n211 1 1 1 fake.group\r\n"
     with pytest.raises(nntp.NNTPProtocolError, match="after STARTTLS"):
         connect(injected, use_ssl=True, ssl_mode=SSLMode.STARTTLS)
