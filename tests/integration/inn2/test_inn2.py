@@ -153,3 +153,18 @@ def test_xover_full_field() -> None:
         # Xref is a "full" field: the "Xref: " prefix is stripped.
         assert overview["xref"].endswith(" local.test:1")
         assert not overview["xref"].lower().startswith("xref")
+
+
+def test_hdr_over_stat_listgroup() -> None:
+    with nntp.NNTPClient("localhost") as nntp_client:
+        _, first, last, _ = nntp_client.group("local.test")
+        subject = "Test post to local.test"
+        assert list(nntp_client.hdr("Subject", (first, last))) == [(1, subject)]
+        assert list(nntp_client.xhdr("Subject", (first, last))) == [(1, subject)]
+        [(number, overview)] = nntp_client.over((first, last))
+        assert (number, overview["subject"]) == (1, subject)
+        msgid = overview["message-id"]
+        assert nntp_client.stat(1) == (1, msgid)
+        assert nntp_client.stat(msgid)[1] == msgid
+        assert list(nntp_client.listgroup("local.test")) == [1]
+        assert list(nntp_client.listgroup("local.test", (1, 1))) == [1]

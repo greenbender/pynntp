@@ -364,15 +364,24 @@ def test_article_bad_status(connect: Connect) -> None:
         client.article()
 
 
-@pytest.mark.parametrize("verb", ["hdr", "xhdr"])
-def test_hdr(connect: Connect, verb: str) -> None:
-    client, sock = connect(WELCOME + MODE_READER + b"221 ok\r\n1 hello\r\n2\r\n.\r\n")
+@pytest.mark.parametrize(("verb", "code"), [("hdr", b"225"), ("xhdr", b"221")])
+def test_hdr(connect: Connect, verb: str, code: bytes) -> None:
+    server = code + b" ok\r\n1 hello\r\n2\r\n.\r\n"
+    client, sock = connect(WELCOME + MODE_READER + server)
     assert list(getattr(client, verb)("Subject", (1, 2))) == [(1, "hello"), (2, "")]
     assert sock.sent.endswith(verb.upper().encode() + b" Subject 1-2\r\n")
 
 
+@pytest.mark.parametrize(("verb", "code"), [("hdr", b"221"), ("xhdr", b"225")])
+def test_hdr_wrong_code(connect: Connect, verb: str, code: bytes) -> None:
+    # HDR answers 225 (RFC 3977), XHDR 221 (RFC 2980); the other is an error
+    client, _ = connect(WELCOME + MODE_READER + code + b" ok\r\n.\r\n")
+    with pytest.raises(nntp.NNTPReplyError):
+        list(getattr(client, verb)("Subject"))
+
+
 def test_hdr_bad_line(connect: Connect) -> None:
-    client, _ = connect(WELCOME + MODE_READER + b"221 ok\r\nx y\r\n.\r\n")
+    client, _ = connect(WELCOME + MODE_READER + b"225 ok\r\nx y\r\n.\r\n")
     with pytest.raises(nntp.NNTPDataError, match="Invalid HDR response"):
         list(client.hdr("Subject"))
 
@@ -645,3 +654,66 @@ def test_unparseable_response_raises_data_error(
     client, _ = connect(WELCOME + MODE_READER + server)
     with pytest.raises(nntp.NNTPDataError, match="Invalid"):
         call(client)
+
+
+@pytest.mark.parametrize(
+    ("arg", "sent"), [((1, 2), b"OVER 1-2"), ("<a@b>", b"OVER <a@b>"), (None, b"OVER")]
+)
+def test_over(connect: Connect, arg: object, sent: bytes) -> None:
+    server = OVERVIEW_FMT + b"224 ok\r\n" + XOVER_LINES + b".\r\n"
+    client, sock = connect(WELCOME + MODE_READER + server)
+    _check_xover(list(client.over(arg)))  # type: ignore[arg-type]
+    assert sock.sent.endswith(sent + b"\r\n")
+
+
+@pytest.mark.parametrize(
+    ("arg", "sent", "reply"),
+    [
+        (5, b"STAT 5", b"223 5 <a@b> status"),
+        ("<a@b>", b"STAT <a@b>", b"223 0 <a@b> status"),
+        (None, b"STAT", b"223 5 <a@b> status"),
+    ],
+)
+def test_stat(connect: Connect, arg: object, sent: bytes, reply: bytes) -> None:
+    client, sock = connect(WELCOME + MODE_READER + reply + b"\r\n")
+    number, msgid = client.stat(arg)  # type: ignore[arg-type]
+    assert (number, msgid) == (int(reply.split()[1]), "<a@b>")
+    assert sock.sent.endswith(sent + b"\r\n")
+
+
+def test_stat_no_article(connect: Connect) -> None:
+    client, _ = connect(WELCOME + MODE_READER + b"423 no such article\r\n")
+    with pytest.raises(nntp.NNTPTemporaryError):
+        client.stat(99)
+
+
+@pytest.mark.parametrize(
+    ("name", "numbers", "sent"),
+    [
+        ("alt.test", None, b"LISTGROUP alt.test"),
+        ("alt.test", (2, 3), b"LISTGROUP alt.test 2-3"),
+        (None, None, b"LISTGROUP"),
+    ],
+)
+def test_listgroup(
+    connect: Connect, name: str | None, numbers: tuple[int, int] | None, sent: bytes
+) -> None:
+    server = b"211 3 1 3 alt.test list follows\r\n1\r\n2\r\n3\r\n.\r\n"
+    client, sock = connect(WELCOME + MODE_READER + server)
+    assert list(client.listgroup(name, numbers)) == [1, 2, 3]
+    assert sock.sent.endswith(sent + b"\r\n")
+
+
+def test_listgroup_range_needs_name(connect: Connect) -> None:
+    client, sock = connect(WELCOME + MODE_READER)
+    sock.sent = b""
+    with pytest.raises(ValueError, match="group name"):
+        list(client.listgroup(range=(1, 2)))
+    assert sock.sent == b""
+
+
+def test_listgroup_bad_line(connect: Connect) -> None:
+    server = b"211 1 1 1 alt.test\r\nnot-a-number\r\n.\r\n"
+    client, _ = connect(WELCOME + MODE_READER + server)
+    with pytest.raises(nntp.NNTPDataError, match="Invalid LISTGROUP line"):
+        list(client.listgroup("alt.test"))
