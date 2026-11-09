@@ -30,7 +30,7 @@ def test_unparse_range(range: Range, expected: str) -> None:  # noqa: A002
     assert unparse_msgid_range(range) == expected
 
 
-@pytest.mark.parametrize("range", [None, (), (1, 10, 20), "1-10"])
+@pytest.mark.parametrize("range", [None, (), (1, 10, 20), "1-10", True])
 def test_unparse_range_invalid(range: object) -> None:  # noqa: A002
     with pytest.raises(ValueError):  # noqa: PT011
         unparse_range(range)  # type: ignore[arg-type]

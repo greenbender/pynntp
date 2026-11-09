@@ -47,7 +47,7 @@ def unparse_range(obj: Range) -> str:
     Raises:
         ValueError: If obj is not one of those forms.
     """
-    if isinstance(obj, int):
+    if isinstance(obj, int) and not isinstance(obj, bool):
         return str(obj)
 
     if isinstance(obj, tuple):
@@ -99,8 +99,8 @@ def parse_newsgroup(line: str) -> Newsgroup:
         high = int(parts[1])
         low = int(parts[2])
         status = parts[3]
-    except (IndexError, ValueError):
-        raise ValueError("Invalid newsgroup info")
+    except (IndexError, ValueError) as e:
+        raise ValueError("Invalid newsgroup info") from e
     return Newsgroup(name, low, high, status)
 
 
