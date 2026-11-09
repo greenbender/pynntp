@@ -32,7 +32,7 @@ from . import utils
 from .fifo import BytesFifo
 from .headerdict import HeaderDict
 from .types import SSLMode
-from .yenc import YEnc, trailer_crc32
+from .yenc import YEnc, check_trailer, parse_keywords, trailer_crc32
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Iterator, Mapping
@@ -52,6 +52,7 @@ __all__ = [
     "NNTPReplyError",
     "NNTPSyncError",
     "NNTPTemporaryError",
+    "NNTPYEncError",
 ]
 
 
@@ -131,6 +132,18 @@ class NNTPDataError(NNTPError):
 
     Data errors are raised when the content of a response cannot be parsed.
     """
+
+
+class NNTPYEncError(NNTPDataError):
+    """yEnc data failed its size or CRC check.
+
+    The decoded data is kept in `data`, so it can still be used, e.g. for
+    par2 repair.
+    """
+
+    def __init__(self, message: str, data: bytes) -> None:
+        super().__init__(message)
+        self.data = data
 
 
 class BaseNNTPClient:
@@ -1056,12 +1069,22 @@ class NNTPClient(BaseNNTPClient):
         except (IndexError, ValueError):
             raise NNTPDataError(f"Invalid {verb} status")
 
-    # TODO: Validate yEnc
     def _read_body(self, lines: Iterator[bytes], decode: bool | None = None) -> bytes:
-        decoder = YEnc()
+        """Read an article body, decoding and checking yEnc data.
 
-        # read the body
+        Each yEnc block is checked against its =yend trailer: the size, and
+        pcrc32 for a part of a multipart post or crc32 otherwise. The whole
+        response is read before a mismatch is raised, so the connection stays
+        in sync.
+
+        Raises:
+            NNTPYEncError: If yEnc data does not match its trailer, or a
+                =ybegin has no =yend. The decoded body is in its data
+                attribute.
+        """
         body: list[bytes] = []
+        decoder, size, multipart, open_block = YEnc(), 0, False, False
+        error: str | None = None
         for line in lines:
             # detect yenc
             if decode is None:
@@ -1071,15 +1094,26 @@ class NNTPClient(BaseNNTPClient):
                 elif line != b"\r\n":
                     decode = False
 
-            # decode yenc
-            if decode:
-                if line.startswith(b"=y"):
-                    continue
-                line = decoder.decode(line)
+            if not decode:
+                body.append(line)
+            elif line.startswith(b"=ybegin"):
+                decoder, size, open_block = YEnc(), 0, True
+                multipart = "part" in parse_keywords(line)
+            elif line.startswith(b"=yend"):
+                mismatch = check_trailer(line, size, decoder.crc32, part=multipart)
+                error = error or mismatch
+                open_block = False
+            elif not line.startswith(b"=y"):  # Skip =ypart and other =y lines
+                data = decoder.decode(line)
+                size += len(data)
+                body.append(data)
 
-            body.append(line)
-
-        return b"".join(body)
+        if open_block:
+            error = error or "missing =yend trailer"
+        data = b"".join(body)
+        if error:
+            raise NNTPYEncError(f"Bad yEnc data: {error}", data)
+        return data
 
     def article(
         self,
@@ -1108,6 +1142,8 @@ class NNTPClient(BaseNNTPClient):
 
         Raises:
             NNTPReplyError: If no such article exists.
+            NNTPYEncError: If yEnc data fails its size or CRC check. The
+                decoded body is in its data attribute.
         """
         code, message = self.command("ARTICLE", _msgid_article(msgid_article))
         if code != 220:
@@ -1180,6 +1216,8 @@ class NNTPClient(BaseNNTPClient):
 
         Raises:
             NNTPReplyError: If no such article exists.
+            NNTPYEncError: If yEnc data fails its size or CRC check. The
+                decoded body is in its data attribute.
         """
         code, message = self.command("BODY", _msgid_article(msgid_article))
         if code != 222:
