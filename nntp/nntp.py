@@ -90,10 +90,9 @@ def _data_errors(what: str) -> Iterator[None]:
 def _after_compress_forbidden(cmd: str) -> bool:
     """Whether RFC 8054 forbids cmd once COMPRESS is active."""
     words = cmd.upper().split()
-    return words[0] in ("AUTHINFO", "STARTTLS", "COMPRESS") or words[:2] == [
-        "MODE",
-        "READER",
-    ]
+    if words[:1] in (["AUTHINFO"], ["STARTTLS"], ["COMPRESS"]):
+        return True
+    return words[:2] == ["MODE", "READER"]
 
 
 def _msgid_article(msgid_article: str | int | None) -> str | None:
@@ -167,7 +166,8 @@ class BaseNNTPClient:
     """NNTP connection, command and response handling.
 
     Responses compressed with XFEATURE COMPRESS GZIP or as yEnc-encoded zlib
-    (XZVER, XZHDR) are decompressed transparently.
+    (XZVER, XZHDR), and the whole connection after COMPRESS DEFLATE, are
+    decompressed transparently.
     """
 
     encoding = "utf-8"
@@ -693,6 +693,8 @@ class NNTPClient(BaseNNTPClient):
             NNTPError: If compression (COMPRESS or TLS-level) is already active.
             NNTPReplyError: If the server refuses (403, or 502 if unavailable).
         """
+        if self._deflate is not None:
+            raise NNTPError("Compression is already active")
         tls_compression = getattr(self.socket, "compression", None)
         if tls_compression is not None and tls_compression():
             raise NNTPError("TLS-level compression is already active (RFC 8054)")

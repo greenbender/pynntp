@@ -852,7 +852,7 @@ def test_compress_refused_stays_plain(connect: Connect) -> None:
 @pytest.mark.parametrize(
     "call",
     [
-        lambda c: c.compress(),
+        lambda c: c.command("COMPRESS", "DEFLATE"),
         lambda c: c.mode_reader(),
         lambda c: c.command("AUTHINFO USER", "fred"),
         lambda c: c.command("starttls"),
@@ -930,3 +930,20 @@ def test_no_compress_over_tls_compression(connect: Connect) -> None:
     with pytest.raises(nntp.NNTPError, match="TLS-level compression"):
         client.compress()
     assert sock.sent == sent
+
+
+def test_compress_twice(connect: Connect) -> None:
+    client, sock = connect(WELCOME + MODE_READER + COMPRESS_OK)
+    client.compress()
+    sent = sock.sent
+    with pytest.raises(nntp.NNTPError, match="already active"):
+        client.compress()
+    assert sock.sent == sent
+
+
+def test_gzip_response_inside_compress(connect: Connect) -> None:
+    inner = b"224 ok COMPRESS=GZIP\r\n" + gzip.compress(XOVER_LINES) + b".\r\n"
+    server = COMPRESS_OK + deflated(OVERVIEW_FMT, inner)
+    client, _ = connect(WELCOME + MODE_READER + server)
+    client.compress()
+    _check_xover(list(client.xover((1, 2))))
