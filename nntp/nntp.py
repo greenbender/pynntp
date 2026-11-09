@@ -230,9 +230,7 @@ class BaseNNTPClient:
                 raise NNTPReplyError(code, message)
 
             if self._use_ssl and self._ssl_mode == SSLMode.STARTTLS:
-                code, message = self.command("STARTTLS")
-                if code != 382:
-                    raise NNTPReplyError(code, message)
+                self.command("STARTTLS", expect=382)
                 if len(self._buffer):
                     # Data sent before TLS must not be read as if protected
                     raise NNTPProtocolError("Unexpected data after STARTTLS reply")
@@ -395,8 +393,8 @@ class BaseNNTPClient:
             else:
                 try:
                     buf.write(inflate.decompress(chunk))
-                except zlib.error:
-                    raise NNTPDataError("Decompression failed")
+                except zlib.error as e:
+                    raise NNTPDataError("Decompression failed") from e
                 buf.write(inflate.unused_data)
             for line in buf:
                 if line == b".\r\n":
@@ -432,8 +430,8 @@ class BaseNNTPClient:
             data = decoder.decode(line)
             try:
                 data = inflate.decompress(data)
-            except zlib.error:
-                raise NNTPDataError("Decompression failed")
+            except zlib.error as e:
+                raise NNTPDataError("Decompression failed") from e
             if not data:
                 continue
             buf.write(data)
@@ -496,7 +494,13 @@ class BaseNNTPClient:
     def _decode(self, lines: Iterator[bytes]) -> Iterator[str]:
         return (line.decode(self.encoding, self.errors) for line in lines)
 
-    def command(self, verb: str, args: str | None = None) -> tuple[int, str]:
+    def command(
+        self,
+        verb: str,
+        args: str | None = None,
+        *,
+        expect: int | Iterable[int] | None = None,
+    ) -> tuple[int, str]:
         """Send a command and read its status line.
 
         If the server replies 480, AUTHINFO USER/PASS is sent and the command
@@ -505,18 +509,31 @@ class BaseNNTPClient:
         Args:
             verb: The command.
             args: The command arguments, if any.
+            expect: The status code, or codes, that mean success. Any other
+                reply raises NNTPReplyError.
 
         Returns:
             The status code and message.
 
         Raises:
+            ValueError: If the command contains CR, LF or NUL, or is longer
+                than 512 octets. Nothing is sent.
             NNTPSyncError: If a response is still being read, or the connection
                 is closed or out of sync.
-            NNTPReplyError: If authentication fails.
+            NNTPReplyError: If authentication fails, or the reply is not one
+                of expect.
             NNTPTemporaryError: For status codes 400-499.
             NNTPPermanentError: For status codes 500-599.
             NNTPProtocolError: If the status line can't be parsed.
         """
+        code, message = self._command(verb, args)
+        if expect is not None:
+            codes = (expect,) if isinstance(expect, int) else tuple(expect)
+            if code not in codes:
+                raise NNTPReplyError(code, message)
+        return code, message
+
+    def _command(self, verb: str, args: str | None) -> tuple[int, str]:
         if self._reading:
             raise NNTPSyncError("Command issued while a response is being read")
         if self._broken:
@@ -546,12 +563,12 @@ class BaseNNTPClient:
                         e.code, f"{e.message} (can't authenticate after COMPRESS)"
                     ) from e
 
-        code, message = self.command("AUTHINFO USER", self.username)
+        code, message = self._command("AUTHINFO USER", self.username)
         if code == 381:
-            code, message = self.command("AUTHINFO PASS", self.password)
+            code, message = self._command("AUTHINFO PASS", self.password)
         if code != 281:
             raise NNTPReplyError(code, message)
-        return self.command(verb, args)
+        return self._command(verb, args)
 
     def close(self) -> None:
         """Close the connection without sending QUIT.
@@ -666,9 +683,7 @@ class NNTPClient(BaseNNTPClient):
         """
         args = keyword
 
-        code, message = self.command("CAPABILITIES", args)
-        if code != 101:
-            raise NNTPReplyError(code, message)
+        code, message = self.command("CAPABILITIES", args, expect=101)
 
         for line in self.info(code, message):
             yield line.strip()
@@ -681,9 +696,7 @@ class NNTPClient(BaseNNTPClient):
         Returns:
             Whether posting is allowed.
         """
-        code, message = self.command("MODE READER")
-        if code not in (200, 201):
-            raise NNTPReplyError(code, message)
+        code, _ = self.command("MODE READER", expect=(200, 201))
 
         return code == 200
 
@@ -709,9 +722,7 @@ class NNTPClient(BaseNNTPClient):
         tls_compression = getattr(self.socket, "compression", None)
         if tls_compression is not None and tls_compression():
             raise NNTPError("TLS-level compression is already active (RFC 8054)")
-        code, message = self.command("COMPRESS", "DEFLATE")
-        if code != 206:
-            raise NNTPReplyError(code, message)
+        self.command("COMPRESS", "DEFLATE", expect=206)
         self._deflate = zlib.compressobj(wbits=-15)
         self._inflate = zlib.decompressobj(wbits=-15)
         # Compression starts right after the 206 line, so anything already
@@ -728,9 +739,7 @@ class NNTPClient(BaseNNTPClient):
 
         See <https://datatracker.ietf.org/doc/html/rfc3977#section-5.4>
         """
-        code, message = self.command("QUIT")
-        if code != 205:
-            raise NNTPReplyError(code, message)
+        self.command("QUIT", expect=205)
 
         self.close()
 
@@ -746,9 +755,7 @@ class NNTPClient(BaseNNTPClient):
         Raises:
             NNTPDataError: If the time can't be parsed.
         """
-        code, message = self.command("DATE")
-        if code != 111:
-            raise NNTPReplyError(code, message)
+        _, message = self.command("DATE", expect=111)
 
         with _data_errors("DATE response"):
             return utils.parse_date(message)
@@ -761,9 +768,7 @@ class NNTPClient(BaseNNTPClient):
         Returns:
             The help text.
         """
-        code, message = self.command("HELP")
-        if code != 100:
-            raise NNTPReplyError(code, message)
+        code, message = self.command("HELP", expect=100)
 
         return "".join(self.info(code, message))
 
@@ -782,9 +787,7 @@ class NNTPClient(BaseNNTPClient):
         Raises:
             NNTPDataError: If a line can't be parsed.
         """
-        code, message = self.command("NEWGROUPS", _timestamp(timestamp))
-        if code != 231:
-            raise NNTPReplyError(code, message)
+        code, message = self.command("NEWGROUPS", _timestamp(timestamp), expect=231)
 
         for line in self.info(code, message):
             with _data_errors("NEWGROUPS line"):
@@ -804,9 +807,9 @@ class NNTPClient(BaseNNTPClient):
         Yields:
             The message-id of each new article.
         """
-        code, message = self.command("NEWNEWS", f"{pattern} {_timestamp(timestamp)}")
-        if code != 230:
-            raise NNTPReplyError(code, message)
+        code, message = self.command(
+            "NEWNEWS", f"{pattern} {_timestamp(timestamp)}", expect=230
+        )
 
         for line in self.info(code, message):
             yield line.strip()
@@ -837,9 +840,7 @@ class NNTPClient(BaseNNTPClient):
 
         cmd = f"LIST {keyword}" if keyword else "LIST"
 
-        code, message = self.command(cmd, args)
-        if code not in success:
-            raise NNTPReplyError(code, message)
+        code, message = self.command(cmd, args, expect=success)
 
         return self.info(code, message)
 
@@ -879,8 +880,8 @@ class NNTPClient(BaseNNTPClient):
                 name = parts[0]
                 timestamp = utils.parse_epoch(parts[1])
                 creator = parts[2]
-            except (IndexError, ValueError):
-                raise NNTPDataError("Invalid LIST ACTIVE.TIMES")
+            except (IndexError, ValueError) as e:
+                raise NNTPDataError("Invalid LIST ACTIVE.TIMES") from e
             yield name, timestamp, creator
 
     def list_headers(
@@ -939,8 +940,8 @@ class NNTPClient(BaseNNTPClient):
         for line in self.list("OVERVIEW.FMT"):
             try:
                 name, suffix = line.rstrip().split(":")
-            except ValueError:
-                raise NNTPDataError("Invalid LIST OVERVIEW.FMT")
+            except ValueError as e:
+                raise NNTPDataError("Invalid LIST OVERVIEW.FMT") from e
             if suffix and not name:
                 name, suffix = suffix, name
             full = suffix.lower() == "full"  # ABNF strings ignore case
@@ -979,9 +980,7 @@ class NNTPClient(BaseNNTPClient):
         """
         args = name
 
-        code, message = self.command("GROUP", args)
-        if code != 211:
-            raise NNTPReplyError(code, message)
+        _, message = self.command("GROUP", args, expect=211)
 
         parts = message.split(None, 4)
         try:
@@ -989,8 +988,8 @@ class NNTPClient(BaseNNTPClient):
             first = int(parts[1])
             last = int(parts[2])
             group = parts[3]
-        except (IndexError, ValueError):
-            raise NNTPDataError(f'Invalid GROUP status "{message}"')
+        except (IndexError, ValueError) as e:
+            raise NNTPDataError(f'Invalid GROUP status "{message}"') from e
 
         return total, first, last, group
 
@@ -1022,9 +1021,7 @@ class NNTPClient(BaseNNTPClient):
         if range is not None:
             args = f"{name} {utils.unparse_range(range)}"
 
-        code, message = self.command("LISTGROUP", args)
-        if code != 211:
-            raise NNTPReplyError(code, message)
+        code, message = self.command("LISTGROUP", args, expect=211)
 
         for line in self.info(code, message):
             with _data_errors("LISTGROUP line"):
@@ -1086,15 +1083,13 @@ class NNTPClient(BaseNNTPClient):
         return self._select("STAT", _msgid_article(msgid_article))
 
     def _select(self, verb: str, args: str | None = None) -> tuple[int, str]:
-        code, message = self.command(verb, args)
-        if code != 223:
-            raise NNTPReplyError(code, message)
+        _, message = self.command(verb, args, expect=223)
 
         parts = message.split(None, 2)
         try:
             return int(parts[0]), parts[1]
-        except (IndexError, ValueError):
-            raise NNTPDataError(f"Invalid {verb} status")
+        except (IndexError, ValueError) as e:
+            raise NNTPDataError(f"Invalid {verb} status") from e
 
     def _read_body(self, lines: Iterator[bytes], decode: bool | None = None) -> bytes:
         """Read an article body, decoding and checking yEnc data.
@@ -1165,15 +1160,15 @@ class NNTPClient(BaseNNTPClient):
             NNTPYEncError: If yEnc data fails its size or CRC check. The decoded
                 body is in its data attribute.
         """
-        code, message = self.command("ARTICLE", _msgid_article(msgid_article))
-        if code != 220:
-            raise NNTPReplyError(code, message)
+        code, message = self.command(
+            "ARTICLE", _msgid_article(msgid_article), expect=220
+        )
 
         parts = message.split(None, 1)
         try:
             articleno = int(parts[0])
-        except (IndexError, ValueError):
-            raise NNTPDataError(f'Invalid ARTICLE status "{message}"')
+        except (IndexError, ValueError) as e:
+            raise NNTPDataError(f'Invalid ARTICLE status "{message}"') from e
 
         # Headers and body come from one response: parse_headers() stops at
         # the blank line and _read_body() reads the rest.
@@ -1204,9 +1199,7 @@ class NNTPClient(BaseNNTPClient):
             NNTPReplyError: If there is no such article.
             NNTPDataError: If the headers can't be parsed.
         """
-        code, message = self.command("HEAD", _msgid_article(msgid_article))
-        if code != 221:
-            raise NNTPReplyError(code, message)
+        code, message = self.command("HEAD", _msgid_article(msgid_article), expect=221)
 
         with _data_errors("article headers"):
             return utils.parse_headers(self.info(code, message))
@@ -1233,9 +1226,7 @@ class NNTPClient(BaseNNTPClient):
             NNTPYEncError: If yEnc data fails its size or CRC check. The decoded
                 body is in its data attribute.
         """
-        code, message = self.command("BODY", _msgid_article(msgid_article))
-        if code != 222:
-            raise NNTPReplyError(code, message)
+        code, message = self.command("BODY", _msgid_article(msgid_article), expect=222)
 
         return self._read_body(self._info(code, message), decode=decode)
 
@@ -1249,9 +1240,7 @@ class NNTPClient(BaseNNTPClient):
         if msgid_range is not None:
             args += " " + utils.unparse_msgid_range(msgid_range)
 
-        code, message = self.command(verb, args)
-        if code != (225 if verb == "HDR" else 221):
-            raise NNTPReplyError(code, message)
+        code, message = self.command(verb, args, expect=225 if verb == "HDR" else 221)
 
         yield from self._number_values(verb, code, message, yz=verb == "XZHDR")
 
@@ -1337,17 +1326,15 @@ class NNTPClient(BaseNNTPClient):
         if range is not None:
             args = utils.unparse_msgid_range(range)
 
-        code, message = self.command(verb, args)
-        if code != 224:
-            raise NNTPReplyError(code, message)
+        code, message = self.command(verb, args, expect=224)
 
         yz = verb == "XZVER"
         for line in self.info(code, message, yz=yz):
             parts = line.rstrip("\r\n").split("\t")
             try:
                 articleno = int(parts[0])
-            except ValueError:
-                raise NNTPDataError(f"Invalid {verb} response")
+            except ValueError as e:
+                raise NNTPDataError(f"Invalid {verb} response") from e
             values = parts[1:]
             for i in full:
                 if i < len(values):
@@ -1439,9 +1426,7 @@ class NNTPClient(BaseNNTPClient):
         """
         args = " ".join([header, utils.unparse_msgid_range(msgid_range), *pattern])
 
-        code, message = self.command("XPAT", args)
-        if code != 221:
-            raise NNTPReplyError(code, message)
+        code, message = self.command("XPAT", args, expect=221)
 
         yield from self._number_values("XPAT", code, message)
 
@@ -1459,9 +1444,7 @@ class NNTPClient(BaseNNTPClient):
         """
         args = "TERMINATOR" if terminator else None
 
-        code, message = self.command("XFEATURE COMPRESS GZIP", args)
-        if code != 290:
-            raise NNTPReplyError(code, message)
+        self.command("XFEATURE COMPRESS GZIP", args, expect=290)
 
     def post(
         self,
@@ -1561,9 +1544,7 @@ class NNTPClient(BaseNNTPClient):
             The status message of the final reply, which must be done.
         """
         with self._prepare_article(hdrs, body) as article:
-            code, message = self.command(verb, args)
-            if code != ready:
-                raise NNTPReplyError(code, message)
+            code, message = self.command(verb, args, expect=ready)
 
             with self._sync():
                 while chunk := article.read(_SEND_SIZE):

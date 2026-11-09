@@ -21,7 +21,7 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: testpypi
-      url: https://pypi.org/p/pynntp
+      url: https://test.pypi.org/p/pynntp
     permissions:
       id-token: write
 

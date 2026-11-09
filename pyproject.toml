@@ -8,10 +8,21 @@ license-files = ["LICENSE"]
 readme = "README.md"
 requires-python = ">=3.11"
 classifiers = [
-    "Programming Language :: Python :: 3",
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Developers",
     "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3.15",
     "Topic :: Communications :: Usenet News",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
 ]
+keywords = ["nntp", "usenet", "news", "yenc", "client"]
 dependencies = []
 
 [project.urls]
@@ -104,7 +115,6 @@ select = [
     # "TRY",  # tryceratops
 ]
 ignore = [
-    "B904",    # raise-without-from-inside-except
     "FIX002",  # line-contains-todo
     "ISC001",  # may conflict with ruff format
     "PLW2901", # `for` loop variable overwritten
