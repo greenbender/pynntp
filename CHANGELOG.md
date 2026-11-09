@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- `body(decode=True)` and `article(decode=True)` raise `NNTPYEncError` when
+  the body has no `=ybegin` line, instead of returning plain text run through
+  the yEnc decoder (#102).
+
+### Fixed
+
+yEnc and compression findings from go-while (#102):
+
+- Text outside a yEnc block, such as a signature after `=yend`, was decoded
+  into the data. It is now dropped.
+- yEnc detection needs `=ybegin ` at the start of the body; a plain body
+  starting with `=ybeginners guide` was treated as yEnc and raised.
+- yEnc trailers must have a valid `size=`; an invalid `crc32=`, `pcrc32=` or
+  `part=` (e.g. 9 hex digits) is reported rather than ignored.
+- XFEATURE COMPRESS GZIP TERMINATOR: when the end of the gzip stream arrived
+  after the decompressed terminator, it was left unread and the next reply
+  failed to parse.
+- XZVER/XZHDR: a DEFLATE stream that ends early raises `NNTPDataError` instead
+  of silently dropping the last, partial row.
+
 ## 3.1.0 - 2026-11-09
 
 ### Added

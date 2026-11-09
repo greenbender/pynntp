@@ -27,6 +27,7 @@ __all__ = ["YEnc", "check_trailer", "parse_keywords", "trailer_crc32"]
 _KEYWORD_RE = re.compile(rb"(\w+)=(\S*)")
 # Some encoders drop leading zeros, so accept 1-8 hex digits.
 _CRC32_RE = re.compile(r"[0-9a-fA-F]{1,8}")
+_DIGITS_RE = re.compile(r"[0-9]+")
 
 # "=" escapes the following byte, whatever it is (including "=", CR, LF).
 _ESCAPE_RE = re.compile(b"=(.)", re.DOTALL)
@@ -76,16 +77,26 @@ def check_trailer(trailer: bytes, size: int, crc32: int, *, part: bool) -> str |
             against pcrc32 rather than the whole-file crc32.
 
     Returns:
-        A description of the first mismatch, or None if the data matches. A
-        size or CRC missing from the trailer is not checked.
+        A description of the first problem, or None if the data matches. The
+        size is required; a CRC is optional but must be valid if present.
     """
     keywords = parse_keywords(trailer)
     expected_size = keywords.get("size", "")
-    if expected_size.isdigit() and int(expected_size) != size:
+    if not _DIGITS_RE.fullmatch(expected_size):
+        return "trailer has no valid size"
+    if int(expected_size) != size:
         return f"decoded {size} bytes, trailer says {expected_size}"
-    expected_crc = trailer_crc32(trailer, part=part or "part" in keywords)
-    if expected_crc is not None and expected_crc != crc32:
-        return f"CRC32 is {crc32:08x}, trailer says {expected_crc:08x}"
+    if "part" in keywords and not _DIGITS_RE.fullmatch(keywords["part"]):
+        return "trailer has an invalid part"
+    if part or "part" in keywords:
+        key = "pcrc32"
+    else:
+        key = "crc32" if "crc32" in keywords else "crc"
+    value = keywords.get(key)
+    if value is not None and not _CRC32_RE.fullmatch(value):
+        return f"trailer has an invalid {key}"
+    if value is not None and int(value, 16) != crc32:
+        return f"CRC32 is {crc32:08x}, trailer says {int(value, 16):08x}"
     return None
 
 
