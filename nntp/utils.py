@@ -104,6 +104,81 @@ def parse_newsgroup(line: str) -> Newsgroup:
     return Newsgroup(name, low, high, status)
 
 
+def parse_active_time(line: str) -> tuple[str, datetime, str]:
+    """Parse a LIST ACTIVE.TIMES line.
+
+    Args:
+        line: The response line: name, creation time (seconds since the
+            epoch) and creator.
+
+    Returns:
+        The newsgroup name, its creation time in UTC and its creator.
+
+    Raises:
+        ValueError: If the line cannot be parsed.
+    """
+    name, epoch, creator, *_ = line.split()
+    return name, parse_epoch(epoch), creator
+
+
+def parse_newsgroup_description(line: str) -> tuple[str, str]:
+    """Parse a LIST NEWSGROUPS line.
+
+    Args:
+        line: The response line: name, then an optional description.
+
+    Returns:
+        The newsgroup name and description ("" if there is none).
+
+    Raises:
+        ValueError: If the line is empty.
+    """
+    name, *description = line.strip().split(None, 1)
+    return name, description[0] if description else ""
+
+
+def parse_overview_fmt(line: str) -> tuple[str, bool]:
+    """Parse a LIST OVERVIEW.FMT line (RFC 3977 section 8.4).
+
+    Args:
+        line: The response line, e.g. "Subject:", ":bytes" or "Xref:full".
+
+    Returns:
+        The field name and whether the field is "full" (its values include
+        the header name).
+
+    Raises:
+        ValueError: If the line cannot be parsed.
+    """
+    name, suffix = line.rstrip().split(":")
+    if suffix and not name:  # Metadata such as ":bytes"
+        name, suffix = suffix, name
+    full = suffix.lower() == "full"  # ABNF strings ignore case
+    if suffix and not full:
+        raise ValueError(f"unknown suffix {suffix!r}")
+    return name, full
+
+
+def parse_number_value(line: str) -> tuple[int, str]:
+    """Parse an HDR, XHDR or XPAT line: an article number, then a value.
+
+    A line starting with a message-id (older XHDR by message-id) gets
+    number 0, as HDR gives.
+
+    Args:
+        line: The response line.
+
+    Returns:
+        The article number and the value ("" if there is none).
+
+    Raises:
+        ValueError: If the line cannot be parsed.
+    """
+    first, *value = line.rstrip("\r\n").split(None, 1)
+    number = 0 if first.startswith("<") else int(first)
+    return number, value[0] if value else ""
+
+
 def parse_headers(obj: str | Iterable[str]) -> HeaderDict:
     """Parse header lines up to the first blank line.
 

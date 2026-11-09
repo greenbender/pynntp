@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Added
+
+- `utils.parse_active_time()`, `utils.parse_newsgroup_description()`,
+  `utils.parse_overview_fmt()` and `utils.parse_number_value()` parse LIST
+  ACTIVE.TIMES, LIST NEWSGROUPS, LIST OVERVIEW.FMT and HDR/XHDR/XPAT lines,
+  like `utils.parse_newsgroup()` does for LIST ACTIVE.
+
 ### Changed
 
 - Methods that return an iterator (`capabilities()`, `newgroups()`,

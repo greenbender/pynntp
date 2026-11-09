@@ -1090,9 +1090,8 @@ class NNTPClient(BaseNNTPClient):
         def times() -> Iterator[tuple[str, datetime, str]]:
             for line in lines:
                 with self._data_errors("LIST ACTIVE.TIMES line"):
-                    name, epoch, creator, *_ = line.split()
-                    timestamp = utils.parse_epoch(epoch)
-                yield name, timestamp, creator
+                    time = utils.parse_active_time(line)
+                yield time
 
         return times()
 
@@ -1140,8 +1139,8 @@ class NNTPClient(BaseNNTPClient):
         def descriptions() -> Iterator[tuple[str, str]]:
             for line in lines:
                 with self._data_errors("LIST NEWSGROUPS line"):
-                    name, *description = line.strip().split(None, 1)
-                yield name, description[0] if description else ""
+                    description = utils.parse_newsgroup_description(line)
+                yield description
 
         return descriptions()
 
@@ -1162,13 +1161,8 @@ class NNTPClient(BaseNNTPClient):
         def fields() -> Iterator[tuple[str, bool]]:
             for line in lines:
                 with self._data_errors("LIST OVERVIEW.FMT line"):
-                    name, suffix = line.rstrip().split(":")
-                    if suffix and not name:
-                        name, suffix = suffix, name
-                    full = suffix.lower() == "full"  # ABNF strings ignore case
-                    if suffix and not full:
-                        raise ValueError(f"unknown suffix {suffix!r}")
-                yield name, full
+                    field = utils.parse_overview_fmt(line)
+                yield field
 
         return fields()
 
@@ -1508,16 +1502,11 @@ class NNTPClient(BaseNNTPClient):
     def _number_values(
         self, verb: str, lines: Iterator[str]
     ) -> Iterator[tuple[int, str]]:
-        """Parse "<article number> <value>" lines, as sent by HDR and XPAT.
-
-        A row starting with a message-id (older XHDR by message-id) gets 0.
-        """
+        """Parse "<article number> <value>" lines, as sent by HDR and XPAT."""
         for line in lines:
             with self._data_errors(f"{verb} response"):
-                first, *value = line.rstrip("\r\n").split(None, 1)
-                # Older servers start rows for a message-id with the id, not 0
-                number = 0 if first.startswith("<") else int(first)
-            yield number, value[0] if value else ""
+                number_value = utils.parse_number_value(line)
+            yield number_value
 
     def hdr(
         self,
