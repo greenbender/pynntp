@@ -8,6 +8,7 @@ from .nntp import (
     NNTPReplyError,
     NNTPSyncError,
     NNTPTemporaryError,
+    NNTPYEncError,
 )
 
 __all__ = [
@@ -20,4 +21,5 @@ __all__ = [
     "NNTPReplyError",
     "NNTPSyncError",
     "NNTPTemporaryError",
+    "NNTPYEncError",
 ]

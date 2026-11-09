@@ -594,8 +594,10 @@ def test_yenc_mismatch_keeps_connection(
 ) -> None:
     server = yenc_body(PLAIN, part=part, trailer=trailer) + DATE
     client, _ = connect(WELCOME + MODE_READER + server)
-    with pytest.raises(nntp.NNTPDataError, match=match):
+    with pytest.raises(nntp.NNTPYEncError, match=match) as info:
         client.body(1)
+    assert info.value.data == PLAIN  # Kept for e.g. par2 repair
+    assert isinstance(info.value, nntp.NNTPDataError)
     assert client.date().year == 2024  # Whole response was read; still in sync
 
 

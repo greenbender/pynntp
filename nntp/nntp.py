@@ -52,6 +52,7 @@ __all__ = [
     "NNTPReplyError",
     "NNTPSyncError",
     "NNTPTemporaryError",
+    "NNTPYEncError",
 ]
 
 
@@ -131,6 +132,18 @@ class NNTPDataError(NNTPError):
 
     Data errors are raised when the content of a response cannot be parsed.
     """
+
+
+class NNTPYEncError(NNTPDataError):
+    """yEnc data failed its size or CRC check.
+
+    The decoded data is kept in `data`, so it can still be used, e.g. for
+    par2 repair.
+    """
+
+    def __init__(self, message: str, data: bytes) -> None:
+        super().__init__(message)
+        self.data = data
 
 
 class BaseNNTPClient:
@@ -1065,8 +1078,9 @@ class NNTPClient(BaseNNTPClient):
         in sync.
 
         Raises:
-            NNTPDataError: If yEnc data does not match its trailer, or a
-                =ybegin has no =yend.
+            NNTPYEncError: If yEnc data does not match its trailer, or a
+                =ybegin has no =yend. The decoded body is in its data
+                attribute.
         """
         body: list[bytes] = []
         decoder, size, multipart, open_block = YEnc(), 0, False, False
@@ -1096,9 +1110,10 @@ class NNTPClient(BaseNNTPClient):
 
         if open_block:
             error = error or "missing =yend trailer"
+        data = b"".join(body)
         if error:
-            raise NNTPDataError(f"Bad yEnc data: {error}")
-        return b"".join(body)
+            raise NNTPYEncError(f"Bad yEnc data: {error}", data)
+        return data
 
     def article(
         self,
@@ -1127,6 +1142,8 @@ class NNTPClient(BaseNNTPClient):
 
         Raises:
             NNTPReplyError: If no such article exists.
+            NNTPYEncError: If yEnc data fails its size or CRC check. The
+                decoded body is in its data attribute.
         """
         code, message = self.command("ARTICLE", _msgid_article(msgid_article))
         if code != 220:
@@ -1199,6 +1216,8 @@ class NNTPClient(BaseNNTPClient):
 
         Raises:
             NNTPReplyError: If no such article exists.
+            NNTPYEncError: If yEnc data fails its size or CRC check. The
+                decoded body is in its data attribute.
         """
         code, message = self.command("BODY", _msgid_article(msgid_article))
         if code != 222:
