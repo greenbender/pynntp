@@ -5,15 +5,13 @@ from __future__ import annotations
 import gzip
 import zlib
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Callable
+from typing import Callable
 
 import pytest
 
 import nntp
+from nntp.headerdict import HeaderDict
 from nntp.nntp import NNTPSyncError
-
-if TYPE_CHECKING:
-    from nntp.headerdict import HeaderDict
 
 WELCOME = b"200 server ready\r\n"
 MODE_READER = b"200 reader mode\r\n"
@@ -183,15 +181,15 @@ OVERVIEW_FMT = b"215 fmt\r\nSubject:\r\nFrom:\r\n.\r\n"
 XOVER_LINES = b"1\thello\tme\r\n2\t.dot\tyou\r\n"
 
 
-def _xover_expected() -> list[tuple[int, dict[str, str]]]:
+def _xover_expected() -> list[tuple[int, HeaderDict]]:
     return [
-        (1, {"subject": "hello", "from": "me"}),
-        (2, {"subject": ".dot", "from": "you"}),
+        (1, HeaderDict({"subject": "hello", "from": "me"})),
+        (2, HeaderDict({"subject": ".dot", "from": "you"})),
     ]
 
 
 def _check_xover(result: list[tuple[int, HeaderDict]]) -> None:
-    assert [(n, dict(h)) for n, h in result] == _xover_expected()
+    assert result == _xover_expected()  # Names compare case-insensitively
 
 
 def test_xover_plain(connect: Connect) -> None:
