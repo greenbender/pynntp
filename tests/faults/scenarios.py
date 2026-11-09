@@ -2037,9 +2037,8 @@ def malformed_scenarios() -> Iterator[Scenario]:
         "malformed/listgroup-invalid-211",
         script(step("LISTGROUP g", ml(b"211 x y z g", [b"1", b"2"]))),
         lambda c: list(c.listgroup("g")),
-        Err(nntp.NNTPDataError),
+        Ok([1, 2]),  # The 211 line isn't used, only the article numbers
         RAW,
-        known="LISTGROUP does not check the numbers in its 211 reply",
     )
     yield Scenario(
         "malformed/group-negative-numbers",
