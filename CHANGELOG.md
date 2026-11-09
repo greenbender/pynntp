@@ -21,11 +21,17 @@
 - `HeaderDict` iterates over plain `str` names (previously case-insensitive
   name objects), no longer raises `TypeError` for non-string names or values,
   and no longer compares equal to a list of pairs (#110).
+- `post()` checks the whole body before sending anything: a line with CR or
+  NUL raises `NNTPDataError` and nothing is posted. Previously the article was
+  posted, cut short before that line (#42).
+- Commands containing CR, LF or NUL (for example in a group name or
+  message-id) raise `ValueError` instead of being sent (#42).
 - `nntp.fifo` contains only `BytesFifo` with `write`, `read`, `readline`,
   `len()` and iteration (#108).
 
 ### Added
 
+- `ihave()` for the IHAVE command (#42).
 - `over()`, `stat()` and `listgroup()` for the RFC 3977 OVER, STAT and
   LISTGROUP commands (#43, #45, #46).
 - `reconnect()` reopens the connection with the same settings (#116).

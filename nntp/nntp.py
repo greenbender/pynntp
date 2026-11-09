@@ -20,13 +20,15 @@ from __future__ import annotations
 
 import io
 import os
+import re
 import socket
 import ssl
+import tempfile
 import zlib
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from functools import cached_property
-from typing import TYPE_CHECKING, Literal
+from typing import IO, TYPE_CHECKING, Literal
 
 from . import utils
 from .fifo import BytesFifo
@@ -56,7 +58,12 @@ __all__ = [
 ]
 
 
+# RFC 3977 section 3.6: "<", 1-248 printable US-ASCII characters except ">",
+# then ">"
+_MESSAGE_ID_RE = re.compile(r"<[!-=?-~]{1,248}>")
+
 _SEND_SIZE = 0x10000  # Batch POST body lines into writes of about this size
+_SPOOL_SIZE = 0x100000  # Articles larger than this are prepared on disk
 
 
 def _timestamp(timestamp: datetime) -> str:
@@ -478,7 +485,10 @@ class BaseNNTPClient:
         if self._broken:
             raise NNTPSyncError("Connection is closed or out of sync; call reconnect()")
 
-        cmd = f"{verb} {args}\r\n" if args else f"{verb}\r\n"
+        cmd = f"{verb} {args}" if args else verb
+        if any(c in cmd for c in "\r\n\0"):
+            raise ValueError(f"Command contains CR, LF or NUL: {cmd!r}")
+        cmd += "\r\n"
 
         with self._sync():
             self.socket.sendall(cmd.encode(self.encoding))
@@ -1393,7 +1403,7 @@ class NNTPClient(BaseNNTPClient):
             ValueError: If a header name or value is invalid (see
                 utils.unparse_headers). Nothing is sent to the server.
             NNTPDataError: If a body line contains CR or NUL, which NNTP cannot
-                carry. The article is still posted, cut short before that line.
+                carry. Nothing is sent.
             NNTPReplyError: If posting is not allowed or fails.
         """
         # TODO: Set some default headers? Require some headers?
@@ -1401,22 +1411,7 @@ class NNTPClient(BaseNNTPClient):
         # Validate headers before starting the POST, so a bad header can't
         # leave the server waiting for an article.
         hdrs = utils.unparse_headers(headers or {})
-
-        code, message = self.command("POST")
-        if code != 340:
-            raise NNTPReplyError(code, message)
-
-        with self._sync():
-            illegal = self._send_article(hdrs, body)
-            code, message = self.status()
-
-        # check if illegal characters were detected
-        if illegal:
-            raise NNTPDataError("Illegal characters found")
-
-        # check status
-        if code != 240:
-            raise NNTPReplyError(code, message)
+        message = self._transfer("POST", None, hdrs, body, ready=340, done=240)
 
         # return message-id possible
         message_id = message.split(None, 1)[0] if message else ""
@@ -1425,33 +1420,99 @@ class NNTPClient(BaseNNTPClient):
 
         return True
 
-    def _send_article(self, hdrs: str, body: str | bytes | Iterable[bytes]) -> bool:
-        """Send headers, body and terminator.
+    def ihave(
+        self,
+        message_id: str,
+        headers: Mapping[str, str] | None = None,
+        body: str | bytes | Iterable[bytes] = b"",
+    ) -> None:
+        """IHAVE command.
+
+        Offers an article to the server, as a peer does when feeding news.
+        Most servers only accept it from configured peers.
+
+        See <https://datatracker.ietf.org/doc/html/rfc3977#section-6.3.2>
+
+        Args:
+            message_id: The article's message-id, e.g. "<abc@example.com>".
+                A Message-ID header is added if headers has none.
+            headers: The article headers.
+            body: The body, as for post().
+
+        Raises:
+            ValueError: If message_id is invalid or differs from the
+                Message-ID header, or a header is invalid. Nothing is sent.
+            NNTPTemporaryError: If the server doesn't take the article; its
+                code is 435 (not wanted), 436 (try again later) or 437
+                (rejected).
+            NNTPDataError: If a body line contains CR or NUL, as for post().
+                Nothing is sent.
+        """
+        if not _MESSAGE_ID_RE.fullmatch(message_id):
+            raise ValueError(f"Invalid message-id: {message_id!r}")
+        headers = HeaderDict(headers or {})
+        headers.setdefault("Message-ID", message_id)
+        if headers["Message-ID"] != message_id:
+            raise ValueError("message_id differs from the Message-ID header")
+        hdrs = utils.unparse_headers(headers)
+        self._transfer("IHAVE", message_id, hdrs, body, ready=335, done=235)
+
+    def _transfer(
+        self,
+        verb: str,
+        args: str | None,
+        hdrs: str,
+        body: str | bytes | Iterable[bytes],
+        *,
+        ready: int,
+        done: int,
+    ) -> str:
+        """Send verb, then the article once the server replies ready.
+
+        The whole article is prepared first, so a bad body raises before
+        anything is sent.
 
         Returns:
-            True if the body was cut short at a line containing CR or NUL.
+            The status message of the final reply, which must be done.
+        """
+        with self._prepare_article(hdrs, body) as article:
+            code, message = self.command(verb, args)
+            if code != ready:
+                raise NNTPReplyError(code, message)
+
+            with self._sync():
+                while chunk := article.read(_SEND_SIZE):
+                    self.socket.sendall(chunk)
+                code, message = self.status()
+
+        if code != done:
+            raise NNTPReplyError(code, message)
+        return message
+
+    @contextmanager
+    def _prepare_article(
+        self, hdrs: str, body: str | bytes | Iterable[bytes]
+    ) -> Iterator[IO[bytes]]:
+        """Build the article on the wire: headers, dot-stuffed CRLF body, ".".
+
+        Raises:
+            NNTPDataError: If a body line contains CR or NUL.
         """
         if isinstance(body, str):
             body = body.encode(self.encoding, self.errors)
         if isinstance(body, bytes):
             body = io.BytesIO(body)
 
-        # send headers and body, batching lines into larger writes
-        illegal = False
-        chunk, size = [hdrs.encode(self.encoding)], 0
-        for line in body:
-            if line.startswith(b"."):
-                line = b"." + line
-            if line.endswith(b"\n"):
-                line = line[:-1].removesuffix(b"\r")
-            if any(c in line for c in b"\0\r"):
-                illegal = True
-                break
-            chunk.append(line + b"\r\n")
-            size += len(line) + 2
-            if size >= _SEND_SIZE:
-                self.socket.sendall(b"".join(chunk))
-                chunk, size = [], 0
-        chunk.append(b".\r\n")
-        self.socket.sendall(b"".join(chunk))
-        return illegal
+        with tempfile.SpooledTemporaryFile(max_size=_SPOOL_SIZE) as article:
+            article.write(hdrs.encode(self.encoding))
+            for line in body:
+                if line.startswith(b"."):
+                    line = b"." + line
+                if line.endswith(b"\n"):
+                    line = line[:-1].removesuffix(b"\r")
+                if b"\0" in line or b"\r" in line:
+                    raise NNTPDataError("Body line contains CR or NUL")
+                article.write(line + b"\r\n")
+            article.write(b".\r\n")
+            article.seek(0)
+            yield article
