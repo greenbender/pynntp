@@ -26,6 +26,8 @@ if TYPE_CHECKING:
 __all__ = ["BytesFifo", "Fifo", "TextFifo"]
 
 
+# Consumed data is only dropped once it is both this large and more than half
+# the buffer, so the copy cost is amortized O(1) per byte.
 _DISCARD_SIZE = 0xFFFF
 
 
@@ -39,10 +41,11 @@ class Fifo(Generic[T]):
     def __init__(self, data: T | None = None) -> None:
         self.buf: T = data or self.empty
         self.buflist: list[T] = []
+        self.pending = 0  # Total length of buflist
         self.pos = 0
 
     def __len__(self) -> int:
-        return len(self.buf) - self.pos
+        return len(self.buf) - self.pos + self.pending
 
     def __iter__(self) -> Self:
         return self
@@ -53,86 +56,84 @@ class Fifo(Generic[T]):
             raise StopIteration
         return line
 
-    def __discard(self) -> None:
-        if self.pos > _DISCARD_SIZE:
-            self.buf = self.buf[self.pos :]
+    def _append(self) -> None:
+        if self.buflist:
+            self.buf = self.buf[self.pos :] + self.empty.join(self.buflist)
+            self.buflist = []
+            self.pending = 0
             self.pos = 0
 
-    def __append(self) -> None:
-        self.buf += self.empty.join(self.buflist)
-        self.buflist = []
+    def _advance(self, newpos: int) -> None:
+        if newpos > _DISCARD_SIZE and newpos * 2 > len(self.buf):
+            self.buf = self.buf[newpos:]
+            self.pos = 0
+        else:
+            self.pos = newpos
+
+    def _find(self, token: T, size: int) -> tuple[bool, int]:
+        """Return (found, end position) of the data up to and including token.
+
+        If token is not found the end position holds back enough data that a
+        token split across writes can still be found later.
+        """
+        self._append()
+        i = self.buf.find(token, self.pos)
+        if i < 0:
+            index = max(len(token) - 1, size)
+            return False, max(len(self.buf) - index, self.pos)
+        return True, i + len(token)
 
     def clear(self) -> None:
         self.buf = self.empty
         self.buflist = []
+        self.pending = 0
         self.pos = 0
 
     def write(self, data: T) -> None:
         self.buflist.append(data)
+        self.pending += len(data)
 
     def read(self, length: int = 0) -> T:
-        self.__append()
+        self._append()
         if 0 < length < len(self):
-            newpos = self.pos + length
-            data = self.buf[self.pos : newpos]
-            self.pos = newpos
-            self.__discard()
+            data = self.buf[self.pos : self.pos + length]
+            self._advance(self.pos + length)
             return data
         data = self.buf[self.pos :]
         self.clear()
         return data
 
     def readline(self) -> T:
-        self.__append()
-        i = self.buf.find(self.eol, self.pos)
+        # Hot path: called once per line of every response.
+        if self.buflist:
+            self._append()
+        buf, pos = self.buf, self.pos
+        i = buf.find(self.eol, pos)
         if i < 0:
             return self.empty
         newpos = i + len(self.eol)
-        data = self.buf[self.pos : newpos]
-        self.pos = newpos
-        self.__discard()
-        return data
+        self._advance(newpos)
+        return buf[pos:newpos]
 
     def readuntil(self, token: T, size: int = 0) -> tuple[bool, T]:
-        self.__append()
-        i = self.buf.find(token, self.pos)
-        if i < 0:
-            index = max(len(token) - 1, size)
-            newpos = max(len(self.buf) - index, self.pos)
-            data = self.buf[self.pos : newpos]
-            self.pos = newpos
-            self.__discard()
-            return False, data
-        newpos = i + len(token)
+        found, newpos = self._find(token, size)
         data = self.buf[self.pos : newpos]
-        self.pos = newpos
-        self.__discard()
-        return True, data
+        self._advance(newpos)
+        return found, data
 
     def peek(self, length: int = 0) -> T:
-        self.__append()
-        if 0 < length < len(self):
-            newpos = self.pos + length
-            return self.buf[self.pos : newpos]
+        self._append()
+        if length > 0:
+            return self.buf[self.pos : self.pos + length]
         return self.buf[self.pos :]
 
     def peekline(self) -> T:
-        self.__append()
-        i = self.buf.find(self.eol, self.pos)
-        if i < 0:
-            return self.empty
-        newpos = i + len(self.eol)
-        return self.buf[self.pos : newpos]
+        found, newpos = self._find(self.eol, 0)
+        return self.buf[self.pos : newpos] if found else self.empty
 
     def peekuntil(self, token: T, size: int = 0) -> tuple[bool, T]:
-        self.__append()
-        i = self.buf.find(token, self.pos)
-        if i < 0:
-            index = max(len(token) - 1, size)
-            newpos = max(len(self.buf) - index, self.pos)
-            return False, self.buf[self.pos : newpos]
-        newpos = i + len(token)
-        return True, self.buf[self.pos : newpos]
+        found, newpos = self._find(token, size)
+        return found, self.buf[self.pos : newpos]
 
 
 class TextFifo(Fifo[str]):
