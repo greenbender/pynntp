@@ -623,3 +623,25 @@ def test_yenc_article_validated(connect: Connect) -> None:
     client, _ = connect(WELCOME + MODE_READER + article)
     with pytest.raises(nntp.NNTPDataError, match="CRC32"):
         client.article(1)
+
+
+@pytest.mark.parametrize(
+    ("server", "call"),
+    [
+        (b"111 not-a-date\r\n", lambda c: c.date()),
+        (b"215 list\r\nalt.test x 1 y\r\n.\r\n", lambda c: list(c.list_active())),
+        (
+            b"231 new\r\nalt.test\r\n.\r\n",
+            lambda c: list(c.newgroups(datetime.now(timezone.utc))),
+        ),
+        (b"221 1 <a@b>\r\nnot a header\r\n.\r\n", lambda c: c.head(1)),
+        (b"220 1 <a@b>\r\n continuation\r\n\r\nbody\r\n.\r\n", lambda c: c.article(1)),
+    ],
+    ids=["date", "list_active", "newgroups", "head", "article"],
+)
+def test_unparseable_response_raises_data_error(
+    connect: Connect, server: bytes, call: Callable[[nntp.NNTPClient], object]
+) -> None:
+    client, _ = connect(WELCOME + MODE_READER + server)
+    with pytest.raises(nntp.NNTPDataError, match="Invalid"):
+        call(client)
