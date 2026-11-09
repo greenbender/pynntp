@@ -30,6 +30,8 @@ class HeaderDict(MutableMapping[str, str]):
     order. Equality with another mapping ignores name case and order.
     """
 
+    __hash__ = None  # type: ignore[assignment]  # Mutable, so not hashable
+
     def __init__(
         self,
         other: Mapping[str, str] | Iterable[tuple[str, str]] = (),

@@ -123,7 +123,7 @@ def test_connection_closed(connect: Connect) -> None:
 
 
 def test_auth_on_480(connect: Connect) -> None:
-    client, sock = connect(
+    _, sock = connect(
         WELCOME
         + b"480 auth required\r\n"
         + b"381 more auth\r\n"
