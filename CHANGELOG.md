@@ -35,6 +35,9 @@ Found by go-while (#102).
 - A LIST ACTIVE.TIMES timestamp too large for `datetime` raised
   `OverflowError` or `OSError` instead of `NNTPDataError`;
   `utils.parse_epoch()` raises `ValueError` for it.
+- A server that answered 480 again after a successful login made the client
+  log in and retry until `RecursionError`. The command is now retried once
+  after logging in, and a second 480 is raised.
 
 ## 3.2.0 - 2026-11-09
 
