@@ -18,69 +18,57 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 from __future__ import annotations
 
-from collections import OrderedDict
 from collections.abc import Iterable, Iterator, Mapping, MutableMapping
-from itertools import chain
 
 __all__ = ["HeaderDict"]
 
 
-class HeaderName(str):  # noqa: SLOT000
-    def __eq__(self, other: object) -> bool:
-        return isinstance(other, str) and self.casefold() == other.casefold()
-
-    def __hash__(self) -> int:
-        return hash(self.casefold())
-
-
 class HeaderDict(MutableMapping[str, str]):
+    """Mapping of header names to values, with case-insensitive names.
+
+    Names keep the case they were first set with and iterate in insertion
+    order. Equality with another mapping ignores name case and order.
+    """
+
     def __init__(
         self,
-        other: Mapping[str, str] | Iterable[tuple[str, str]] | None = None,
+        other: Mapping[str, str] | Iterable[tuple[str, str]] = (),
         **kwargs: str,
     ) -> None:
-        self.__proxy = OrderedDict[HeaderName, str]()
-        other_pairs: Iterable[tuple[str, str]] = (
-            ()
-            if other is None
-            else other.items()
-            if isinstance(other, Mapping)
-            else other
-        )
-        kwargs_pairs = kwargs.items()
-        for k, v in chain(other_pairs, kwargs_pairs):
-            if not isinstance(k, str):
-                raise TypeError(f"Header name must be a string: {k!r}")
-            if not isinstance(v, str):
-                raise TypeError(f"Header value must be a string: {v!r}")
-            self.__proxy[HeaderName(k)] = v
+        self._items: dict[str, tuple[str, str]] = {}  # casefold(name) -> item
+        self.update(other, **kwargs)
 
     def __getitem__(self, key: str) -> str:
-        return self.__proxy[HeaderName(key)]
+        return self._items[key.casefold()][1]
 
     def __setitem__(self, key: str, value: str) -> None:
-        self.__proxy[HeaderName(key)] = value
+        folded = key.casefold()
+        item = self._items.get(folded)
+        self._items[folded] = (key if item is None else item[0], value)
 
     def __delitem__(self, key: str) -> None:
-        del self.__proxy[HeaderName(key)]
+        del self._items[key.casefold()]
+
+    def __contains__(self, key: object) -> bool:
+        return isinstance(key, str) and key.casefold() in self._items
 
     def __iter__(self) -> Iterator[str]:
-        return iter(self.__proxy)
+        return (name for name, _ in self._items.values())
 
     def __len__(self) -> int:
-        return len(self.__proxy)
+        return len(self._items)
+
+    def _folded(self) -> dict[str, str]:
+        return {folded: value for folded, (_, value) in self._items.items()}
 
     def __eq__(self, other: object) -> bool:
-        if isinstance(other, HeaderDict):
-            return self.__proxy == other.__proxy
-        if isinstance(other, (Mapping, Iterable)):
-            try:
-                other = HeaderDict(other)
-            except (TypeError, ValueError):
+        if not isinstance(other, Mapping):
+            return NotImplemented
+        if not isinstance(other, HeaderDict):
+            if not all(isinstance(k, str) for k in other):
                 return False
-            return self == HeaderDict(other)
-        return False
+            other = HeaderDict(other)
+        return self._folded() == other._folded()
 
     def __repr__(self) -> str:
-        clsname = type(self).__name__
-        return f"{clsname}({list(self.__proxy.items())!r})"
+        return f"{type(self).__name__}({list(self._items.values())!r})"
