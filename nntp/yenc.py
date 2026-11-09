@@ -48,6 +48,13 @@ def parse_keywords(line: bytes) -> dict[str, str]:
     }
 
 
+def _crc_key(keywords: dict[str, str], *, part: bool) -> str:
+    """The trailer keyword holding the CRC: pcrc32 for a part, else crc32 or crc."""
+    if part:
+        return "pcrc32"
+    return "crc32" if "crc32" in keywords else "crc"
+
+
 def trailer_crc32(trailer: bytes, *, part: bool = False) -> int | None:
     """Extract the CRC32 value from a yEnc trailer.
 
@@ -57,10 +64,7 @@ def trailer_crc32(trailer: bytes, *, part: bool = False) -> int | None:
             file (crc32), for multipart posts.
     """
     keywords = parse_keywords(trailer)
-    if part:
-        value = keywords.get("pcrc32")
-    else:
-        value = keywords.get("crc32", keywords.get("crc"))
+    value = keywords.get(_crc_key(keywords, part=part))
     if value is None or not _CRC32_RE.fullmatch(value):
         return None
     return int(value, 16)
@@ -88,10 +92,7 @@ def check_trailer(trailer: bytes, size: int, crc32: int, *, part: bool) -> str |
         return f"decoded {size} bytes, trailer says {expected_size}"
     if "part" in keywords and not _DIGITS_RE.fullmatch(keywords["part"]):
         return "trailer has an invalid part"
-    if part or "part" in keywords:
-        key = "pcrc32"
-    else:
-        key = "crc32" if "crc32" in keywords else "crc"
+    key = _crc_key(keywords, part=part or "part" in keywords)
     value = keywords.get(key)
     if value is not None and not _CRC32_RE.fullmatch(value):
         return f"trailer has an invalid {key}"

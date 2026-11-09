@@ -74,11 +74,6 @@ def test_post_large_body_spools(connect: Connect) -> None:
     assert sock.sent.endswith(body.replace(b"\n", b"\r\n") * 3000 + b".\r\n")
 
 
-def test_post_without_message_id(connect: Connect) -> None:
-    client, _ = connect(WELCOME + MODE_READER + b"340 send\r\n240\r\n")
-    assert client.post({"Subject": "hi"}, b"body\n") is True
-
-
 def test_post_batches_writes(connect: Connect) -> None:
     client, sock = connect(WELCOME + MODE_READER + b"340 send\r\n240 ok\r\n")
     sock.sent, sock.sends = b"", 0

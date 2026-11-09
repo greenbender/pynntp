@@ -7,6 +7,9 @@
 - `body(decode=True)` and `article(decode=True)` raise `NNTPYEncError` when
   the body has no `=ybegin` line, instead of returning plain text run through
   the yEnc decoder (#102).
+- A 480 reply to `mode_reader()` or a raw MODE READER is raised instead of
+  logging in and repeating MODE READER, which RFC 4643 2.2 forbids. Call
+  `login()` instead (#102).
 
 ### Fixed
 
@@ -21,8 +24,7 @@ Found by go-while (#102).
 - A server answering AUTHINFO with 480 made the client log in again
   recursively, until `RecursionError`.
 - After a 480 to MODE READER while connecting, the client logs in and no
-  longer repeats MODE READER (RFC 4643 2.2). A 480 to `mode_reader()` or a
-  raw MODE READER is raised; call `login()`.
+  longer repeats MODE READER (RFC 4643 2.2).
 - `login()` rejects a username or password containing CR, LF or NUL before
   sending anything, and raises rather than sending an empty `AUTHINFO PASS`.
 - Command arguments are encoded with the client's `errors` policy, so a group

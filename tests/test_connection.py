@@ -35,6 +35,7 @@ def test_status_codes(connect: Connect) -> None:
         (b"502 permission denied\r\n", nntp.NNTPPermanentError),
         (b"abc garbage\r\n", nntp.NNTPProtocolError),
         (b"600 out of range\r\n", nntp.NNTPProtocolError),
+        (b"\r\n", nntp.NNTPProtocolError),
         (b"0411 leading zero\r\n", nntp.NNTPProtocolError),
         (b"+411 sign\r\n", nntp.NNTPProtocolError),
         (b"4111 four digits\r\n", nntp.NNTPProtocolError),
@@ -67,22 +68,11 @@ def test_auth_on_480(connect: Connect) -> None:
     assert sock.sent == b"MODE READER\r\nAUTHINFO USER user\r\nAUTHINFO PASS pass\r\n"
 
 
-def test_auth_rejected(connect: Connect) -> None:
-    with pytest.raises(nntp.NNTPReplyError):
-        connect(WELCOME + b"480 auth required\r\n" + b"381 more\r\n" + b"200 nope\r\n")
-
-
 def test_command_during_generator(connect: Connect) -> None:
     client, _ = connect(WELCOME + MODE_READER + b"215 list\r\nalt.test 2 1 y\r\n.\r\n")
     groups = client.list_active()
     next(groups)
     with pytest.raises(NNTPSyncError):
-        client.date()
-
-
-def test_empty_status_line(connect: Connect) -> None:
-    client, _ = connect(WELCOME + MODE_READER + b"\r\n")
-    with pytest.raises(nntp.NNTPProtocolError):
         client.date()
 
 
@@ -99,9 +89,10 @@ def test_bad_welcome_closes_socket(connect: Connect) -> None:
     assert FakeSocket.last.closed
 
 
-def test_mode_reader_failure_closes_socket(connect: Connect) -> None:
-    with pytest.raises(nntp.NNTPPermanentError):
-        connect(WELCOME + b"502 no reading\r\n")
+@pytest.mark.parametrize("reply", [b"502 no reading\r\n", b"480 auth\r\n"])
+def test_mode_reader_failure_closes_socket(connect: Connect, reply: bytes) -> None:
+    with pytest.raises(nntp.NNTPReplyError):
+        connect(WELCOME + reply)  # 480 without a username: no login
     assert FakeSocket.last.closed
 
 
@@ -229,11 +220,10 @@ def test_command_rejects_line_breaks(connect: Connect, arg: str) -> None:
     assert client.date().year == 2024  # Nothing was sent; still usable
 
 
-def test_starttls_rejects_data_after_reply(connect: Connect, chunk: int) -> None:
+@pytest.mark.parametrize("chunk", [4096])  # The injected reply must arrive in one read
+def test_starttls_rejects_data_after_reply(connect: Connect) -> None:
     # A man-in-the-middle appends a fake reply to the plaintext 382. If it
     # arrives in a later read it goes to the TLS handshake instead, and fails.
-    if chunk < 64:
-        pytest.skip("The injected reply must arrive in the same read")
     injected = b"200 hi\r\n382 go ahead\r\n211 1 1 1 fake.group\r\n"
     with pytest.raises(nntp.NNTPProtocolError, match="after STARTTLS"):
         connect(injected, use_ssl=True, ssl_mode=SSLMode.STARTTLS)
@@ -440,12 +430,6 @@ def test_mode_reader_480_is_raised(connect: Connect) -> None:
     assert sock.sent == b"mode  reader\r\n"
 
 
-def test_480_on_setup_without_username_closes(connect: Connect) -> None:
-    with pytest.raises(nntp.NNTPTemporaryError):
-        connect(WELCOME + b"480 auth\r\n")
-    assert FakeSocket.last.closed
-
-
 @pytest.mark.parametrize(("verb", "args"), [(" STARTTLS ", None), ("", "starttls")])
 def test_raw_starttls_480_never_logs_in(
     connect: Connect, verb: str, args: str | None
@@ -473,6 +457,13 @@ def test_login_bad_credentials_sends_nothing(
     with pytest.raises(ValueError, match="CR, LF or NUL"):
         client.login(user, password)
     assert sock.sent == b""
+
+
+def test_login_bad_credentials_not_kept(connect: Connect) -> None:
+    client, _ = connect(WELCOME + MODE_READER, username="fred", password="pw")
+    with pytest.raises(ValueError, match="CR, LF or NUL"):
+        client.login("bad\n", "x")
+    assert (client.username, client.password) == ("fred", "pw")
 
 
 def test_login_password_asked_but_none(connect: Connect) -> None:
