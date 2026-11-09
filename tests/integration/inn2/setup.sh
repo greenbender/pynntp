@@ -83,3 +83,4 @@ for port in 119 563; do
         exit 1
     fi
 done
+/usr/lib/news/bin/innconfval -v
