@@ -1,4 +1,5 @@
 import os
+from datetime import datetime, timedelta, timezone
 from unittest import mock
 
 import pytest
@@ -33,7 +34,6 @@ def test_context_manager() -> None:
         assert newsgroups == DEFAULT_NEWGROUPS
 
 
-@pytest.mark.xfail(reason="[Errno 9] Bad file descriptor", raises=OSError, strict=True)
 def test_context_manager_on_close() -> None:
     """
     nntp_client.close() should normally not be called within the context manager.
@@ -44,7 +44,6 @@ def test_context_manager_on_close() -> None:
         nntp_client.close()
 
 
-@pytest.mark.xfail(reason="[Errno 9] Bad file descriptor", raises=OSError, strict=True)
 def test_context_manager_on_quit() -> None:
     """
     nntp_client.quit() should normally not be called within the context manager.
@@ -77,17 +76,7 @@ def test_nntp_client_with_ssl_starttls() -> None:
         assert newsgroups == DEFAULT_NEWGROUPS
 
 
-@pytest.mark.parametrize(
-    "newsgroup",
-    [
-        "local.general",
-        "local.test",
-        pytest.param(
-            "junk",
-            marks=pytest.mark.xfail(raises=nntp.nntp.NNTPTemporaryError, strict=True),
-        ),
-    ],
-)
+@pytest.mark.parametrize("newsgroup", ["local.general", "local.test"])
 def test_post(newsgroup: str) -> None:
     headers = {
         "Subject": f"Test post to {newsgroup}",
@@ -114,26 +103,59 @@ def test_list_active(newsgroup: str) -> None:
             assert status == ("n" if newsgroup == "junk" else "y")
 
 
-@pytest.mark.parametrize(
-    "newsgroup",
-    [
-        "local.general",
-        "local.test",
-        pytest.param(
-            "junk",
-            marks=pytest.mark.xfail(raises=nntp.nntp.NNTPTemporaryError, strict=True),
-        ),
-    ],
-)
+@pytest.mark.parametrize("newsgroup", ["local.general", "local.test"])
 def test_article(newsgroup: str) -> None:
     with nntp.NNTPClient("localhost") as nntp_client:
         total, first, last, group = nntp_client.group(newsgroup)
-        assert total == 0 if newsgroup == "junk" else 1
-        assert first == 1
-        assert last == 0 if newsgroup == "junk" else 1
+        assert (total, first, last) == (1, 1, 1)
         assert group == newsgroup
         article_number, headers, body = nntp_client.article()
         assert article_number == 1
         assert headers["Newsgroups"] == newsgroup
         assert headers["Subject"] == f"Test post to {newsgroup}"
         assert body == f"This is a test post to {newsgroup}\r\n".encode()
+
+
+def test_post_to_junk_is_refused() -> None:
+    headers = {"Subject": "x", "From": "a@example.com", "Newsgroups": "junk"}
+    with nntp.NNTPClient("localhost") as nntp_client:
+        with pytest.raises(nntp.NNTPTemporaryError) as info:
+            nntp_client.post(headers=headers, body="x")
+        assert info.value.code == 441
+
+
+def test_article_in_empty_group() -> None:
+    with nntp.NNTPClient("localhost") as nntp_client:
+        assert nntp_client.group("junk") == (0, 1, 0, "junk")
+        with pytest.raises(nntp.NNTPTemporaryError) as info:
+            nntp_client.article()
+        assert info.value.code == 420
+
+
+SINCE = datetime(2000, 1, 1, tzinfo=timezone.utc)
+
+
+def test_newgroups() -> None:
+    with nntp.NNTPClient("localhost") as nntp_client:
+        names = {group.name for group in nntp_client.newgroups(SINCE)}
+        assert {"local.general", "local.test"} <= names
+        tomorrow = datetime.now(timezone.utc) + timedelta(days=1)
+        assert list(nntp_client.newgroups(tomorrow)) == []
+
+
+def test_newnews() -> None:
+    with nntp.NNTPClient("localhost") as nntp_client:
+        msgids = list(nntp_client.newnews("local.*", SINCE))
+        assert msgids
+        assert all(m.startswith("<") and m.endswith(">") for m in msgids)
+
+
+def test_xover_full_field() -> None:
+    with nntp.NNTPClient("localhost") as nntp_client:
+        nntp_client.group("local.test")
+        [(number, overview)] = nntp_client.xover((1, 1))
+        assert number == 1
+        assert overview["subject"] == "Test post to local.test"
+        # Xref is a "full" field: the "Xref: " prefix is stripped.
+        assert overview["xref"].endswith(" local.test:1")
+        assert not overview["xref"].lower().startswith("xref")

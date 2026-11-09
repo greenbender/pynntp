@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import gzip
 import zlib
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Callable
 
 import pytest
@@ -12,6 +12,7 @@ import pytest
 import nntp
 from nntp.headerdict import HeaderDict
 from nntp.nntp import NNTPSyncError
+from nntp.types import Newsgroup
 
 WELCOME = b"200 server ready\r\n"
 MODE_READER = b"200 reader mode\r\n"
@@ -20,10 +21,15 @@ MODE_READER = b"200 reader mode\r\n"
 class FakeSocket:
     """Replays a server byte stream, ``chunk`` bytes per recv, and records sends."""
 
+    last: FakeSocket  # Most recently created, for tests where connect() raises
+
     def __init__(self, data: bytes, chunk: int) -> None:
         self.data = data
         self.chunk = chunk
         self.sent = b""
+        self.sends = 0
+        self.closed = False
+        FakeSocket.last = self
 
     def recv(self, size: int) -> bytes:
         out = self.data[: min(size, self.chunk)]
@@ -31,10 +37,16 @@ class FakeSocket:
         return out
 
     def sendall(self, data: bytes) -> None:
+        if self.closed:
+            raise OSError(9, "Bad file descriptor")
         self.sent += data
+        self.sends += 1
 
     def close(self) -> None:
-        pass
+        self.closed = True
+
+    def fileno(self) -> int:
+        return -1 if self.closed else 3
 
 
 @pytest.fixture(params=[1, 7, 4096], ids=lambda c: f"chunk{c}")
@@ -255,3 +267,140 @@ def test_post_illegal_chars(connect: Connect) -> None:
     with pytest.raises(nntp.NNTPDataError):
         client.post({"Subject": "hi"}, b"good\nba\0d\nlost\n")
     assert b"lost" not in sock.sent
+
+
+def test_empty_status_line(connect: Connect) -> None:
+    client, _ = connect(WELCOME + MODE_READER + b"\r\n")
+    with pytest.raises(nntp.NNTPProtocolError):
+        client.date()
+
+
+def test_protocol_error_message_is_text(connect: Connect) -> None:
+    client, _ = connect(WELCOME + MODE_READER + b"bad line\r\n")
+    with pytest.raises(nntp.NNTPProtocolError) as info:
+        client.date()
+    assert str(info.value) == "bad line"
+
+
+@pytest.mark.parametrize(
+    "when",
+    [
+        datetime(2024, 1, 2, 3, 4, 5),  # noqa: DTZ001 - naive is taken as GMT
+        datetime(2024, 1, 2, 3, 4, 5, tzinfo=timezone.utc),
+        datetime(2024, 1, 2, 13, 4, 5, tzinfo=timezone(timedelta(hours=10))),
+    ],
+)
+def test_newgroups_and_newnews_send_gmt(connect: Connect, when: datetime) -> None:
+    client, sock = connect(
+        WELCOME
+        + MODE_READER
+        + b"231 groups\r\nalt.test 20 10 y\r\n.\r\n"
+        + b"230 news\r\n<a@b>\r\n.\r\n"
+    )
+    sock.sent = b""
+    assert list(client.newgroups(when)) == [Newsgroup("alt.test", 10, 20, "y")]
+    assert list(client.newnews("alt.*", when)) == ["<a@b>"]
+    assert sock.sent == (
+        b"NEWGROUPS 20240102 030405 GMT\r\nNEWNEWS alt.* 20240102 030405 GMT\r\n"
+    )
+
+
+def test_xover_full_field_and_empty_trailing(connect: Connect) -> None:
+    fmt = b"215 fmt\r\nSubject:\r\nXref:full\r\nLines:\r\n.\r\n"
+    lines = b"1\ts1\tXref: host alt.test:1\t5\r\n2\ts2\t\t\r\n"
+    client, _ = connect(WELCOME + MODE_READER + fmt + b"224 ok\r\n" + lines + b".\r\n")
+    assert list(client.xover((1, 2))) == [
+        (1, HeaderDict({"subject": "s1", "xref": "host alt.test:1", "lines": "5"})),
+        (2, HeaderDict({"subject": "s2", "xref": "", "lines": ""})),
+    ]
+
+
+def test_xover_default_fmt(connect: Connect) -> None:
+    client, _ = connect(
+        WELCOME + MODE_READER + b"503 no fmt\r\n" + b"224 ok\r\n1\ts\tf\r\n.\r\n"
+    )
+    assert list(client.xover()) == [(1, HeaderDict({"Subject": "s", "From": "f"}))]
+    assert client.overview_fmt[:2] == ("Subject", "From")
+
+
+def test_xover_bad_line(connect: Connect) -> None:
+    client, _ = connect(
+        WELCOME + MODE_READER + OVERVIEW_FMT + b"224 ok\r\nx\ty\r\n.\r\n"
+    )
+    with pytest.raises(nntp.NNTPDataError, match="Invalid XOVER response"):
+        list(client.xover())
+
+
+@pytest.mark.parametrize("verb", ["next", "last"])
+def test_next_last(connect: Connect, verb: str) -> None:
+    client, sock = connect(WELCOME + MODE_READER + b"223 7 <a@b> selected\r\n")
+    assert getattr(client, verb)() == (7, "<a@b>")
+    assert sock.sent.endswith(verb.upper().encode() + b"\r\n")
+
+
+def test_next_bad_status(connect: Connect) -> None:
+    client, _ = connect(WELCOME + MODE_READER + b"223 x\r\n")
+    with pytest.raises(nntp.NNTPDataError, match="Invalid NEXT status"):
+        client.next()
+
+
+def test_article_bad_status(connect: Connect) -> None:
+    client, _ = connect(WELCOME + MODE_READER + b"220\r\n")
+    with pytest.raises(nntp.NNTPDataError, match="Invalid ARTICLE status"):
+        client.article()
+
+
+@pytest.mark.parametrize("verb", ["hdr", "xhdr"])
+def test_hdr(connect: Connect, verb: str) -> None:
+    client, sock = connect(WELCOME + MODE_READER + b"221 ok\r\n1 hello\r\n2\r\n.\r\n")
+    assert list(getattr(client, verb)("Subject", (1, 2))) == [(1, "hello"), (2, "")]
+    assert sock.sent.endswith(verb.upper().encode() + b" Subject 1-2\r\n")
+
+
+def test_hdr_bad_line(connect: Connect) -> None:
+    client, _ = connect(WELCOME + MODE_READER + b"221 ok\r\nx y\r\n.\r\n")
+    with pytest.raises(nntp.NNTPDataError, match="Invalid HDR response"):
+        list(client.hdr("Subject"))
+
+
+def test_post_without_message_id(connect: Connect) -> None:
+    client, _ = connect(WELCOME + MODE_READER + b"340 send\r\n240\r\n")
+    assert client.post({"Subject": "hi"}, b"body\n") is True
+
+
+def test_post_batches_writes(connect: Connect) -> None:
+    client, sock = connect(WELCOME + MODE_READER + b"340 send\r\n240 ok\r\n")
+    sock.sent, sock.sends = b"", 0
+    body = b"x" * 98 + b"\n"
+    client.post({"Subject": "hi"}, body * 2000)  # About 200 KB
+    assert (
+        sock.sent
+        == b"POST\r\nSubject: hi\r\n\r\n"
+        + body.replace(b"\n", b"\r\n") * 2000
+        + b".\r\n"
+    )
+    assert sock.sends < 10  # Not one write per line
+
+
+def test_bad_welcome_closes_socket(connect: Connect) -> None:
+    with pytest.raises(nntp.NNTPTemporaryError):
+        connect(b"400 go away\r\n")
+    assert FakeSocket.last.closed
+
+
+def test_mode_reader_failure_closes_socket(connect: Connect) -> None:
+    with pytest.raises(nntp.NNTPPermanentError):
+        connect(WELCOME + b"502 no reading\r\n")
+    assert FakeSocket.last.closed
+
+
+@pytest.mark.parametrize("method", ["close", "quit"])
+def test_exit_after_close_or_quit(connect: Connect, method: str) -> None:
+    client, sock = connect(WELCOME + MODE_READER + b"205 bye\r\n")
+    with client:
+        getattr(client, method)()
+    assert sock.closed
+
+
+def test_sync_error_is_exported() -> None:
+    assert nntp.NNTPSyncError is nntp.nntp.NNTPSyncError

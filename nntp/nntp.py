@@ -49,8 +49,27 @@ __all__ = [
     "NNTPPermanentError",
     "NNTPProtocolError",
     "NNTPReplyError",
+    "NNTPSyncError",
     "NNTPTemporaryError",
 ]
+
+
+_SEND_SIZE = 0x10000  # Batch POST body lines into writes of about this size
+
+
+def _timestamp(timestamp: datetime) -> str:
+    """Format a datetime as NEWGROUPS/NEWNEWS arguments (RFC 3977 7.3).
+
+    Naive datetimes are taken to be GMT. The zone token must be "GMT"; servers
+    reject "UTC".
+    """
+    if timestamp.tzinfo:
+        timestamp = timestamp.astimezone(timezone.utc)
+    return timestamp.strftime("%Y%m%d %H%M%S GMT")
+
+
+def _msgid_article(msgid_article: str | int | None) -> str | None:
+    return None if msgid_article is None else str(msgid_article)
 
 
 class NNTPError(Exception):
@@ -97,7 +116,6 @@ class NNTPPermanentError(NNTPReplyError):
     """
 
 
-# TODO: Add the status line as a parameter ?
 class NNTPProtocolError(NNTPError):
     """NNTP protocol error.
 
@@ -159,19 +177,22 @@ class BaseNNTPClient:
 
         # connect
         self.socket = socket.create_connection((host, port), timeout=timeout)
-        if use_ssl and ssl_mode == SSLMode.IMPLICIT:
-            self._enable_tls(host)
+        try:
+            if use_ssl and ssl_mode == SSLMode.IMPLICIT:
+                self._enable_tls(host)
 
-        code, message = self.status()
-        if code not in (200, 201):
-            raise NNTPReplyError(code, message)
-
-        if use_ssl and ssl_mode == SSLMode.STARTTLS:
-            code, message = self.command("STARTTLS")
-            if code != 382:
-                self.socket.close()
+            code, message = self.status()
+            if code not in (200, 201):
                 raise NNTPReplyError(code, message)
-            self._enable_tls(host)
+
+            if use_ssl and ssl_mode == SSLMode.STARTTLS:
+                code, message = self.command("STARTTLS")
+                if code != 382:
+                    raise NNTPReplyError(code, message)
+                self._enable_tls(host)
+        except BaseException:
+            self.socket.close()
+            raise
 
     def _enable_tls(self, host: str) -> None:
         context = ssl.create_default_context()
@@ -187,7 +208,8 @@ class BaseNNTPClient:
         """Reads data from the socket.
 
         Raises:
-            NNTPError: When connection times out or read from socket fails.
+            NNTPError: If the server closed the connection.
+            OSError: On socket errors, including timeouts.
         """
         data = self.socket.recv(size)
         if not data:
@@ -260,11 +282,10 @@ class BaseNNTPClient:
 
         try:
             code, data = int(parts[0]), b""
-        except ValueError:
-            raise NNTPProtocolError(line)
-
+        except (IndexError, ValueError):
+            code = 0
         if code < 100 or code >= 600:
-            raise NNTPProtocolError(line)
+            raise NNTPProtocolError(line.decode(self.encoding, self.errors))
 
         if len(parts) > 1:
             data = parts[1]
@@ -569,7 +590,11 @@ class NNTPClient(BaseNNTPClient):
             ssl_mode=ssl_mode,
         )
         if reader:
-            self.mode_reader()
+            try:
+                self.mode_reader()
+            except BaseException:
+                self.close()
+                raise
 
     def __enter__(self) -> Self:
         """Support for the 'with' context manager statement."""
@@ -582,6 +607,8 @@ class NNTPClient(BaseNNTPClient):
         exc_tb: TracebackType | None,
     ) -> Literal[False]:
         """Support for the 'with' context manager statement."""
+        if self.socket.fileno() == -1:  # Already closed by close() or quit()
+            return False
         try:
             self.quit()
         except NNTPError:
@@ -710,14 +737,7 @@ class NNTPClient(BaseNNTPClient):
         Note: If the datetime object supplied as the timestamp is naive (tzinfo
             is None) then it is assumed to be given as GMT.
         """
-        if timestamp.tzinfo:
-            ts = timestamp.astimezone(timezone.utc)
-        else:
-            ts = timestamp.replace(tzinfo=timezone.utc)
-
-        args = ts.strftime("%Y%m%d %H%M%S %Z")
-
-        code, message = self.command("NEWGROUPS", args)
+        code, message = self.command("NEWGROUPS", _timestamp(timestamp))
         if code != 231:
             raise NNTPReplyError(code, message)
 
@@ -744,15 +764,7 @@ class NNTPClient(BaseNNTPClient):
             is None) then it is assumed to be given as GMT. If tzinfo is set
             then it will be converted to GMT by this function.
         """
-        if timestamp.tzinfo:
-            ts = timestamp.astimezone(timezone.utc)
-        else:
-            ts = timestamp.replace(tzinfo=timezone.utc)
-
-        args = pattern
-        args += " " + ts.strftime("%Y%m%d %H%M%S %Z")
-
-        code, message = self.command("NEWNEWS", args)
+        code, message = self.command("NEWNEWS", f"{pattern} {_timestamp(timestamp)}")
         if code != 230:
             raise NNTPReplyError(code, message)
 
@@ -965,18 +977,7 @@ class NNTPClient(BaseNNTPClient):
             NNTPReplyError: If no such article exists or the currently selected
                 newsgroup is invalid.
         """
-        code, message = self.command("NEXT")
-        if code != 223:
-            raise NNTPReplyError(code, message)
-
-        parts = message.split(None, 3)
-        try:
-            article = int(parts[0])
-            msgid = parts[1]
-        except (IndexError, ValueError):
-            raise NNTPDataError("Invalid NEXT status")
-
-        return article, msgid
+        return self._select("NEXT")
 
     def last(self) -> tuple[int, str]:
         """LAST command.
@@ -993,18 +994,18 @@ class NNTPClient(BaseNNTPClient):
             NNTPReplyError: If no such article exists or the currently selected
                 newsgroup is invalid.
         """
-        code, message = self.command("LAST")
+        return self._select("LAST")
+
+    def _select(self, verb: str) -> tuple[int, str]:
+        code, message = self.command(verb)
         if code != 223:
             raise NNTPReplyError(code, message)
 
-        parts = message.split(None, 3)
+        parts = message.split(None, 2)
         try:
-            article = int(parts[0])
-            msgid = parts[1]
+            return int(parts[0]), parts[1]
         except (IndexError, ValueError):
-            raise NNTPDataError("Invalid LAST status")
-
-        return article, msgid
+            raise NNTPDataError(f"Invalid {verb} status")
 
     # TODO: Validate yEnc
     def _body(self, code: int, message: str, decode: bool | None = None) -> bytes:
@@ -1059,20 +1060,15 @@ class NNTPClient(BaseNNTPClient):
         Raises:
             NNTPReplyError: If no such article exists.
         """
-        args = None
-        if msgid_article is not None:
-            args = str(msgid_article)
-
-        code, message = self.command("ARTICLE", args)
+        code, message = self.command("ARTICLE", _msgid_article(msgid_article))
         if code != 220:
             raise NNTPReplyError(code, message)
 
         parts = message.split(None, 1)
-
         try:
             articleno = int(parts[0])
-        except ValueError:
-            raise NNTPProtocolError(message)
+        except (IndexError, ValueError):
+            raise NNTPDataError(f'Invalid ARTICLE status "{message}"')
 
         # headers
         headers = utils.parse_headers(self.info(code, message))
@@ -1104,11 +1100,7 @@ class NNTPClient(BaseNNTPClient):
         Raises:
             NNTPReplyError: If no such article exists.
         """
-        args = None
-        if msgid_article is not None:
-            args = str(msgid_article)
-
-        code, message = self.command("HEAD", args)
+        code, message = self.command("HEAD", _msgid_article(msgid_article))
         if code != 221:
             raise NNTPReplyError(code, message)
 
@@ -1139,11 +1131,7 @@ class NNTPClient(BaseNNTPClient):
         Raises:
             NNTPReplyError: If no such article exists.
         """
-        args = None
-        if msgid_article is not None:
-            args = str(msgid_article)
-
-        code, message = self.command("BODY", args)
+        code, message = self.command("BODY", _msgid_article(msgid_article))
         if code != 222:
             raise NNTPReplyError(code, message)
 
@@ -1165,12 +1153,12 @@ class NNTPClient(BaseNNTPClient):
 
         yz = verb == "XZHDR"
         for line in self.info(code, message, yz=yz):
-            parts = line.split(None, 1)
+            parts = line.rstrip("\r\n").split(None, 1)
             try:
                 articleno = int(parts[0])
                 value = parts[1] if len(parts) > 1 else ""
             except (IndexError, ValueError):
-                raise NNTPDataError("Invalid XHDR response")
+                raise NNTPDataError(f"Invalid {verb} response")
             yield articleno, value
 
     def hdr(
@@ -1209,9 +1197,9 @@ class NNTPClient(BaseNNTPClient):
         header: str,
         msgid_range: str | Range | None = None,
     ) -> Iterator[tuple[int, str]]:
-        """Generator for the XHDR command.
+        """XHDR command.
 
-        See hdr_gen()
+        See hdr().
         """
         return self._hdr(header, msgid_range, verb="XHDR")
 
@@ -1220,26 +1208,24 @@ class NNTPClient(BaseNNTPClient):
         header: str,
         msgid_range: str | Range | None = None,
     ) -> Iterator[tuple[int, str]]:
-        """Generator for the XZHDR command.
+        """XZHDR command.
 
-        The compressed version of XHDR. See xhdr().
+        The compressed version of XHDR. See hdr().
         """
         return self._hdr(header, msgid_range, verb="XZHDR")
 
     @cached_property
-    def overview_fmt(self) -> tuple[str, ...]:
+    def _overview_fields(self) -> tuple[tuple[str, bool], ...]:
         try:
-            return tuple(name for name, opt in self.list_overview_fmt())
+            return tuple(self.list_overview_fmt())
         except NNTPError:
-            return (
-                "Subject",
-                "From",
-                "Date",
-                "Message-ID",
-                "References",
-                "Bytes",
-                "Lines",
-            )
+            names = ("Subject", "From", "Date", "Message-ID", "References")
+            return tuple((name, False) for name in (*names, "Bytes", "Lines"))
+
+    @property
+    def overview_fmt(self) -> tuple[str, ...]:
+        """Overview field names, from LIST OVERVIEW.FMT or the RFC 2980 default."""
+        return tuple(name for name, _ in self._overview_fields)
 
     def _xover(
         self,
@@ -1247,7 +1233,10 @@ class NNTPClient(BaseNNTPClient):
         verb: str = "XOVER",
     ) -> Iterator[tuple[int, HeaderDict]]:
         # get overview fmt before entering generator
-        fmt = self.overview_fmt
+        names = self.overview_fmt
+        keys = tuple(name.casefold() for name in names)
+        # "full" fields include the header name in the value (RFC 3977 8.4.2)
+        full = [i for i, (_, is_full) in enumerate(self._overview_fields) if is_full]
 
         args = None
         if range is not None:
@@ -1259,13 +1248,19 @@ class NNTPClient(BaseNNTPClient):
 
         yz = verb == "XZVER"
         for line in self.info(code, message, yz=yz):
-            parts = line.rstrip().split("\t")
+            parts = line.rstrip("\r\n").split("\t")
             try:
                 articleno = int(parts[0])
-                overview = HeaderDict(zip(fmt, parts[1:]))
-            except (IndexError, ValueError):
+            except ValueError:
                 raise NNTPDataError(f"Invalid {verb} response")
-            yield articleno, overview
+            values = parts[1:]
+            for i in full:
+                if i < len(values):
+                    name, sep, value = values[i].partition(":")
+                    if sep and name.strip().casefold() == keys[i]:
+                        values[i] = value.strip()
+            # Same-package fast path; names are unique per LIST OVERVIEW.FMT.
+            yield articleno, HeaderDict._from_fields(keys, names, values)  # noqa: SLF001
 
     def xover(
         self,
@@ -1304,7 +1299,7 @@ class NNTPClient(BaseNNTPClient):
     ) -> Iterator[tuple[int, HeaderDict]]:
         """XZVER command.
 
-        The compressed version of XHDR. See xover().
+        The compressed version of XOVER. See xover().
         """
         return self._xover(range, verb="XZVER")
 
@@ -1405,28 +1400,29 @@ class NNTPClient(BaseNNTPClient):
         if code != 340:
             raise NNTPReplyError(code, message)
 
-        # send headers
-        self.socket.sendall(hdrs.encode(self.encoding))
-
         if isinstance(body, str):
             body = body.encode(self.encoding, self.errors)
         if isinstance(body, bytes):
             body = io.BytesIO(body)
 
-        # send body
+        # send headers and body, batching lines into larger writes
         illegal = False
+        chunk, size = [hdrs.encode(self.encoding)], 0
         for line in body:
             if line.startswith(b"."):
                 line = b"." + line
-            if line.endswith(b"\r\n"):
-                line = line[:-2]
-            elif line.endswith(b"\n"):
-                line = line[:-1]
+            if line.endswith(b"\n"):
+                line = line[:-1].removesuffix(b"\r")
             if any(c in line for c in b"\0\r"):
                 illegal = True
                 break
-            self.socket.sendall(line + b"\r\n")
-        self.socket.sendall(b".\r\n")
+            chunk.append(line + b"\r\n")
+            size += len(line) + 2
+            if size >= _SEND_SIZE:
+                self.socket.sendall(b"".join(chunk))
+                chunk, size = [], 0
+        chunk.append(b".\r\n")
+        self.socket.sendall(b"".join(chunk))
 
         # get status
         code, message = self.status()
@@ -1440,320 +1436,8 @@ class NNTPClient(BaseNNTPClient):
             raise NNTPReplyError(code, message)
 
         # return message-id possible
-        message_id = message.split(None, 1)[0]
+        message_id = message.split(None, 1)[0] if message else ""
         if message_id.startswith("<") and message_id.endswith(">"):
             return message_id
 
         return True
-
-
-# testing
-# TODO: Remove/move this to a test file
-if __name__ == "__main__":
-    import sys
-    from datetime import timedelta
-
-    log = sys.stdout.write
-
-    try:
-        host = sys.argv[1]
-        port = int(sys.argv[2])
-        username = sys.argv[3]
-        password = sys.argv[4]
-        use_ssl = bool(int(sys.argv[5]))
-    except (IndexError, TypeError, ValueError):
-        prog = sys.argv[0]
-        log(f"{prog} <host> <port> <username> <password> <ssl(0|1)>\n")
-        sys.exit(1)
-
-    now = datetime.now(tz=timezone.utc)
-    fiftydays = timedelta(days=50)
-    onemin = timedelta(minutes=1)
-
-    nntp_client = NNTPClient(
-        host, port, username, password, use_ssl=use_ssl, reader=False
-    )
-
-    try:
-        log("HELP\n")
-        try:
-            log(f"{nntp_client.help()}\n")
-        except NNTPError as e:
-            log(f"{e}\n")
-        log("\n")
-
-        log("DATE\n")
-        try:
-            log(f"{nntp_client.date()}\n")
-        except NNTPError as e:
-            log(f"{e}\n")
-        log("\n")
-
-        log("NEWGROUPS\n")
-        try:
-            for newsgroup in nntp_client.newgroups(now - fiftydays):
-                print(newsgroup)
-                # log('%s\n' % newsgroup)  # noqa: ERA001
-        except NNTPError as e:
-            log(f"{e}\n")
-        log("\n")
-
-        log("NEWNEWS\n")
-        try:
-            for msgid in nntp_client.newnews("alt.binaries.*", now - onemin):
-                log(f"{msgid}\n")
-        except NNTPError as e:
-            log(f"{e}\n")
-        log("\n")
-
-        log("CAPABILITIES\n")
-        try:
-            for capability in nntp_client.capabilities():
-                log(f"{capability}\n")
-        except NNTPError as e:
-            log(f"{e}\n")
-        log("\n")
-
-        log("GROUP misc.test\n")
-        try:
-            total, first, last, name = nntp_client.group("misc.test")
-            log(f"{total} {first} {last} {name}\n")
-        except NNTPError as e:
-            log(f"{e}\n")
-        log("\n")
-
-        log("HEAD\n")
-        try:
-            log(f"{nntp_client.head(last)!r}\n")
-        except NNTPError as e:
-            log(f"{e}\n")
-        log("\n")
-
-        log("BODY\n")
-        try:
-            log(f"{nntp_client.body(last)!r}\n")
-        except NNTPError as e:
-            log(f"{e}\n")
-        log("\n")
-
-        log("BODY\n")
-        try:
-            log(f"{nntp_client.body(910230)!r}\n")
-        except NNTPError as e:
-            log(f"{e}\n")
-        log("\n")
-
-        log("ARTICLE\n")
-        try:
-            article, hdrs, body = nntp_client.article(last, False)
-            log(f"{article}\n{hdrs}\n{body.decode()}\n")
-        except NNTPError as e:
-            log(f"{e}\n")
-        log("\n")
-
-        log("ARTICLE (auto yEnc decode)\n")
-        try:
-            article, hdrs, body = nntp_client.article(910230)
-            log(f"{article}\n{hdrs}\n{body.decode()}\n")
-        except NNTPError as e:
-            log(f"{e}\n")
-        log("\n")
-
-        log(f"XHDR Date {last - 10}-{last}\n")
-        try:
-            for article, datestr in nntp_client.xhdr("Date", (last - 10, last)):
-                log(f"{article} {datestr}\n")
-        except NNTPError as e:
-            log(f"{e}\n")
-        log("\n")
-
-        log(f"XZHDR Date {last - 10}-{last}\n")
-        try:
-            for article, datestr in nntp_client.xhdr("Date", (last - 10, last)):
-                log(f"{article} {datestr}\n")
-        except NNTPError as e:
-            log(f"{e}\n")
-        log("\n")
-
-        log(f"XOVER {last - 10}-{last}\n")
-        try:
-            hash_ = count = 0
-            for article, overview in nntp_client.xover((last - 10, last)):
-                log(f"{article} {overview}\n")
-                hash_ += sum(map(hash, overview.keys()))
-                hash_ += sum(map(hash, overview.values()))
-                count += 1
-            log(f"Entries {count} Hash {hash_}\n")
-        except NNTPError as e:
-            log(f"{e}\n")
-        log("\n")
-
-        log(f"XZVER {last - 10}-{last}\n")
-        try:
-            hash_ = count = 0
-            for _article, overview in nntp_client.xzver((last - 10, last)):
-                hash_ += sum(map(hash, overview.keys()))
-                hash_ += sum(map(hash, overview.values()))
-                count += 1
-            log(f"Entries {count} Hash {hash_}\n")
-        except NNTPError as e:
-            log(f"{e}\n")
-        log("\n")
-
-        log("XFEATURE COMPRESS GZIP\n")
-        try:
-            log(f"{nntp_client.xfeature_compress_gzip()}\n")
-        except NNTPError as e:
-            log(f"{e}\n")
-        log("\n")
-
-        log(f"XOVER {last - 10}-{last}\n")
-        try:
-            hash_ = count = 0
-            for _article, overview in nntp_client.xover((last - 10, last)):
-                hash_ += sum(map(hash, overview.keys()))
-                hash_ += sum(map(hash, overview.values()))
-                count += 1
-            log(f"Entries {count} Hash {hash_}\n")
-        except NNTPError as e:
-            log(f"{e}\n")
-        log("\n")
-
-        log("XFEATURE COMPRESS GZIP TERMINATOR\n")
-        try:
-            log(f"{nntp_client.xfeature_compress_gzip()}\n")
-        except NNTPError as e:
-            log(f"{e}\n")
-        log("\n")
-
-        log(f"XOVER {last - 10}-{last}\n")
-        try:
-            hash_ = count = 0
-            for _article, overview in nntp_client.xover((last - 10, last)):
-                hash_ += sum(map(hash, overview.keys()))
-                hash_ += sum(map(hash, overview.values()))
-                count += 1
-            log(f"Entries {count} Hash {hash_}\n")
-        except NNTPError as e:
-            log(f"{e}\n")
-        log("\n")
-
-        log("LIST\n")
-        try:
-            log(f"Entries {len(list(nntp_client.list()))}\n")
-        except NNTPError as e:
-            log(f"{e}\n")
-        log("\n")
-
-        log("LIST ACTIVE\n")
-        try:
-            log(f"Entries {len(list(nntp_client.list('ACTIVE')))}\n")
-        except NNTPError as e:
-            log(f"{e}\n")
-        log("\n")
-
-        log("LIST ACTIVE alt.binaries.*\n")
-        try:
-            newsgroups = nntp_client.list("ACTIVE", "alt.binaries.*")
-            log(f"Entries {len(list(newsgroups))}\n")
-        except NNTPError as e:
-            log(f"{e}\n")
-        log("\n")
-
-        log("LIST ACTIVE.TIMES\n")
-        try:
-            log(f"Entries {len(list(nntp_client.list('ACTIVE.TIMES')))}\n")
-        except NNTPError as e:
-            log(f"{e}\n")
-        log("\n")
-
-        log("LIST NEWSGROUPS\n")
-        try:
-            log(f"Entries {len(list(nntp_client.list('NEWSGROUPS')))}\n")
-            for group in nntp_client.list("NEWSGROUPS"):
-                print(group)
-        except NNTPError as e:
-            log(f"{e}\n")
-        log("\n")
-
-        log("LIST NEWSGROUPS alt.binaries.*\n")
-        try:
-            groups = nntp_client.list("NEWSGROUPS", "alt.binaries.*")
-            log(f"Entries {len(list(groups))}\n")
-        except NNTPError as e:
-            log(f"{e}\n")
-        log("\n")
-
-        log("LIST OVERVIEW.FMT\n")
-        try:
-            log(f"{list(nntp_client.list('OVERVIEW.FMT'))}\n")
-        except NNTPError as e:
-            log(f"{e}\n")
-        log("\n")
-
-        log("LIST HEADERS\n")
-        try:
-            log(f"{list(nntp_client.list('HEADERS'))}\n")
-        except NNTPError as e:
-            log(f"{e}\n")
-        log("\n")
-
-        log("LIST EXTENSIONS\n")
-        try:
-            log(f"{list(nntp_client.list('EXTENSIONS'))}\n")
-        except NNTPError as e:
-            log(f"{e}\n")
-        log("\n")
-
-        log("POST (with illegal characters)\n")
-        try:
-            log(
-                "{}\n".format(
-                    nntp_client.post(
-                        HeaderDict(
-                            {
-                                "From": '"pynntp" <pynntp@not.a.real.doma.in>',
-                                "Newsgroups": "misc.test",
-                                "Subject": "pynntp test article",
-                                "Organization": "pynntp",
-                            }
-                        ),
-                        b"pip install pynntp\r\nthis\0contains\rillegal\ncharacters",
-                    )
-                )
-            )
-        except NNTPError as e:
-            log(f"{e}\n")
-        log("\n")
-
-        log("POST\n")
-        try:
-            log(
-                "{}\n".format(
-                    nntp_client.post(
-                        HeaderDict(
-                            {
-                                "From": '"pynntp" <pynntp@not.a.real.doma.in>',
-                                "Newsgroups": "misc.test",
-                                "Subject": "pynntp test article",
-                                "Organization": "pynntp",
-                            }
-                        ),
-                        b"pip install pynntp",
-                    )
-                )
-            )
-        except NNTPError as e:
-            log(f"{e}\n")
-        log("\n")
-
-        log("QUIT\n")
-        try:
-            nntp_client.quit()
-        except NNTPError as e:
-            log(f"{e}\n")
-        log("\n")
-
-    finally:
-        log("CLOSING CONNECTION\n")
-        nntp_client.close()
