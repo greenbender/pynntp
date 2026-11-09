@@ -190,3 +190,22 @@ def test_ihave() -> None:
             nntp_client.ihave(message_id, headers, "IHAVE body\n")
         assert info.value.code == 435  # Duplicate: not wanted
         assert nntp_client.stat(message_id)[1] == message_id
+
+
+def test_compress() -> None:
+    with nntp.NNTPClient("localhost") as nntp_client:
+        if "COMPRESS DEFLATE" not in list(nntp_client.capabilities()):
+            pytest.skip("The server does not offer COMPRESS DEFLATE")
+        nntp_client.compress()
+        assert "COMPRESS DEFLATE" not in list(nntp_client.capabilities())
+        nntp_client.post(
+            {"From": "a@example.com", "Newsgroups": "local.test", "Subject": "zip"},
+            "compressed body\n" * 100,
+        )
+        _, first, last, _ = nntp_client.group("local.test")
+        overviews = list(nntp_client.xover((first, last)))
+        number = next(n for n, o in overviews if o["subject"] == "zip")
+        assert nntp_client.body(number) == b"compressed body\r\n" * 100
+        assert nntp_client.date().year >= 2024
+        with pytest.raises(nntp.NNTPError, match="not allowed after COMPRESS"):
+            nntp_client.mode_reader()

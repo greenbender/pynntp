@@ -56,9 +56,10 @@ for number, overview in client.xover((last - 999, last)):
 Header and overview names are case-insensitive: `overview["Subject"]` and
 `overview["subject"]` are the same.
 
-To compress overview data on servers that support it, call
-`client.xfeature_compress_gzip()` once, or use `client.xzver()` instead of
-`xover()`.
+To compress the whole connection on servers that support RFC 8054, call
+`client.compress()` after connecting and any login. Some servers instead
+offer compressed overview data: call `client.xfeature_compress_gzip()` once,
+or use `client.xzver()` instead of `xover()`.
 
 ### Downloading an article
 
@@ -119,7 +120,8 @@ client.group("alt.binaries.test")
 CAPABILITIES, MODE READER, QUIT, DATE, HELP, NEWGROUPS, NEWNEWS, LIST
 (ACTIVE, ACTIVE.TIMES, NEWSGROUPS, OVERVIEW.FMT, HEADERS, EXTENSIONS), GROUP,
 LISTGROUP, NEXT, LAST, STAT, ARTICLE, HEAD, BODY, POST, IHAVE, HDR, XHDR,
-XZHDR, OVER, XOVER, XZVER, XPAT and XFEATURE COMPRESS GZIP.
+XZHDR, OVER, XOVER, XZVER, XPAT, COMPRESS DEFLATE and XFEATURE COMPRESS
+GZIP.
 
 Other commands can be sent with `client.command()`; read a multi-line
 response with `client.info()`.
