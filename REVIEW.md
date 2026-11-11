@@ -29,18 +29,18 @@ reviewed 2× (date).
 |---|---|---|---|---|---|
 | 0 | Docs | `README.md`, `index.md`, `CONTRIBUTING.md`, `CHANGELOG.md`, `SECURITY.md`, `docs/`, docstrings | | Examples against the API, docstrings against the code, Sphinx build | partial: README command list and CHANGELOG claims (2026-11-09) |
 | 1 | Connection and TLS | `BaseNNTPClient.__init__`, `_connect`, `reconnect`, `_enable_tls`, `close`; `NNTPClient.__init__`, `from_url`, `_connect`, `__enter__`, `__exit__`, `quit` | ~250 | Greeting, implicit TLS and STARTTLS (no data before TLS, no login before TLS), MODE READER, reconnect state, URL parsing | reviewed 2× (2026-11-09): P-03, P-12, P-17, P-34 |
-| 2 | Commands, status and login | `status`, `command`, `_unexpected`, `_command`, `login`, `_sync`, `_MULTILINE` | ~170 | Status line grammar, expected codes, unexpected multi-line replies, 480 login, credentials, CR/LF/NUL, encoding, sync state | reviewed 2× (2026-11-09): P-01, P-02, P-04, P-11, P-21, P-29 |
-| 3 | Reading and compression | `_recv`, `_decompress`, `_send`, `_readline`, `_read`, `_info_plain`, `_info_gzip`, `_info_yenczlib`, `_info`, `_response`, `info`, `compress`, `xfeature_compress_gzip`; `fifo.py` | ~320 | Dot-unstuffing, terminators split across reads, gzip with and without TERMINATOR, XZVER/XZHDR, COMPRESS DEFLATE, abandoned iterators | reviewed 2× (2026-11-09): P-06, P-07, P-22, P-23, P-28, P-30, P-31 |
+| 2 | Commands, status and login | `status`, `command`, `_unexpected`, `_command`, `login`, `_sync`, `_MULTILINE` | ~170 | Status line grammar, expected codes, unexpected multi-line replies, 480 login, credentials, CR/LF/NUL, encoding, sync state | reviewed 2× (2026-11-09): P-01, P-02, P-04, P-11, P-21, P-29, P-36, P-37 |
+| 3 | Reading and compression | `_recv`, `_decompress`, `_send`, `_readline`, `_read`, `_info_plain`, `_info_gzip`, `_info_yenczlib`, `_info`, `_response`, `info`, `compress`, `xfeature_compress_gzip`; `fifo.py` | ~320 | Dot-unstuffing, terminators split across reads, gzip with and without TERMINATOR, XZVER/XZHDR, COMPRESS DEFLATE, abandoned iterators | reviewed 2× (2026-11-09): P-06, P-07, P-22, P-23, P-28, P-30, P-31, P-38 |
 | 4 | Articles and yEnc | `_read_body`, `_decode_yenc`, `article`, `head`, `body`; `yenc.py` | ~310 | yEnc detection, blocks and text around them, size/CRC/part trailer checks, ARTICLE status parsing | reviewed 2× (2026-11-09): P-05, P-08, P-10, P-18, P-27 |
-| 5 | Session and group commands | `capabilities`, `mode_reader`, `date`, `help`, `newgroups`, `newnews`, `list*`, `group`, `listgroup`, `next`, `last`, `stat`, `_select`, `_timestamp` | ~360 | Reply codes (RFC 3977), parsing of each reply, GMT timestamps, watermarks, message-id grammar | reviewed (2026-11-09): P-13, P-15, P-19, P-20, P-25, P-32, P-33 |
+| 5 | Session and group commands | `capabilities`, `mode_reader`, `date`, `help`, `newgroups`, `newnews`, `list*`, `group`, `listgroup`, `next`, `last`, `stat`, `_select`, `_timestamp` | ~360 | Reply codes (RFC 3977), parsing of each reply, GMT timestamps, watermarks, message-id grammar | reviewed (2026-11-09): P-13, P-15, P-19, P-20, P-25, P-32, P-33, P-39 |
 | 6 | Overview and headers | `_overview_fields`, `overview_fmt`, `_xover`, `xover`, `xzver`, `over`, `_hdr`, `_number_values`, `hdr`, `xhdr`, `xzhdr`, `xpat` | ~200 | OVERVIEW.FMT and `:full` fields, the fallback format, HDR vs XHDR codes and rows | reviewed (2026-11-09): P-14, P-26 |
 | 7 | POST and IHAVE | `post`, `ihave`, `_transfer`, `_prepare_article`; `utils.unparse_headers` | ~170 | Preflight before sending, dot-stuffing, spooling large articles, final reply, Message-ID handling, header injection | reviewed (2026-11-09): P-09, P-24 |
-| 8 | Helpers | `utils.py`, `headerdict.py`, `types.py` | ~400 | Parsers, ranges, header folding, `HeaderDict` semantics | partial: parsers used by areas 5 to 7 (2026-11-09) |
+| 8 | Helpers | `utils.py`, `headerdict.py`, `types.py` | ~400 | Parsers, ranges, header folding, `HeaderDict` semantics | reviewed (2026-11-10, read and probed on a test VM): P-26, P-40, P-41, P-42 |
 | 9 | Tests and CI | `tests/`, `.github/workflows/` | | Coverage of the areas above, integration tests on other INN setups, flaky tests | partial: integration tests on stock INN 2.7.2, 2.7.4 and 2.8 (P-35); fault-injection scenarios (2026-11-09) |
 
 Line counts are approximate, from `main` at `48fc0b3`.
 
-## How the 2026-11-09 review was done
+## How the review was done
 
 - The go-while fork's own cross-reviewed fixes (develop-01) were compared with 3.0.0 to 3.2.0,
   one probe per difference against a fake server; the results are #102 and P-01 to P-21.
@@ -49,6 +49,8 @@ Line counts are approximate, from `main` at `48fc0b3`.
   INN 2.8 (InterNetNews/inn main, built from source); see P-35.
 - 225 fault-injection scenarios ran over real TCP, TLS and COMPRESS against the nntp-testkit
   fake server (split and slow writes, drops, unexpected and malformed replies): P-27 to P-31.
+- 2026-11-10: area 8 was read and probed on a test VM (CPython 3.12), including 2,000
+  generated `HeaderDict` operations (fixed seed) checked against a simple model: P-40 to P-42.
 
 ## Findings
 

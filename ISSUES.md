@@ -13,10 +13,13 @@ Status values: **open**, **PR** (fix waiting for review, with its number), **fix
 the PR that fixed it), **decision** (needs the maintainer to decide), **won't fix**.
 
 Security problems are reported privately (see [SECURITY.md](SECURITY.md)); they are listed
-here only after their advisory has been published.
+here only after their advisory has been published, or once they are rated low and moved to a
+public PR (P-36 to P-38).
 
-Last updated 2026-11-09: P-01 to P-35 added from #102, the reviews of #133 to #138, the
-fault-injection run and the INN integration runs.
+Last updated 2026-11-11: P-36 to P-38 moved from private reports to public PRs, P-39 found by
+running the tests against another server, P-40 to P-42 from a review of `utils.py`,
+`headerdict.py` and `types.py`. P-01 to P-35 (2026-11-09) came from #102, the reviews of #133
+to #138, the fault-injection run and the INN integration runs.
 
 | ID | Severity | Summary | Status |
 |---|---|---|---|
@@ -55,6 +58,13 @@ fault-injection run and the INN integration runs.
 | [P-33](#p-33-listgroup-211-metadata-not-checked) | — | LISTGROUP doesn't check its 211 line | won't fix (not used) |
 | [P-34](#p-34-tls-minimum-left-to-openssl) | Low | The default TLS context leaves the minimum version to OpenSSL's configuration | PR (#142) |
 | [P-35](#p-35-integration-tests-assume-the-docker-image) | Low | The integration tests assume a fresh `greenbender/inn` container | PR (#144) |
+| [P-36](#p-36-second-480-after-login-retried-until-recursionerror) | Low | A server answering 480 again after a successful login made the client log in again until `RecursionError` | PR (#146) |
+| [P-37](#p-37-too-long-password-sent-after-authinfo-user-and-shown-in-the-error) | Low | A password too long for the command limit was refused only after `AUTHINFO USER`, and the error showed it | PR (#147) |
+| [P-38](#p-38-no-limit-on-response-line-length) | Low | No limit on the length of a response line, also after decompression; long lines cost quadratic time | PR (#148) |
+| [P-39](#p-39-date-with-text-after-the-date) | Low | `date()` raised for `111 <date> <text>`, which RFC 3977 allows | PR (#149) |
+| [P-40](#p-40-header-unfolding-drops-whitespace) | Low | Header unfolding drops the whitespace before a fold | open |
+| [P-41](#p-41-empty-overview-field-names-accepted) | Low | LIST OVERVIEW.FMT: empty or space-padded field names accepted | open |
+| [P-42](#p-42-range-tuples-accept-bool-bounds) | Low | A range tuple with `True`/`False` is sent as `True-` instead of raising | open |
 
 ## Details
 
@@ -163,7 +173,9 @@ Verified.
 
 ### P-26 Any token starting with < gets number 0
 `parse_number_value()` gives number 0 to any first token starting with `<`, also in range
-queries where a message-id row can't be the answer. Verified.
+queries where a message-id row can't be the answer, and without checking for a closing `>`
+(`<broken value`, `<>`). Numbers go through `int()`, so `-1`, `+1` and `1_0` are accepted.
+Verified.
 
 ### P-27 Stray =yend checked as a trailer
 A `=yend` line after a block is closed is checked against the last block's size and CRC and
@@ -206,3 +218,44 @@ fail because of server state, not the client: port 563 not listening, groups tha
 articles, the NEWGROUPS cutoff date, `483 Encryption required` instead of 502 for a plain-text
 login, INN 2.8's descriptions ending in a period. Fix, with a CI job against Ubuntu's inn2, in
 #144.
+
+### P-36 Second 480 after login retried until RecursionError
+After a 480, `_command()` logs in and calls itself again; a server that keeps answering 480
+after a successful login made it send `AUTHINFO USER`/`PASS` about 990 times and end in
+`RecursionError`. Low: needs a misbehaving or hostile server. Verified; reported privately
+first, then moved to a public PR as low impact. Fix in #146: retry once, then raise the 480.
+
+### P-37 Too-long password sent after AUTHINFO USER and shown in the error
+The rest of P-11: `login()` checked the credentials for CR, LF and NUL but not their length,
+so a password over the 512-octet command limit was refused only after `AUTHINFO USER` was
+sent, and the `ValueError` contained the whole `AUTHINFO PASS` line. Verified; moved from a
+private report to a public PR. Fix in #147: check both lengths first, and show only the verb
+in errors for AUTHINFO commands.
+
+### P-38 No limit on response line length
+Lines are buffered until a CRLF arrives, with no limit, and the buffer is joined and searched
+again on every read. Decompressed data (COMPRESS DEFLATE, XFEATURE COMPRESS GZIP, XZVER/XZHDR)
+goes into the same buffer, so a small compressed reply can grow into a very large line. Low:
+needs a misbehaving or hostile server. Verified; moved from a private report to a public PR.
+Fix in #148: `max_line_length` (64 KiB including CRLF, adjustable), decompression in 64 KiB
+steps, and a `BytesFifo` that only joins complete lines.
+
+### P-39 DATE with text after the date
+RFC 3977 section 3.2 allows text after the last argument of a status line. `date()` passed the
+whole text to `parse_date()`, so `111 20240102030405 server time` raised `NNTPDataError`.
+Found by running the tests against OpenUsenetServer; 2.0.1 does the same. Fix in #149.
+
+### P-40 Header unfolding drops whitespace
+`parse_headers()` strips each physical line before it knows whether a continuation follows, so
+`X-Text: one \r\n two` becomes `one two`; unfolding (RFC 5322 section 2.2.3) only removes the
+CRLF and gives `one  two`. Cosmetic; inherited from 2.0.1. Verified.
+
+### P-41 Empty overview field names accepted
+`parse_overview_fmt()` returns `("", False)` for `:` and keeps the spaces in ` :full` and
+`Subject :full`. A format with an empty name is cached, and `over()` then returns rows keyed
+`""`. Malformed server data only; the connection stays in sync. Verified.
+
+### P-42 Range tuples accept bool bounds
+`unparse_range(True)` raises, but `unparse_range((True,))` gives `True-` and
+`(False, 1)` gives `False-1`, so `over((True,))` sends `OVER True-`. Caller input only; CR, LF
+and NUL are still rejected. Verified.
