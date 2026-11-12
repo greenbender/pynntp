@@ -150,9 +150,11 @@ def parse_overview_fmt(line: str) -> tuple[str, bool]:
     Raises:
         ValueError: If the line cannot be parsed.
     """
-    name, suffix = line.rstrip().split(":")
+    name, suffix = line.rstrip("\r\n").split(":")
     if suffix and not name:  # Metadata such as ":bytes"
         name, suffix = suffix, name
+    if not _HEADER_NAME_RE.fullmatch(name):
+        raise ValueError(f"invalid overview field name {name!r}")
     full = suffix.lower() == "full"  # ABNF strings ignore case
     if suffix and not full:
         raise ValueError(f"unknown suffix {suffix!r}")

@@ -271,6 +271,14 @@ def test_parse_overview_fmt_invalid(line: str, match: str) -> None:
 
 
 @pytest.mark.parametrize(
+    "line", [":\r\n", " :full\r\n", "Subject :full\r\n", ":bytes \r\n"]
+)
+def test_parse_overview_fmt_rejects_empty_or_padded_name(line: str) -> None:
+    with pytest.raises(ValueError, match="invalid"):
+        parse_overview_fmt(line)
+
+
+@pytest.mark.parametrize(
     ("line", "expected"),
     [
         ("3 hello world\r\n", (3, "hello world")),
