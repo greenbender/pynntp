@@ -112,6 +112,31 @@ def test_parse_headers_continuation() -> None:
     assert parse_headers(headers) == expected
 
 
+@pytest.mark.parametrize("eol", ["\r\n", "\n"])
+@pytest.mark.parametrize(
+    ("lines", "expected"),
+    [
+        (["X-Text: one ", " two"], "one  two"),
+        (["X-Text: one\t", "\ttwo"], "one\t\ttwo"),
+        (["X-Text: one", " two \t", " three"], "one two \t three"),
+        (['X-Text: "one ', ' two"'], '"one  two"'),
+        (["X-Text: \t one ", " two \t"], "one  two"),
+        (["X-Text: ", " two "], "two"),
+        (["X-Text: one \t"], "one"),
+        (["X-Text: \t"], ""),
+    ],
+)
+def test_parse_headers_fold_whitespace(
+    eol: str, lines: list[str], expected: str
+) -> None:
+    text = eol.join([*lines, "Other: value \t", "", "body"])
+    headers = {"X-Text": expected, "Other": "value"}
+    assert parse_headers(text) == headers
+    assert parse_headers(StringIO(text)) == headers
+    assert parse_headers(text.splitlines(keepends=True)) == headers
+    assert parse_headers(text.splitlines()) == headers
+
+
 def test_parse_headers_value_with_colon() -> None:
     assert parse_headers(["Date: 12:00:00\r\n"]) == {"Date": "12:00:00"}
 
