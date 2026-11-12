@@ -540,6 +540,17 @@ def test_iterator_abandoned_before_reconnect(connect: Connect) -> None:
     assert client.date().year == 2024
 
 
+def test_iterator_resumed_after_reconnect_raises(connect: Connect) -> None:
+    listing = b"215 list\r\nalt.test 2 1 y\r\nalt.more 2 1 y\r\n.\r\n"
+    client, _ = connect(WELCOME + MODE_READER + listing, WELCOME + MODE_READER + DATE)
+    groups = client.list_active()
+    next(groups)
+    client.reconnect()
+    with pytest.raises(NNTPSyncError, match="after reconnect"):
+        next(groups)  # Must not read the new connection's lines
+    assert client.date().year == 2024  # The new connection is untouched
+
+
 def test_login_unexpected_multiline_reply_is_read(connect: Connect) -> None:
     server = b"222 1 <a@b>\r\n111 19990101000000\r\n.\r\n" + DATE
     client, _ = connect(WELCOME + MODE_READER + server)

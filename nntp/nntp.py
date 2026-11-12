@@ -585,7 +585,18 @@ class BaseNNTPClient:
     def _response(self, lines: Iterator[bytes]) -> Iterator[bytes]:
         buffer, complete = self._buffer, False
         try:
-            yield from lines
+            while True:
+                # After reconnect() the next line would come from the new
+                # connection, not from this response
+                if self._buffer is not buffer:
+                    raise NNTPSyncError(
+                        "Response iterator used after reconnect(); its response is gone"
+                    )
+                try:
+                    line = next(lines)
+                except StopIteration:
+                    break
+                yield line
             complete = True
         finally:
             # An iterator abandoned before reconnect() must not touch the new
