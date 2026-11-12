@@ -1,7 +1,24 @@
+"""Integration tests against INN on localhost.
+
+They run against the greenbender/inn image and against a stock INN set up
+with setup.sh. The groups may already hold articles, so each test posts its
+own and finds it by Message-ID, and tests of optional features skip when
+CAPABILITIES doesn't list them.
+
+Environment:
+    PYNNTP_TLS_CAFILE: Certificate to verify the TLS server against. Without
+        it, TLS tests don't check the certificate.
+    PYNNTP_POST_WAIT: Seconds to wait for a posted article to be listed in
+        its group (default 10).
+"""
+
 import email.utils
+import functools
 import os
+import re
 import ssl
 import time
+import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -20,48 +37,142 @@ DEFAULT_NEWGROUPS = {
     ("local.test", "Local test group"),
 }
 
+TLS_CAFILE = os.environ.get("PYNNTP_TLS_CAFILE")
+POST_WAIT = float(os.environ.get("PYNNTP_POST_WAIT", "10"))
+
+
+def check_newsgroups(nntp_client: nntp.NNTPClient) -> None:
+    """Check that LIST NEWSGROUPS has INN's default groups.
+
+    The server may have more. INN 2.8 ends the descriptions with a period.
+    """
+    newsgroups = {
+        (name, description.removesuffix("."))
+        for name, description in nntp_client.list_newsgroups()
+    }
+    assert newsgroups >= DEFAULT_NEWGROUPS
+
+
+@functools.cache
+def capabilities() -> tuple[str, ...]:
+    """The server's CAPABILITIES in reader mode."""
+    with nntp.NNTPClient("localhost") as nntp_client:
+        return tuple(nntp_client.capabilities())
+
+
+def require(capability: str) -> None:
+    """Skip the test unless CAPABILITIES lists capability, e.g. "COMPRESS"."""
+    if not any(f"{line} ".startswith(f"{capability} ") for line in capabilities()):
+        pytest.skip(f"The server does not offer {capability}")
+
+
+def inn_version() -> tuple[int, ...]:
+    """INN's version from CAPABILITIES, or () for other servers."""
+    for line in capabilities():
+        if match := re.match(r"IMPLEMENTATION INN (\d+)\.(\d+)\.(\d+)", line):
+            return tuple(int(part) for part in match.groups())
+    return ()
+
+
+def article_headers(subject: str, newsgroup: str = "local.test") -> dict[str, str]:
+    """Headers for a new article, with a unique Message-ID."""
+    return {
+        "From": "GitHub Actions <actions@github.com>",
+        "Newsgroups": newsgroup,
+        "Subject": subject,
+        "Message-ID": f"<pynntp.{uuid.uuid4().hex}@example.com>",
+    }
+
+
+def ihave_headers(subject: str) -> dict[str, str]:
+    """Headers for a new article to offer with IHAVE, which also needs these."""
+    return {
+        **article_headers(subject),
+        "Path": "example.com!not-for-mail",
+        "Date": email.utils.formatdate(),
+    }
+
+
+def number_in_group(
+    nntp_client: nntp.NNTPClient, message_id: str, newsgroup: str = "local.test"
+) -> int:
+    """Return the number of an article in newsgroup, which is then selected.
+
+    The number comes from the Xref header. Waits up to PYNNTP_POST_WAIT
+    seconds for the article to be listed in the group.
+    """
+    deadline = time.monotonic() + POST_WAIT
+    while True:
+        try:
+            xref = nntp_client.head(message_id)["Xref"]
+            numbers = {
+                group: number
+                for group, _, number in (ref.partition(":") for ref in xref.split())
+            }
+            number = int(numbers[newsgroup])
+            _, first, last, _ = nntp_client.group(newsgroup)
+            if first <= number <= last:
+                return number
+        except nntp.NNTPTemporaryError as e:
+            if e.code != 430:  # No such article (yet)
+                raise
+        if time.monotonic() > deadline:
+            raise AssertionError(f"{message_id} is not listed in {newsgroup}")
+        time.sleep(0.2)
+
+
+def post(
+    nntp_client: nntp.NNTPClient,
+    subject: str,
+    newsgroup: str = "local.test",
+    body: str = "",
+) -> tuple[int, str]:
+    """Post an article and return its number in newsgroup and its Message-ID."""
+    headers = article_headers(subject, newsgroup)
+    message_id = headers["Message-ID"]
+    # INN replies "240 Article received <id>"; the message-id is optional.
+    assert nntp_client.post(headers, body or f"{subject}\n") in (message_id, True)
+    return number_in_group(nntp_client, message_id, newsgroup), message_id
+
+
+def tls_context() -> ssl.SSLContext:
+    """TLS settings for the test server's self-signed certificate."""
+    if TLS_CAFILE:
+        return ssl.create_default_context(cafile=TLS_CAFILE)
+    context = ssl.create_default_context()
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE
+    return context
+
 
 def test_nntp_client() -> None:
     nntp_client = nntp.NNTPClient("localhost")
-    newsgroups = set(nntp_client.list_newsgroups())
-    assert newsgroups == DEFAULT_NEWGROUPS
+    check_newsgroups(nntp_client)
 
 
 def test_context_manager() -> None:
     """The client works as a context manager and sends QUIT on exit."""
     with nntp.NNTPClient("localhost") as nntp_client:
-        newsgroups = set(nntp_client.list_newsgroups())
-        assert newsgroups == DEFAULT_NEWGROUPS
+        check_newsgroups(nntp_client)
 
 
 def test_context_manager_on_close() -> None:
     """close() inside the with block is safe; __exit__ does nothing more."""
     with nntp.NNTPClient("localhost") as nntp_client:
-        newsgroups = set(nntp_client.list_newsgroups())
-        assert newsgroups == DEFAULT_NEWGROUPS
+        check_newsgroups(nntp_client)
         nntp_client.close()
 
 
 def test_context_manager_on_quit() -> None:
     """quit() inside the with block is safe; __exit__ does nothing more."""
     with nntp.NNTPClient("localhost") as nntp_client:
-        newsgroups = set(nntp_client.list_newsgroups())
-        assert newsgroups == DEFAULT_NEWGROUPS
+        check_newsgroups(nntp_client)
         nntp_client.quit()
 
 
 def test_nntp_client_without_ssl() -> None:
     with nntp.NNTPClient("localhost", use_ssl=False) as nntp_client:
-        newsgroups = set(nntp_client.list_newsgroups())
-        assert newsgroups == DEFAULT_NEWGROUPS
-
-
-def insecure_context() -> ssl.SSLContext:
-    """TLS without certificate checks, for the test server's self-signed cert."""
-    context = ssl.create_default_context()
-    context.check_hostname = False
-    context.verify_mode = ssl.CERT_NONE
-    return context
+        check_newsgroups(nntp_client)
 
 
 def test_tls_verifies_certificate_by_default() -> None:
@@ -71,59 +182,56 @@ def test_tls_verifies_certificate_by_default() -> None:
 
 def test_nntp_client_with_ssl() -> None:
     with nntp.NNTPClient(
-        "localhost", 563, use_ssl=True, ssl_context=insecure_context()
+        "localhost", 563, use_ssl=True, ssl_context=tls_context()
     ) as nntp_client:
-        newsgroups = set(nntp_client.list_newsgroups())
-        assert newsgroups == DEFAULT_NEWGROUPS
+        check_newsgroups(nntp_client)
 
 
 def test_nntp_client_with_ssl_starttls() -> None:
+    require("STARTTLS")
     with nntp.NNTPClient(
         "localhost",
         use_ssl=True,
         ssl_mode=SSLMode.STARTTLS,
-        ssl_context=insecure_context(),
+        ssl_context=tls_context(),
     ) as nntp_client:
-        newsgroups = set(nntp_client.list_newsgroups())
-        assert newsgroups == DEFAULT_NEWGROUPS
+        check_newsgroups(nntp_client)
 
 
 @pytest.mark.parametrize("newsgroup", ["local.general", "local.test"])
 def test_post(newsgroup: str) -> None:
-    headers = {
-        "Subject": f"Test post to {newsgroup}",
-        "From": "GitHub Actions <actions@github.com>",
-        "Newsgroups": newsgroup,
-    }
     with nntp.NNTPClient("localhost") as nntp_client:
-        message_id = nntp_client.post(headers, f"This is a test post to {newsgroup}")
-        # INN replies "240 Article received <id>"
-        assert isinstance(message_id, str)
-        assert nntp_client.stat(message_id)[1] == message_id
+        _, _, last, _ = nntp_client.group(newsgroup)
+        number, message_id = post(nntp_client, f"Test post to {newsgroup}", newsgroup)
+        assert number > last
+        assert nntp_client.stat(message_id) == (0, message_id)
 
 
 @pytest.mark.parametrize("newsgroup", ["local.general", "local.test", "junk"])
 def test_list_active(newsgroup: str) -> None:
     with nntp.NNTPClient("localhost") as nntp_client:
-        articles = nntp_client.list_active(newsgroup)
-        for name, low, high, status in articles:
-            assert name == newsgroup
-            # junk is empty (high < low); the others have the one test post.
-            assert (low, high) == ((1, 0) if newsgroup == "junk" else (1, 1))
-            assert status == ("n" if newsgroup == "junk" else "y")
+        _, first, last, _ = nntp_client.group(newsgroup)
+        [(name, low, high, status)] = nntp_client.list_active(newsgroup)
+        assert (name, low, high) == (newsgroup, first, last)
+        assert status == ("n" if newsgroup == "junk" else "y")
 
 
 @pytest.mark.parametrize("newsgroup", ["local.general", "local.test"])
 def test_article(newsgroup: str) -> None:
+    body = f"This is a test post to {newsgroup}\n"
     with nntp.NNTPClient("localhost") as nntp_client:
+        number, message_id = post(nntp_client, "Article test", newsgroup, body)
         total, first, last, group = nntp_client.group(newsgroup)
-        assert (total, first, last) == (1, 1, 1)
+        assert total >= 1
+        assert first <= number <= last
         assert group == newsgroup
-        article_number, headers, body = nntp_client.article()
-        assert article_number == 1
+        nntp_client.stat(number)
+        article_number, headers, article_body = nntp_client.article()
+        assert article_number == number
+        assert headers["Message-ID"] == message_id
         assert headers["Newsgroups"] == newsgroup
-        assert headers["Subject"] == f"Test post to {newsgroup}"
-        assert body == f"This is a test post to {newsgroup}\r\n".encode()
+        assert headers["Subject"] == "Article test"
+        assert article_body == body.replace("\n", "\r\n").encode()
 
 
 def test_post_to_junk_is_refused() -> None:
@@ -146,106 +254,159 @@ SINCE = datetime(2000, 1, 1, tzinfo=UTC)
 
 
 def test_newgroups() -> None:
+    """NEWGROUPS lists the groups that LIST ACTIVE.TIMES says are newer."""
     with nntp.NNTPClient("localhost") as nntp_client:
-        names = {group.name for group in nntp_client.newgroups(SINCE)}
-        assert {"local.general", "local.test"} <= names
-        tomorrow = datetime.now(UTC) + timedelta(days=1)
+        active = {group.name for group in nntp_client.list_active()}
+        created = {
+            name
+            for name, timestamp, _ in nntp_client.list_active_times()
+            if timestamp >= SINCE and name in active
+        }
+        assert created <= {group.name for group in nntp_client.newgroups(SINCE)}
+        tomorrow = nntp_client.date() + timedelta(days=1)  # By the server's clock
         assert list(nntp_client.newgroups(tomorrow)) == []
 
 
 def test_newnews() -> None:
+    require("NEWNEWS")
     with nntp.NNTPClient("localhost") as nntp_client:
-        msgids = list(nntp_client.newnews("local.*", SINCE))
-        assert msgids
+        since = nntp_client.date() - timedelta(minutes=1)
+        _, message_id = post(nntp_client, "NEWNEWS test")
+        msgids = list(nntp_client.newnews("local.*", since))
+        assert message_id in msgids
         assert all(m.startswith("<") and m.endswith(">") for m in msgids)
+        tomorrow = nntp_client.date() + timedelta(days=1)
+        assert list(nntp_client.newnews("local.*", tomorrow)) == []
 
 
 def test_xover_full_field() -> None:
     with nntp.NNTPClient("localhost") as nntp_client:
-        nntp_client.group("local.test")
-        [(number, overview)] = nntp_client.xover((1, 1))
-        assert number == 1
-        assert overview["subject"] == "Test post to local.test"
+        number, message_id = post(nntp_client, "Overview test")
+        [(article_number, overview)] = nntp_client.xover((number, number))
+        assert article_number == number
+        assert overview["subject"] == "Overview test"
+        assert overview["message-id"] == message_id
         # Xref is a "full" field: the "Xref: " prefix is stripped.
-        assert overview["xref"].endswith(" local.test:1")
+        assert overview["xref"].endswith(f" local.test:{number}")
         assert not overview["xref"].lower().startswith("xref")
 
 
 def test_hdr_over_stat_listgroup() -> None:
+    subject = "HDR test"
     with nntp.NNTPClient("localhost") as nntp_client:
-        _, first, last, _ = nntp_client.group("local.test")
-        subject = "Test post to local.test"
-        assert list(nntp_client.hdr("Subject", (first, last))) == [(1, subject)]
-        assert list(nntp_client.xhdr("Subject", (first, last))) == [(1, subject)]
-        [(number, overview)] = nntp_client.over((first, last))
-        assert (number, overview["subject"]) == (1, subject)
-        msgid = overview["message-id"]
-        assert nntp_client.stat(1) == (1, msgid)
-        assert nntp_client.stat(msgid)[1] == msgid
-        assert list(nntp_client.listgroup("local.test")) == [1]
-        assert list(nntp_client.listgroup("local.test", (1, 1))) == [1]
+        number, message_id = post(nntp_client, subject)
+        span = (number, number)
+        assert list(nntp_client.hdr("Subject", span)) == [(number, subject)]
+        assert list(nntp_client.xhdr("Subject", span)) == [(number, subject)]
+        # By message-id, the article number is 0
+        assert list(nntp_client.hdr("Subject", message_id)) == [(0, subject)]
+        assert list(nntp_client.xhdr("Subject", message_id)) == [(0, subject)]
+        [(article_number, overview)] = nntp_client.over(span)
+        assert (article_number, overview["message-id"]) == (number, message_id)
+        assert nntp_client.stat(number) == (number, message_id)
+        assert nntp_client.stat(message_id) == (0, message_id)
+        assert number in list(nntp_client.listgroup("local.test"))
+        assert list(nntp_client.listgroup("local.test", span)) == [number]
 
 
 def test_ihave() -> None:
-    message_id = f"<ihave.{os.getpid()}.{time.time_ns()}@example.com>"
-    headers = {
-        "From": "a@example.com",
-        "Newsgroups": "local.test",
-        "Subject": "IHAVE test",
-        "Path": "example.com!not-for-mail",
-        "Date": email.utils.formatdate(),
-    }
+    require("IHAVE")
+    headers = ihave_headers("IHAVE test")
+    message_id = headers["Message-ID"]
+    body = "IHAVE body\n.dot\n.\n"
     with nntp.NNTPClient("localhost") as nntp_client:
-        capabilities = list(nntp_client.capabilities())
-        if "IHAVE" not in capabilities:
-            pytest.skip("The server does not offer IHAVE to this client")
-        nntp_client.ihave(message_id, headers, "IHAVE body\n")
+        nntp_client.ihave(message_id, headers, body)
         with pytest.raises(nntp.NNTPTemporaryError) as info:
-            nntp_client.ihave(message_id, headers, "IHAVE body\n")
+            nntp_client.ihave(message_id, headers, body)
         assert info.value.code == 435  # Duplicate: not wanted
-        assert nntp_client.stat(message_id)[1] == message_id
+        assert nntp_client.stat(message_id) == (0, message_id)
+        assert nntp_client.body(message_id) == b"IHAVE body\r\n.dot\r\n.\r\n"
 
 
-def test_compress() -> None:
-    with nntp.NNTPClient("localhost") as nntp_client:
-        if "COMPRESS DEFLATE" not in list(nntp_client.capabilities()):
-            pytest.skip("The server does not offer COMPRESS DEFLATE")
+@pytest.mark.parametrize("ssl_mode", [None, SSLMode.IMPLICIT, SSLMode.STARTTLS])
+def test_compress(ssl_mode: SSLMode | None) -> None:
+    require("COMPRESS DEFLATE")
+    if ssl_mode == SSLMode.STARTTLS:
+        require("STARTTLS")
+    with nntp.NNTPClient(
+        "localhost",
+        use_ssl=ssl_mode is not None,
+        ssl_mode=ssl_mode or SSLMode.IMPLICIT,
+        ssl_context=tls_context(),
+    ) as nntp_client:
         nntp_client.compress()
         assert "COMPRESS DEFLATE" not in list(nntp_client.capabilities())
-        nntp_client.post(
-            {"From": "a@example.com", "Newsgroups": "local.test", "Subject": "zip"},
-            "compressed body\n" * 100,
-        )
-        _, first, last, _ = nntp_client.group("local.test")
-        overviews = list(nntp_client.xover((first, last)))
-        number = next(n for n, o in overviews if o["subject"] == "zip")
-        assert nntp_client.body(number) == b"compressed body\r\n" * 100
+        check_newsgroups(nntp_client)
         assert nntp_client.date().year >= 2024
         with pytest.raises(nntp.NNTPError, match="not allowed after COMPRESS"):
             nntp_client.mode_reader()
 
 
+@pytest.mark.parametrize("verb", ["POST", "IHAVE"])
+def test_compressed_article(verb: str) -> None:
+    """An article larger than one write is sent compressed and arrives intact."""
+    require("COMPRESS DEFLATE")
+    require(verb)
+    version = inn_version()
+    if version and version < (2, 7, 2):
+        pytest.skip("INN before 2.7.2 can hang on compressed POST and IHAVE")
+    headers = ihave_headers(f"Compressed {verb}")
+    message_id = headers["Message-ID"]
+    body = ".first\n.\n" + ("x" * 200 + "\n") * 400 + "last\n"
+    with nntp.NNTPClient("localhost") as nntp_client:
+        nntp_client.compress()
+        if verb == "POST":
+            assert nntp_client.post(headers, body) in (message_id, True)
+        else:
+            nntp_client.ihave(message_id, headers, body)
+        number = number_in_group(nntp_client, message_id)
+        assert nntp_client.body(number) == body.replace("\n", "\r\n").encode()
+        assert nntp_client.head(number)["Subject"] == f"Compressed {verb}"
+
+
+def test_reconnect_after_abandoned_response() -> None:
+    with nntp.NNTPClient("localhost") as nntp_client:
+        nntp_client.group("local.test")
+        groups = nntp_client.list_active()
+        next(groups)
+        with pytest.raises(nntp.NNTPSyncError):
+            nntp_client.date()
+        del groups  # Abandoned part way
+        nntp_client.reconnect()
+        # A new session, so no group is selected
+        with pytest.raises(nntp.NNTPTemporaryError) as info:
+            nntp_client.stat()
+        assert info.value.code == 412
+
+
 def test_login_refused_keeps_connection() -> None:
     with nntp.NNTPClient("localhost") as nntp_client:
-        with pytest.raises(nntp.NNTPPermanentError) as info:
+        with pytest.raises(nntp.NNTPReplyError) as info:
             nntp_client.login("user", "secret")
-        assert info.value.code == 502  # The test server has no logins
+        # 502: no logins here. INN with TLS set up wants TLS first (483).
+        assert info.value.code in {483, 502}
         assert nntp_client.date().year >= 2024
 
 
 def test_xpat() -> None:
+    require("XPAT")
+    subject = f"XPAT test {uuid.uuid4().hex}"
     with nntp.NNTPClient("localhost") as nntp_client:
-        _, first, last, _ = nntp_client.group("local.test")
-        matches = list(nntp_client.xpat("Subject", (first, last), "*local.test*"))
-        assert (1, "Test post to local.test") in matches
+        number, _ = post(nntp_client, subject)
+        pattern = f"*{subject[-8:]}*"
+        assert list(nntp_client.xpat("Subject", (number,), pattern)) == [
+            (number, subject)
+        ]
 
 
 @pytest.mark.parametrize(
     "url", ["nntp://localhost", "nntps://localhost", "nntp+starttls://localhost"]
 )
 def test_from_url(url: str) -> None:
-    with nntp.NNTPClient.from_url(url, ssl_context=insecure_context()) as nntp_client:
-        assert set(nntp_client.list_newsgroups()) == DEFAULT_NEWGROUPS
+    if url.startswith("nntp+starttls"):
+        require("STARTTLS")
+    with nntp.NNTPClient.from_url(url, ssl_context=tls_context()) as nntp_client:
+        check_newsgroups(nntp_client)
 
 
 def test_from_url_with_options() -> None:

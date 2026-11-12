@@ -1,13 +1,13 @@
 # Changelog
 
-## Unreleased
+## 3.3.0 - 2026-11-12
 
 ### Added
 
 - `utils.parse_active_time()`, `utils.parse_newsgroup_description()`,
   `utils.parse_overview_fmt()` and `utils.parse_number_value()` parse LIST
   ACTIVE.TIMES, LIST NEWSGROUPS, LIST OVERVIEW.FMT and HDR/XHDR/XPAT lines,
-  like `utils.parse_newsgroup()` does for LIST ACTIVE.
+  like `utils.parse_newsgroup()` does for LIST ACTIVE (#138).
 
 ### Changed
 
@@ -16,10 +16,28 @@
   `xzhdr()`, `xover()`/`xzver()`/`over()` and `xpat()`) send their command and
   read its status line when called, as `list()` already did, instead of on the
   first `next()`. A reply error is raised by the call, and another command
-  issued before the iterator is read raises `NNTPSyncError` (#102).
+  issued before the iterator is read raises `NNTPSyncError` (#102, #138).
+
+### Security
+
+Found by go-while.
+
+- Response lines longer than `max_line_length` (64 KiB including CRLF by
+  default; set it on the class or a client) raise `NNTPDataError` and mark the
+  connection out of sync, instead of being buffered without limit. This
+  includes lines decompressed from COMPRESS DEFLATE, XFEATURE COMPRESS GZIP and
+  XZVER/XZHDR, which are inflated at most 64 KiB at a time. Reading a long
+  partial line is no longer quadratic (#148).
+- A server answering 480 again after a successful login made the client log
+  in and retry until `RecursionError`. The command is now retried once, and a
+  second 480 is raised (#146).
+- `login()` checks that both AUTHINFO commands fit the 512-octet limit before
+  sending anything. A password that was too long was refused only after
+  `AUTHINFO USER` was sent, and the error contained it. Errors for AUTHINFO
+  commands no longer show their arguments (#147).
 - The default TLS context requires TLS 1.2 or newer. Python leaves the
   minimum to OpenSSL's configuration, which may allow TLS 1.0 and 1.1. A
-  given `ssl_context` is used as it is.
+  given `ssl_context` is used as it is (#142).
 
 ### Fixed
 
@@ -28,18 +46,20 @@ Found by go-while (#102).
 - 3.2.0 added a second message-id pattern requiring `@`, which replaced the
   RFC 3977 one: STAT, NEXT and LAST rejected valid message-ids without `@`
   (served by INN with `laxmid`), and `ihave()` accepted non-ASCII message-ids
-  and ones over 250 octets. The RFC 3977 pattern is used everywhere again.
+  and ones over 250 octets. The RFC 3977 pattern is used everywhere again
+  (#141).
 - `login()` left an unexpected multi-line reply to AUTHINFO unread, so the
-  next command read its data as a reply.
+  next command read its data as a reply (#141).
 - An iterator abandoned before `reconnect()` no longer marks the new
-  connection broken when it is closed or garbage-collected.
+  connection broken when it is closed or garbage-collected (#138).
 - An empty line in a LIST NEWSGROUPS response raised `IndexError` instead of
-  `NNTPDataError`.
+  `NNTPDataError` (#138).
 - A LIST ACTIVE.TIMES timestamp too large for `datetime` raised
   `OverflowError` or `OSError` instead of `NNTPDataError`;
-  `utils.parse_epoch()` raises `ValueError` for it.
+  `utils.parse_epoch()` raises `ValueError` for it (#138).
 - `date()` raised `NNTPDataError` when the server added text after the date,
-  which RFC 3977 allows (section 3.2), e.g. `111 20240102030405 server time`.
+  which RFC 3977 allows (section 3.2), e.g. `111 20240102030405 server time`
+  (#149).
 
 ## 3.2.0 - 2026-11-09
 
