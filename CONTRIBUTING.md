@@ -62,7 +62,7 @@ fails if the tag and version differ. A pre-release (for example `3.2.0rc1`)
 goes to TestPyPI instead, built with the tag as its version. Only admins can
 create tags.
 
-Label each pull request `breaking`, `security`, `feature`, `bug`,
-`documentation` or `dependencies` (`ignore-for-release` leaves it out): the
-release's "Generate release notes" button groups pull requests by these
-labels (`.github/release.yml`).
+Every pull request needs a label, which CI checks: `breaking`, `security`,
+`feature`, `bug`, `documentation` or `dependencies` (`ignore-for-release`
+leaves it out). The release's "Generate release notes" button groups pull
+requests by these labels (`.github/release.yml`).
