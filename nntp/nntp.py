@@ -955,9 +955,11 @@ class NNTPClient(BaseNNTPClient):
             NNTPDataError: If the time can't be parsed.
         """
         _, message = self.command("DATE", expect=111)
+        # The server may add text after the date (RFC 3977 section 3.2)
+        value = message.split(None, 1)[0] if message.strip() else message
 
         with self._data_errors("DATE response"):
-            return utils.parse_date(message)
+            return utils.parse_date(value)
 
     def help(self) -> str:
         """HELP command.

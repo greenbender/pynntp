@@ -35,6 +35,8 @@ Found by go-while (#102).
 - A LIST ACTIVE.TIMES timestamp too large for `datetime` raised
   `OverflowError` or `OSError` instead of `NNTPDataError`;
   `utils.parse_epoch()` raises `ValueError` for it.
+- `date()` raised `NNTPDataError` when the server added text after the date,
+  which RFC 3977 allows (section 3.2), e.g. `111 20240102030405 server time`.
 
 ## 3.2.0 - 2026-11-09
 
