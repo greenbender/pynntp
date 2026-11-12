@@ -20,9 +20,9 @@ uv run pytest --ignore=tests/integration  # Unit tests, no server needed
 
 ## Integration tests
 
-`tests/integration` runs against a real INN server, the
-[greenbender/inn](https://github.com/greenbender/inn-docker) image, on ports
-119 and 563:
+`tests/integration` runs against a real INN server on localhost, ports 119
+and 563. CI runs it against the
+[greenbender/inn](https://github.com/greenbender/inn-docker) image:
 
 ```sh
 docker run -d --rm --name inn -p 119:119 -p 563:563 greenbender/inn
@@ -30,7 +30,19 @@ uv run pytest
 docker stop inn
 ```
 
-The tests post articles, so use a fresh container for each run.
+and against Ubuntu's inn2 package, set up by `tests/integration/inn2/setup.sh`
+(Debian's works too). The script changes INN's configuration, so run it only
+on a CI runner or a disposable machine:
+
+```sh
+sudo tests/integration/inn2/setup.sh
+PYNNTP_TLS_CAFILE=/etc/news/pynntp-cert.pem uv run pytest
+```
+
+`PYNNTP_TLS_CAFILE` is the certificate to verify the TLS tests against;
+without it they don't check it. The tests post articles but don't rely on the
+groups being empty, and those for optional features skip when the server
+doesn't list them in CAPABILITIES.
 
 ## Docs
 
