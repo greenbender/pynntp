@@ -1,0 +1,22 @@
+# Every pull request needs a label, so it is grouped in the generated release
+# notes (.github/release.yml). Bots (pre-commit.ci, Dependabot) are exempt.
+
+name: Labels
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, labeled, unlabeled]
+
+permissions: {}
+
+jobs:
+  label:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require a label
+        if: >-
+          github.event.pull_request.user.type != 'Bot'
+          && join(github.event.pull_request.labels.*.name) == ''
+        run: |
+          echo "::error::Add a label, e.g. bug or feature (see CONTRIBUTING.md)"
+          exit 1
