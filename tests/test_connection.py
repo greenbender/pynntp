@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import gc
+import ssl
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
@@ -558,3 +559,32 @@ def test_480_after_login_is_raised(connect: Connect) -> None:
     assert info.value.code == 480
     assert sock.sent == b"DATE\r\nAUTHINFO USER u\r\nAUTHINFO PASS p\r\nDATE\r\n"
     assert client.date().year == 2024  # The status line was read; in sync
+
+
+def test_default_tls_context_requires_tls12(
+    connect: Connect, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    contexts: list[ssl.SSLContext] = []
+    default_context = ssl.create_default_context
+
+    def capture() -> ssl.SSLContext:
+        context = default_context()
+        # As with an OpenSSL configuration that allows TLS 1.0 and 1.1
+        context.minimum_version = ssl.TLSVersion.MINIMUM_SUPPORTED
+        contexts.append(context)
+        return context
+
+    monkeypatch.setattr("nntp.nntp.ssl.create_default_context", capture)
+    monkeypatch.setattr(ssl.SSLContext, "wrap_socket", lambda _, sock, **__: sock)
+    connect(WELCOME + MODE_READER, use_ssl=True)
+    assert [c.minimum_version for c in contexts] == [ssl.TLSVersion.TLSv1_2]
+
+
+def test_given_tls_context_is_not_changed(
+    connect: Connect, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    minimum = context.minimum_version
+    monkeypatch.setattr(ssl.SSLContext, "wrap_socket", lambda _, sock, **__: sock)
+    connect(WELCOME + MODE_READER, use_ssl=True, ssl_context=context)
+    assert context.minimum_version == minimum

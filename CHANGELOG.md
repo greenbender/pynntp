@@ -17,6 +17,9 @@
   read its status line when called, as `list()` already did, instead of on the
   first `next()`. A reply error is raised by the call, and another command
   issued before the iterator is read raises `NNTPSyncError` (#102).
+- The default TLS context requires TLS 1.2 or newer. Python leaves the
+  minimum to OpenSSL's configuration, which may allow TLS 1.0 and 1.1. A
+  given `ssl_context` is used as it is.
 
 ### Fixed
 
@@ -35,9 +38,8 @@ Found by go-while (#102).
 - A LIST ACTIVE.TIMES timestamp too large for `datetime` raised
   `OverflowError` or `OSError` instead of `NNTPDataError`;
   `utils.parse_epoch()` raises `ValueError` for it.
-- A server that answered 480 again after a successful login made the client
-  log in and retry until `RecursionError`. The command is now retried once
-  after logging in, and a second 480 is raised.
+- `date()` raised `NNTPDataError` when the server added text after the date,
+  which RFC 3977 allows (section 3.2), e.g. `111 20240102030405 server time`.
 
 ## 3.2.0 - 2026-11-09
 

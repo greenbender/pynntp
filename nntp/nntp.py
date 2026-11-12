@@ -264,7 +264,8 @@ class BaseNNTPClient:
             use_ssl: Use TLS.
             ssl_mode: IMPLICIT (TLS from the start, usually port 563) or STARTTLS.
             ssl_context: TLS settings, e.g. to trust a private CA. Defaults to
-                ssl.create_default_context(), which verifies the certificate.
+                ssl.create_default_context() with TLS 1.2 as the minimum,
+                which verifies the certificate.
 
         Raises:
             OSError: On socket or TLS errors.
@@ -335,7 +336,11 @@ class BaseNNTPClient:
             raise
 
     def _enable_tls(self, host: str) -> None:
-        context = self._ssl_context or ssl.create_default_context()
+        context = self._ssl_context
+        if context is None:
+            context = ssl.create_default_context()
+            # Python leaves the minimum to OpenSSL's configuration
+            context.minimum_version = ssl.TLSVersion.TLSv1_2
         self.socket = context.wrap_socket(
             self.socket,
             server_hostname=host,
@@ -758,7 +763,8 @@ class NNTPClient(BaseNNTPClient):
             use_ssl: Use TLS.
             ssl_mode: IMPLICIT (TLS from the start, usually port 563) or STARTTLS.
             ssl_context: TLS settings, e.g. to trust a private CA. Defaults to
-                ssl.create_default_context(), which verifies the certificate.
+                ssl.create_default_context() with TLS 1.2 as the minimum,
+                which verifies the certificate.
             reader: Send MODE READER after connecting, and after reconnect().
 
         Raises:
@@ -962,9 +968,11 @@ class NNTPClient(BaseNNTPClient):
             NNTPDataError: If the time can't be parsed.
         """
         _, message = self.command("DATE", expect=111)
+        # The server may add text after the date (RFC 3977 section 3.2)
+        value = message.split(None, 1)[0] if message.strip() else message
 
         with self._data_errors("DATE response"):
-            return utils.parse_date(message)
+            return utils.parse_date(value)
 
     def help(self) -> str:
         """HELP command.
