@@ -1455,7 +1455,7 @@ class NNTPClient(BaseNNTPClient):
             if line.startswith(b"=ybegin "):
                 decoder, size, open_block, seen_block = YEnc(), 0, True, True
                 multipart = "part" in parse_keywords(line)
-            elif line.startswith(b"=yend"):
+            elif open_block and line.startswith(b"=yend"):
                 mismatch = check_trailer(line, size, decoder.crc32, part=multipart)
                 error = error or mismatch
                 open_block = False
