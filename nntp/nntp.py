@@ -1812,7 +1812,7 @@ class NNTPClient(BaseNNTPClient):
 
         # Only recognize known reply positions, not addresses in free text.
         parts = message.split()
-        if parts[:2] == ["Article", "received"]:
+        if [word.casefold() for word in parts[:2]] == ["article", "received"]:
             parts = parts[2:]
         if parts and _MESSAGE_ID_RE.fullmatch(parts[0]):
             return parts[0]

@@ -36,6 +36,11 @@ def test_post_header_surrogateescape(connect: Connect) -> None:
     ("reply", "result"),
     [
         (b"240 Article received <new@id>", "<new@id>"),  # INN
+        (b"240 article received <new@id>", "<new@id>"),  # OUS
+        (b"240 ARTICLE RECEIVED <new@id>", "<new@id>"),
+        (b"240 <new@id> Article posted", "<new@id>"),  # Diablo
+        (b"240 Article posted", True),  # NewsCache
+        (b"240 Article posted successfully", True),  # go-pugleaf
         (b"240 <new@id> posted", "<new@id>"),
         (b"240 <no-at-sign> posted", "<no-at-sign>"),
         (b"240 Article received <no-at-sign>", "<no-at-sign>"),
