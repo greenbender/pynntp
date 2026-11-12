@@ -61,3 +61,8 @@ that version, for example `3.1.0`; it is uploaded to PyPI, and the release
 fails if the tag and version differ. A pre-release (for example `3.2.0rc1`)
 goes to TestPyPI instead, built with the tag as its version. Only admins can
 create tags.
+
+Label each pull request `breaking`, `security`, `feature`, `bug`,
+`documentation` or `dependencies` (`ignore-for-release` leaves it out): the
+release's "Generate release notes" button groups pull requests by these
+labels (`.github/release.yml`).
