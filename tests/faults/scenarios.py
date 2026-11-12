@@ -2216,9 +2216,47 @@ def session_scenarios() -> Iterator[Scenario]:
 
 
 @cache
+def longline_scenarios() -> Iterator[Scenario]:
+    """A response line at and over max_line_length (64 KiB with CRLF)."""
+    limit = nntp.NNTPClient.max_line_length
+    too_long = Err(nntp.NNTPDataError, state="broken", match="Line longer than")
+
+    def body(c: nntp.NNTPClient) -> object:
+        return c.body("<1@test>", decode=False)
+
+    yield Scenario(
+        "longline/body-at-limit",
+        store_cfg(faults={"long_line": {"BODY": limit - 2}}),
+        body,
+        Ok(b"x" * (limit - 2) + b"\r\n" + STORE_BODY_BYTES),
+        probe="store",
+    )
+    yield Scenario(
+        "longline/body-over-limit",
+        store_cfg(faults={"long_line": {"BODY": limit - 1}}),
+        body,
+        too_long,
+        probe="store",
+    )
+    yield Scenario(
+        "longline/over-over-limit",
+        store_cfg(faults={"long_line": {"OVER": limit - 1}}),
+        in_group(lambda c: list(c.over((1, 3)))),
+        too_long,
+        probe="store",
+    )
+    yield Scenario(
+        "longline/compress-body-over-limit",
+        store_cfg(store={"compress": True}, faults={"long_line": {"BODY": limit - 1}}),
+        compressed(body),
+        too_long,
+        probe="store",
+    )
+
+
 def scenarios() -> list[Scenario]:
     """All scenarios; names are unique."""
-    families = [
+    families: list[Callable[[], Iterator[Scenario]]] = [
         split_scenarios,
         code_scenarios,
         leftover_scenarios,
@@ -2234,6 +2272,7 @@ def scenarios() -> list[Scenario]:
         ihave_scenarios,
         auth_scenarios,
         malformed_scenarios,
+        longline_scenarios,
         session_scenarios,
     ]
     return [sc for family in families for sc in family()]

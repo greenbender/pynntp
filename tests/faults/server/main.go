@@ -102,6 +102,7 @@ type FaultsCfg struct {
 	LineDelayMS   map[string]float64  `json:"line_delay_ms"`
 	OverrideFrom  map[string]int      `json:"override_from"`
 	OverrideTimes map[string]int      `json:"override_times"`
+	LongLine      map[string]int      `json:"long_line"`
 }
 
 type Config struct {
@@ -248,14 +249,12 @@ func rawHandler(steps []RawStep, rec *recorder, tlsCfg *tls.Config) func(*fakese
 					rec.add(&rec.lines, line)
 				}
 			case "starttls":
-				tc := tls.Server(conn, tlsCfg)
-				tc.SetDeadline(time.Now().Add(10 * time.Second))
-				if err := tc.Handshake(); err != nil {
+				// The handshake is bounded by the server's Deadline
+				if err := c.StartTLS(tlsCfg); err != nil {
 					rec.add(&rec.notes, "starttls handshake: "+err.Error())
 					return
 				}
-				tc.SetDeadline(time.Time{})
-				conn = tc
+				conn = c.Raw()
 				r = bufio.NewReader(conn)
 				w = conn
 			case "inflate":
@@ -361,6 +360,7 @@ func main() {
 			OverrideLine: f.OverrideLine, DropInMultiline: f.Drop, Drip: msMap(f.DripMS),
 			Endless: f.Endless, LineDelay: msMap(f.LineDelayMS),
 			OverrideFrom: f.OverrideFrom, OverrideTimes: f.OverrideTimes,
+			LongLine: f.LongLine,
 		}
 	}
 	rec := &recorder{}

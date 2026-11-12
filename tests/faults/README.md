@@ -58,16 +58,12 @@ pytest reports XPASS and the run fails: remove `known=` in the same change.
 | Scenarios | Open bug |
 |---|---|
 | `leftover/second-status-same-packet`, `leftover/status-after-terminator-same-packet`, `leftover/extra-line-after-greeting` | Data the server sent after a reply is taken as the reply to the next command |
-| `code/authinfo-user-215-block` | login() raises on an unexpected multi-line reply without reading it |
-| `session/abandoned-iterator-finalized-after-reconnect`, `session/iterator-variable-reused-after-reconnect`, `session/header-parse-error-then-reconnect` | A response iterator closed after reconnect() marks the new connection broken (the last one only on some Python versions) |
 | `session/resume-abandoned-iterator-after-reconnect` | A response iterator resumed after reconnect() reads the new connection's reply |
 | `gzip/terminator-inside-trailer-late` | With TERMINATOR, the reply waits for the end of the gzip stream after the terminator |
 | `xzver/sync-flushed-not-finished` | XZVER rejects a complete DEFLATE stream that is sync-flushed, not finished |
 | `xzver/last-row-without-crlf` | XZVER drops a last row that has no CRLF |
 | `yenc/stray-yend-after-block` | A =yend line after a complete block raises NNTPYEncError |
-| `malformed/listgroup-invalid-211` | LISTGROUP does not check the numbers in its 211 reply |
 | `malformed/group-negative-numbers` | group() accepts negative numbers in the 211 reply |
-| `malformed/stat-msgid-without-at` | stat() rejects a message-id without @, which RFC 3977 allows |
 
 ## Updating nntp-testkit
 
