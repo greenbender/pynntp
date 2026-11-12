@@ -44,6 +44,12 @@ without it they don't check it. The tests post articles but don't rely on the
 groups being empty, and those for optional features skip when the server
 doesn't list them in CAPABILITIES.
 
+To run them against another server, set `PYNNTP_HOST`, `PYNNTP_PORT`,
+`PYNNTP_TLS_PORT` (0 skips implicit TLS), `PYNNTP_USER`/`PYNNTP_PASS` and
+`PYNNTP_GROUPS` (groups the tests may post to); the docstring of
+`tests/integration/inn2/test_inn2.py` lists them all. Checks of INN's own
+default setup then skip.
+
 ## Docs
 
 ```sh
