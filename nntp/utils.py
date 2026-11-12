@@ -150,7 +150,7 @@ def parse_overview_fmt(line: str) -> tuple[str, bool]:
     Raises:
         ValueError: If the line cannot be parsed.
     """
-    name, suffix = line.rstrip("\r\n").split(":")
+    name, suffix = line.rstrip().split(":")
     if suffix and not name:  # Metadata such as ":bytes"
         name, suffix = suffix, name
     if not _HEADER_NAME_RE.fullmatch(name):
