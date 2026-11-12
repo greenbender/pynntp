@@ -271,6 +271,20 @@ def test_group_bad_reply(connect: Connect) -> None:
         client.group("alt.test")
 
 
+@pytest.mark.parametrize("bad", [b"-5", b"+3", b"1_0", "\u0661".encode()])
+@pytest.mark.parametrize("position", [0, 1, 2])
+def test_group_rejects_non_ascii_numbers_and_stays_in_sync(
+    connect: Connect, bad: bytes, position: int
+) -> None:
+    fields = [b"3", b"10", b"12"]
+    fields[position] = bad
+    reply = b"211 " + b" ".join(fields) + b" alt.test\r\n"
+    client, _ = connect(WELCOME + MODE_READER + reply + b"111 20240102030405\r\n")
+    with pytest.raises(nntp.NNTPDataError, match="Invalid GROUP"):
+        client.group("alt.test")
+    assert client.date() == datetime(2024, 1, 2, 3, 4, 5, tzinfo=UTC)
+
+
 def test_list_without_keyword(connect: Connect) -> None:
     client, sock = connect(WELCOME + MODE_READER + LIST)
     assert len(list(client.list())) == 2

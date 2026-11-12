@@ -1279,6 +1279,10 @@ class NNTPClient(BaseNNTPClient):
 
         parts = message.split(None, 4)
         try:
+            if len(parts) < 4 or any(
+                not (part.isascii() and part.isdecimal()) for part in parts[:3]
+            ):
+                raise ValueError("Invalid GROUP numbers")
             total = int(parts[0])
             first = int(parts[1])
             last = int(parts[2])
