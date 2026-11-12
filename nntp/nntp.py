@@ -622,7 +622,9 @@ class BaseNNTPClient:
                 pass
         raise NNTPReplyError(code, message)
 
-    def _command(self, verb: str, args: str | None) -> tuple[int, str]:
+    def _command(
+        self, verb: str, args: str | None, *, login: bool = True
+    ) -> tuple[int, str]:
         if self._reading:
             raise NNTPSyncError(
                 "Command issued while a response is being read; read it to the "
@@ -657,6 +659,11 @@ class BaseNNTPClient:
                     or words == ["MODE", "READER"]
                 ):
                     raise
+                if not login:
+                    # Logged in already; logging in again could go on forever
+                    raise NNTPTemporaryError(
+                        e.code, f"{e.message} (still asked to log in after logging in)"
+                    ) from e
                 if words[:1] == ["STARTTLS"]:
                     # Logging in now would send the password before TLS
                     raise NNTPTemporaryError(
@@ -669,7 +676,7 @@ class BaseNNTPClient:
                     ) from e
 
         self.login()
-        return self._command(verb, args)
+        return self._command(verb, args, login=False)
 
     def login(self, username: str | None = None, password: str | None = None) -> None:
         """AUTHINFO USER and PASS commands.

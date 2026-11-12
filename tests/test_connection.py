@@ -595,6 +595,18 @@ def test_raw_authinfo_errors_hide_credentials(
     assert sock.sent == b""
 
 
+def test_480_after_login_is_raised(connect: Connect) -> None:
+    """A second 480 after logging in is raised instead of logging in again."""
+    server = WELCOME + MODE_READER + b"480 auth\r\n381 more\r\n281 ok\r\n480 again\r\n"
+    client, sock = connect(server + DATE, username="u", password="p")
+    sock.sent = b""
+    with pytest.raises(nntp.NNTPTemporaryError, match="after logging in") as info:
+        client.date()
+    assert info.value.code == 480
+    assert sock.sent == b"DATE\r\nAUTHINFO USER u\r\nAUTHINFO PASS p\r\nDATE\r\n"
+    assert client.date().year == 2024  # The status line was read; in sync
+
+
 def test_default_tls_context_requires_tls12(
     connect: Connect, monkeypatch: pytest.MonkeyPatch
 ) -> None:
