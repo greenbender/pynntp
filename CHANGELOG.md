@@ -17,6 +17,9 @@
   read its status line when called, as `list()` already did, instead of on the
   first `next()`. A reply error is raised by the call, and another command
   issued before the iterator is read raises `NNTPSyncError` (#102).
+- The default TLS context requires TLS 1.2 or newer. Python leaves the
+  minimum to OpenSSL's configuration, which may allow TLS 1.0 and 1.1. A
+  given `ssl_context` is used as it is.
 
 ### Fixed
 
