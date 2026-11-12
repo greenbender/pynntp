@@ -24,6 +24,7 @@ class FakeSocket:
 
     def __init__(self, data: bytes, chunk: int) -> None:
         self.data = data
+        self.pos = 0  # Bytes of data served so far
         self.chunk = chunk
         self.sent = b""
         self.sends = 0
@@ -32,8 +33,8 @@ class FakeSocket:
         FakeSocket.last = self
 
     def recv(self, size: int) -> bytes:
-        out = self.data[: min(size, self.chunk)]
-        self.data = self.data[len(out) :]
+        out = self.data[self.pos : self.pos + min(size, self.chunk)]
+        self.pos += len(out)
         return out
 
     def sendall(self, data: bytes) -> None:
