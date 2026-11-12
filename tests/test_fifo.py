@@ -1,5 +1,7 @@
 import random
 
+import pytest
+
 from nntp.fifo import BytesFifo
 
 
@@ -17,6 +19,37 @@ def test_iter() -> None:
     assert list(fifo) == [b"a\r\n", b"b\r\n"]
     fifo.write(b"\r\n")
     assert list(fifo) == [b"c\r\n"]  # Iteration resumes after more data
+
+
+def test_crlf_split_across_writes() -> None:
+    fifo = BytesFifo(b"a\r")
+    assert fifo.readline() == b""
+    fifo.write(b"\n")
+    assert fifo.readline() == b"a\r\n"
+    fifo = BytesFifo(b"a\r\nb\r")
+    assert fifo.readline() == b"a\r\n"
+    fifo.write(b"\n")  # Completes the unread "b\r"
+    assert fifo.readline() == b"b\r\n"
+    fifo.write(b"c")
+    fifo.write(b"\r")
+    fifo.write(b"")
+    assert fifo.readline() == b""
+    fifo.write(b"\nd")
+    assert fifo.readline() == b"c\r\n"
+    assert fifo.read() == b"d"
+
+
+@pytest.mark.parametrize("start", [1, 5000])  # Stays in the buffer, or is queued
+def test_long_partial_line(start: int) -> None:
+    fifo = BytesFifo(b"first\r\n" + b"x" * start)
+    assert fifo.readline() == b"first\r\n"
+    for _ in range(100_000):
+        assert fifo.readline() == b""
+        fifo.write(b"x")
+    assert len(fifo) == start + 100_000
+    fifo.write(b"\r\nnext")
+    assert fifo.readline() == b"x" * (start + 100_000) + b"\r\n"
+    assert fifo.read() == b"next"
 
 
 def test_read() -> None:

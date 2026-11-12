@@ -115,7 +115,8 @@ All errors derive from `nntp.NNTPError`:
 - `NNTPReplyError`: an unexpected reply, with `code` and `message`.
   `NNTPTemporaryError` (4xx) and `NNTPPermanentError` (5xx) are subclasses.
 - `NNTPDataError`: a response that can't be parsed, such as a bad overview
-  line. `NNTPYEncError` is a subclass.
+  line, or a line longer than `client.max_line_length` (64 KiB, including
+  CRLF). `NNTPYEncError` is a subclass.
 - `NNTPSyncError`: the connection can't be used, see below.
 
 A streamed response must be read to the end before the next command. If one
