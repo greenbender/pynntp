@@ -30,6 +30,8 @@ from .types import Newsgroup, Range
 _HEADER_NAME_RE = re.compile(r"[!-9;-~]+")
 # A folded header value continues after a line break followed by whitespace.
 _HEADER_FOLD_RE = re.compile(r"\r?\n(?=[ \t])")
+# RFC 3977 section 3.6: 1-248 printable US-ASCII characters except ">".
+_MESSAGE_ID_RE = re.compile(r"<[!-=?-~]{1,248}>")
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping
@@ -175,7 +177,12 @@ def parse_number_value(line: str) -> tuple[int, str]:
         ValueError: If the line cannot be parsed.
     """
     first, *value = line.rstrip("\r\n").split(None, 1)
-    number = 0 if first.startswith("<") else int(first)
+    if _MESSAGE_ID_RE.fullmatch(first):
+        number = 0
+    elif first.isascii() and first.isdecimal():
+        number = int(first)
+    else:
+        raise ValueError(f"invalid article number or message-id: {first!r}")
     return number, value[0] if value else ""
 
 

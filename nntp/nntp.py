@@ -36,6 +36,7 @@ from . import utils
 from .fifo import BytesFifo
 from .headerdict import HeaderDict
 from .types import SSLMode
+from .utils import _MESSAGE_ID_RE
 from .yenc import YEnc, check_trailer, parse_keywords
 
 if TYPE_CHECKING:
@@ -60,10 +61,6 @@ __all__ = [
     "NNTPYEncError",
 ]
 
-
-# RFC 3977 section 3.6: "<", 1-248 printable US-ASCII characters except ">",
-# then ">"
-_MESSAGE_ID_RE = re.compile(r"<[!-=?-~]{1,248}>")
 
 # URL scheme -> (use_ssl, ssl_mode) for NNTPClient.from_url()
 _URL_SCHEMES = {
