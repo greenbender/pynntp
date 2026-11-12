@@ -2410,6 +2410,113 @@ def run_client(sc: Scenario, host: str, port: int, ca: str) -> JSON:
 # Server side (parent process)
 
 
+# The scenarios use short keys; nntp-fakeserver takes the kit's Go field names
+OPTION_KEYS = {
+    "greeting": "Greeting",
+    "no_greeting": "NoGreeting",
+    "raw_stall": "RawStall",
+    "tls": "TLS",
+    "deadline_ms": "Deadline",
+}
+FAULT_KEYS = {
+    "delay_ms": "Delay",
+    "close_after": "CloseAfter",
+    "override": "Override",
+    "override_line": "OverrideLine",
+    "drop_in_multiline": "DropInMultiline",
+    "drip_ms": "Drip",
+    "endless": "Endless",
+    "line_delay_ms": "LineDelay",
+    "override_from": "OverrideFrom",
+    "override_times": "OverrideTimes",
+    "long_line": "LongLine",
+}
+STORE_KEYS = {
+    "user": "User",
+    "pass": "Pass",
+    "reader_only": "ReaderOnly",
+    "compress": "Compress",
+    "compress_output_only": "CompressOutputOnly",
+    "listgroup_range": "ListgroupRange",
+    "no_over": "NoOver",
+    "no_xover": "NoXover",
+}
+PEER_KEYS = {
+    "user": "User",
+    "pass": "Pass",
+    "have": "Have",
+    "defer436": "Defer436Once",
+    "reject": "Reject",
+    "compress": "Compress",
+}
+STEP_KEYS = {
+    "expect": "Expect",
+    "read_dot": "ReadDot",
+    "dot_max": "DotMax",
+    "sleep_ms": "Sleep",
+    "then": "Then",
+}
+CHUNK_KEYS = {
+    "b64": "B64",
+    "gap_ms": "Gap",
+    "split": "Split",
+    "split_gap_ms": "SplitGap",
+}
+
+
+def renamed(d: JSON, keys: dict[str, str], what: str) -> JSON:
+    """d with its keys renamed; an unknown key is an error, not dropped."""
+    if unknown := set(d) - set(keys):
+        msg = f"unknown {what} keys: {sorted(unknown)}"
+        raise ValueError(msg)
+    return {keys[k]: v for k, v in d.items()}
+
+
+def kit_config(server: JSON) -> JSON:
+    """A scenario's server config in nntp-fakeserver's schema."""
+    s = dict(server)
+    mode = s.pop("mode")
+    out: JSON = {"Mode": mode}
+    store, peer = s.pop("store", None), s.pop("peer", None)
+    raw, faults = s.pop("raw", None), s.pop("faults", None)
+    options = renamed(s, OPTION_KEYS, "server")
+    if faults:
+        options["Faults"] = renamed(faults, FAULT_KEYS, "fault")
+    if store is not None:
+        store = dict(store)
+        groups = store.pop("groups", [])
+        articles = store.pop("articles", [])
+        options["StoreOpts"] = renamed(store, STORE_KEYS, "store")
+        out["Store"] = {
+            "Groups": [{"Name": n, "Description": d} for n, d in groups],
+            "Articles": [
+                {
+                    "Group": a["group"],
+                    "Number": a["number"],
+                    "MessageID": a["msgid"],
+                    "Headers": a["headers"],
+                    "Body": a["body"],
+                }
+                for a in articles
+            ],
+        }
+    if peer is not None:
+        out["PeerOptions"] = renamed(peer, PEER_KEYS, "peer")
+    if raw is not None:
+        out["Raw"] = [
+            {
+                **renamed(
+                    {k: v for k, v in st.items() if k != "send"}, STEP_KEYS, "step"
+                ),
+                "Send": [renamed(c, CHUNK_KEYS, "chunk") for c in st["send"]],
+            }
+            for st in raw
+        ]
+    if options:
+        out["Options"] = options
+    return out
+
+
 def wire_summary(server: JSON) -> list[str]:
     """Readable server bytes of a script, for failure messages."""
     out = []
@@ -2424,7 +2531,7 @@ def run(sc: Scenario, server: Path) -> JSON:
     """Run sc against the server binary; result["reason"] is "" if it passed."""
     with tempfile.TemporaryDirectory() as tmp:
         cfg = Path(tmp, "scenario.json")
-        cfg.write_text(json.dumps(sc.server))
+        cfg.write_text(json.dumps(kit_config(sc.server)))
         with subprocess.Popen(  # noqa: S603
             [server, cfg], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True
         ) as srv:
