@@ -580,10 +580,13 @@ class BaseNNTPClient:
         else:
             lines = self._info_yenczlib() if yz else self._info_plain()
         self._reading = True  # Set now, not on first next()
-        return self._response(lines)
+        return self._response(lines, self._buffer)
 
-    def _response(self, lines: Iterator[bytes]) -> Iterator[bytes]:
-        buffer, complete = self._buffer, False
+    def _response(self, lines: Iterator[bytes], buffer: BytesFifo) -> Iterator[bytes]:
+        # buffer is taken when the response is registered, not on the first
+        # next(): an iterator first used after reconnect() must not adopt the
+        # new connection
+        complete = False
         try:
             while True:
                 # After reconnect() the next line would come from the new
