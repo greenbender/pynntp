@@ -80,6 +80,22 @@ def test_hdr_bad_line(connect: Connect) -> None:
         list(client.hdr("Subject"))
 
 
+@pytest.mark.parametrize(
+    "reply",
+    [b"111 20240102030405\r\n", b"111 20240102030405 server time\r\n"],
+)
+def test_date_ignores_text_after_the_date(connect: Connect, reply: bytes) -> None:
+    client, _ = connect(WELCOME + MODE_READER + reply)
+    assert client.date() == datetime(2024, 1, 2, 3, 4, 5, tzinfo=UTC)
+
+
+@pytest.mark.parametrize("reply", [b"111\r\n", b"111 2024010203040 5\r\n"])
+def test_date_without_a_date_raises_data_error(connect: Connect, reply: bytes) -> None:
+    client, _ = connect(WELCOME + MODE_READER + reply)
+    with pytest.raises(nntp.NNTPDataError, match="Invalid DATE response"):
+        client.date()
+
+
 def test_sync_error_is_exported() -> None:
     assert nntp.NNTPSyncError is nntp.nntp.NNTPSyncError
 
