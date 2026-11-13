@@ -62,6 +62,13 @@ def test_article_bad_status(connect: Connect, status: bytes) -> None:
     assert client.date().year == 2024  # The article was read; in sync
 
 
+def test_head_folded_whitespace(connect: Connect) -> None:
+    server = b'221 1 <a@b>\r\nX-Text: "one \r\n two" \t\r\n.\r\n' + DATE
+    client, _ = connect(WELCOME + MODE_READER + server)
+    assert client.head(1)["X-Text"] == '"one  two"'
+    assert client.date().year == 2024
+
+
 @pytest.mark.parametrize("part", [None, 2])
 def test_yenc_valid(connect: Connect, part: int | None) -> None:
     client, _ = connect(WELCOME + MODE_READER + yenc_body(PLAIN, part=part))
