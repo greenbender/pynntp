@@ -320,6 +320,20 @@ def test_xhdr_by_message_id_legacy_rows(connect: Connect) -> None:
     assert list(client.xhdr("Subject", "<a@b>")) == [(0, "subj")]
 
 
+@pytest.mark.parametrize(
+    ("verb", "code"), [("hdr", b"225"), ("xhdr", b"221"), ("xpat", b"221")]
+)
+@pytest.mark.parametrize("token", [b"<broken", b"<>", b"-1", b"+1", b"1_0"])
+def test_header_rows_reject_invalid_identifiers(
+    connect: Connect, verb: str, code: bytes, token: bytes
+) -> None:
+    server = code + b" ok\r\n" + token + b" value\r\n.\r\n"
+    client, _ = connect(WELCOME + MODE_READER + server)
+    args = ("Subject", (1, 2), "*") if verb == "xpat" else ("Subject", (1, 2))
+    with pytest.raises(nntp.NNTPDataError):
+        list(getattr(client, verb)(*args))
+
+
 def test_newgroups_year_zero_padded(connect: Connect) -> None:
     client, sock = connect(WELCOME + MODE_READER + b"231 ok\r\n.\r\n")
     sock.sent = b""
