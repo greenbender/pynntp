@@ -251,6 +251,9 @@ def test_parse_newsgroup_description_empty() -> None:
         (":bytes\r\n", ("bytes", False)),
         ("Xref:full\r\n", ("Xref", True)),
         ("Xref:FULL\r\n", ("Xref", True)),
+        ("Subject: \r\n", ("Subject", False)),
+        ("Xref:full \r\n", ("Xref", True)),
+        (":bytes \r\n", ("bytes", False)),
     ],
 )
 def test_parse_overview_fmt(line: str, expected: tuple[str, bool]) -> None:
@@ -267,6 +270,12 @@ def test_parse_overview_fmt(line: str, expected: tuple[str, bool]) -> None:
 )
 def test_parse_overview_fmt_invalid(line: str, match: str) -> None:
     with pytest.raises(ValueError, match=match):
+        parse_overview_fmt(line)
+
+
+@pytest.mark.parametrize("line", [":\r\n", " :full\r\n", "Subject :full\r\n"])
+def test_parse_overview_fmt_rejects_empty_or_padded_name(line: str) -> None:
+    with pytest.raises(ValueError, match="invalid"):
         parse_overview_fmt(line)
 
 

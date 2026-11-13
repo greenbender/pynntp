@@ -265,6 +265,14 @@ def test_overview_fmt_bad_line(connect: Connect, line: bytes) -> None:
         list(client.list_overview_fmt())
 
 
+@pytest.mark.parametrize("line", [b":", b" :full", b"Subject :full"])
+def test_overview_fmt_rejects_invalid_name(connect: Connect, line: bytes) -> None:
+    server = b"215 fmt\r\n" + line + b"\r\n.\r\n"
+    client, _ = connect(WELCOME + MODE_READER + server)
+    with pytest.raises(nntp.NNTPDataError, match=r"OVERVIEW\.FMT"):
+        list(client.list_overview_fmt())
+
+
 def test_group_bad_reply(connect: Connect) -> None:
     client, _ = connect(WELCOME + MODE_READER + b"211 x y z alt.test\r\n")
     with pytest.raises(nntp.NNTPDataError, match="Invalid GROUP"):
