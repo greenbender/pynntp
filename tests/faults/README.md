@@ -13,8 +13,8 @@ need Go (1.26 or later).
 ## Run
 
 ```sh
-(cd tests/faults/server && go build -o faultserver .)
-PYNNTP_FAULT_SERVER=tests/faults/server/faultserver uv run pytest tests/faults -rxX
+go install github.com/go-while/nntp-testkit/cmd/nntp-fakeserver@v0.13.0
+PYNNTP_FAULT_SERVER=$(go env GOPATH)/bin/nntp-fakeserver uv run pytest tests/faults -rxX
 ```
 
 A full run takes a minute or two; `-k gzip` and the like select a subset.
@@ -23,11 +23,12 @@ it from the Actions tab (it also runs weekly).
 
 ## How it works
 
-`server/` is a small Go program that serves one scenario: either a byte-exact
-script (read a client line, write these bytes in these pieces, then close,
-reset, start TLS or start reading DEFLATE), or the fake server's Store or IHAVE
-peer with its faults. It prints its address, serves until stdin closes, then
-prints what it saw.
+`nntp-fakeserver` is nntp-testkit's fake server as a program. It serves one
+scenario from a JSON file: either a byte-exact script (read a client line, write
+these bytes in these pieces, then close, reset, start TLS or start reading
+DEFLATE), or the fake server's Store or IHAVE peer with its faults. It prints its
+address, serves until stdin closes, then prints what it saw. The scenarios use
+short keys; `kit_config()` turns them into the program's JSON schema.
 
 `scenarios.py` holds the scenarios. For each one, `run()` starts the server and
 runs the client in a child process under a deadline and (except on
@@ -55,20 +56,17 @@ A scenario with `known=` set fails on the current code and is marked as an
 expected failure, with the reason shown by `-rxX`. When a fix makes it pass,
 pytest reports XPASS and the run fails: remove `known=` in the same change.
 
-| Scenarios | Open bug |
-|---|---|
-| `leftover/second-status-same-packet`, `leftover/status-after-terminator-same-packet`, `leftover/extra-line-after-greeting` | Data the server sent after a reply is taken as the reply to the next command |
-| `session/resume-abandoned-iterator-after-reconnect` | A response iterator resumed after reconnect() reads the new connection's reply |
-| `gzip/terminator-inside-trailer-late` | With TERMINATOR, the reply waits for the end of the gzip stream after the terminator |
-| `xzver/sync-flushed-not-finished` | XZVER rejects a complete DEFLATE stream that is sync-flushed, not finished |
-| `xzver/last-row-without-crlf` | XZVER drops a last row that has no CRLF |
-| `yenc/stray-yend-after-block` | A =yend line after a complete block raises NNTPYEncError |
-| `malformed/group-negative-numbers` | group() accepts negative numbers in the 211 reply |
+| Scenarios | Open bug | Issue |
+|---|---|---|
+| `leftover/second-status-same-packet`, `leftover/status-after-terminator-same-packet`, `leftover/extra-line-after-greeting` | Data the server sent after a reply is taken as the reply to the next command | #161 |
+| `session/resume-abandoned-iterator-after-reconnect` | A response iterator resumed after reconnect() reads the new connection's reply | #162 |
+| `gzip/terminator-inside-trailer-late` | With TERMINATOR, the reply waits for the end of the gzip stream after the terminator | #155 |
+| `xzver/sync-flushed-not-finished` | XZVER rejects a complete DEFLATE stream that is sync-flushed, not finished | #154 |
+| `xzver/last-row-without-crlf` | XZVER drops a last row that has no CRLF | #160 |
+| `yenc/stray-yend-after-block` | A =yend line after a complete block raises NNTPYEncError | #159 |
+| `malformed/group-negative-numbers` | group() accepts negative numbers in the 211 reply | #157 |
 
 ## Updating nntp-testkit
 
-`server/go.mod` pins a tagged nntp-testkit release. To update it:
-
-```sh
-cd tests/faults/server && go get github.com/go-while/nntp-testkit@vX.Y.Z && go mod tidy
-```
+The version is pinned in the command above and in the Faults workflow
+(`NNTP_TESTKIT`); change both together.

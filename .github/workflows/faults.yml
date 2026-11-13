@@ -12,6 +12,9 @@ on:
 permissions:
   contents: read
 
+env:
+  NNTP_TESTKIT: v0.13.0
+
 jobs:
   faults:
     runs-on: ubuntu-26.04
@@ -23,18 +26,17 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: tests/faults/server/go.mod
-          cache-dependency-path: tests/faults/server/go.sum
+          go-version: "1.26"
+          cache: false
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           python-version: ${{ matrix.python-version }}
           enable-cache: true
       - name: Install dependencies
         run: uv sync --locked
-      - name: Build the fault server
-        working-directory: tests/faults/server
-        run: go build -o "$RUNNER_TEMP/faultserver" .
+      - name: Install nntp-fakeserver
+        run: GOBIN="$RUNNER_TEMP" go install "github.com/go-while/nntp-testkit/cmd/nntp-fakeserver@$NNTP_TESTKIT"
       - name: Run the fault tests
         env:
-          PYNNTP_FAULT_SERVER: ${{ runner.temp }}/faultserver
+          PYNNTP_FAULT_SERVER: ${{ runner.temp }}/nntp-fakeserver
         run: uv run pytest tests/faults -rxX

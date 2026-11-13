@@ -1,6 +1,6 @@
 """Fault-injection scenarios: pynntp against the nntp-testkit fake server.
 
-A scenario is a config for the Go server in tests/faults/server (a byte-exact
+A scenario is a config for nntp-testkit's nntp-fakeserver (a byte-exact
 script, or the fake server's Store or IHAVE peer with its faults), a client
 action and the expected outcome.
 

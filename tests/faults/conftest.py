@@ -9,11 +9,11 @@ import pytest
 
 SERVER = os.environ.get("PYNNTP_FAULT_SERVER", "")
 
-# Not collected unless PYNNTP_FAULT_SERVER names the server binary
+# Not collected unless PYNNTP_FAULT_SERVER names the nntp-fakeserver binary
 collect_ignore: list[str] = [] if SERVER else ["test_faults.py"]
 
 
 @pytest.fixture(scope="session")
 def fault_server() -> Path:
-    """The fault server binary built from tests/faults/server."""
+    """The nntp-fakeserver binary of nntp-testkit."""
     return Path(SERVER).resolve()
