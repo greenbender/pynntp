@@ -36,7 +36,26 @@ def test_post_header_surrogateescape(connect: Connect) -> None:
     ("reply", "result"),
     [
         (b"240 Article received <new@id>", "<new@id>"),  # INN
+        (b"240 article received <new@id>", "<new@id>"),  # OUS
+        (b"240 ARTICLE RECEIVED <new@id>", "<new@id>"),
+        (b"240 <new@id> Article posted", "<new@id>"),  # Diablo
+        (b"240 Article posted", True),  # NewsCache
+        (b"240 Article posted successfully", True),  # go-pugleaf
         (b"240 <new@id> posted", "<new@id>"),
+        (b"240 <no-at-sign> posted", "<no-at-sign>"),
+        (b"240 Article received <no-at-sign>", "<no-at-sign>"),
+        (b"240 posted ok; report abuse to <abuse@example.net>", True),
+        (b"240 Article received; report abuse to <abuse@example.net>", True),
+        (b"240 Article received not-an-id <abuse@example.net>", True),
+        (b"240 Article received (<new@id>)", True),
+        (b"240 Article received <new@id>suffix", True),
+        (b"240 prefix<new@id> posted", True),
+        (b"240 <new@id>suffix posted", True),
+        (b"240 <> posted", True),
+        (b"240 <bad<id> posted", "<bad<id>"),  # RFC 3977 permits an inner "<"
+        (b"240 <bad id> posted", True),
+        (b"240 <" + b"a" * 248 + b"> posted", "<" + "a" * 248 + ">"),
+        (b"240 <" + b"a" * 249 + b"> posted", True),
         (b"240 article posted ok", True),
         (b"240", True),
     ],
@@ -44,8 +63,10 @@ def test_post_header_surrogateescape(connect: Connect) -> None:
 def test_post_message_id_from_reply(
     connect: Connect, reply: bytes, result: str | bool
 ) -> None:
-    client, _ = connect(WELCOME + MODE_READER + b"340 send\r\n" + reply + b"\r\n")
+    server = b"340 send\r\n" + reply + b"\r\n" + DATE
+    client, _ = connect(WELCOME + MODE_READER + server)
     assert client.post({"Subject": "hi"}, b"x\n") == result
+    assert client.date().year == 2024
 
 
 def test_post_bad_header_sends_nothing(connect: Connect) -> None:

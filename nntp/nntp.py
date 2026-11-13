@@ -1794,8 +1794,9 @@ class NNTPClient(BaseNNTPClient):
                 binary file.
 
         Returns:
-            The message-id if the server's reply includes one (common, though not
-            standard), otherwise True.
+            The message-id if it is the first reply token or follows INN's
+            "Article received" prefix (common, though not standard), otherwise
+            True.
 
         Raises:
             ValueError: If a header name or value is invalid (see
@@ -1809,9 +1810,13 @@ class NNTPClient(BaseNNTPClient):
         hdrs = utils.unparse_headers(headers or {})
         message = self._transfer("POST", None, hdrs, body, ready=340, done=240)
 
-        # Servers often include the message-id, e.g. INN's "Article received <id>"
-        match = _MESSAGE_ID_RE.search(message)
-        return match.group() if match else True
+        # Only recognize known reply positions, not addresses in free text.
+        parts = message.split()
+        if [word.casefold() for word in parts[:2]] == ["article", "received"]:
+            parts = parts[2:]
+        if parts and _MESSAGE_ID_RE.fullmatch(parts[0]):
+            return parts[0]
+        return True
 
     def ihave(
         self,
