@@ -1646,15 +1646,15 @@ class NNTPClient(BaseNNTPClient):
         range: str | Range | None = None,
         verb: str = "XOVER",
     ) -> Iterator[tuple[int, HeaderDict]]:
+        args = None
+        if range is not None:
+            args = utils.unparse_msgid_range(range)
+
         # get overview fmt before entering generator
         names = self.overview_fmt
         keys = tuple(name.casefold() for name in names)
         # "full" fields include the header name in the value (RFC 3977 8.4.2)
         full = [i for i, (_, is_full) in enumerate(self._overview_fields) if is_full]
-
-        args = None
-        if range is not None:
-            args = utils.unparse_msgid_range(range)
 
         code, message = self.command(verb, args, expect=224)
         lines = self.info(code, message, yz=verb == "XZVER")
