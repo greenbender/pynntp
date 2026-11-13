@@ -114,6 +114,49 @@ def test_xzhdr(connect: Connect) -> None:
     assert sock.sent.endswith(b"XZHDR Subject 1-2\r\n")
 
 
+@pytest.mark.parametrize("terminated", [False, True])
+@pytest.mark.parametrize("rows", [1, 2])
+def test_xzver_last_row(connect: Connect, terminated: bool, rows: int) -> None:
+    payload = b"\r\n".join(XOVER_LINES.splitlines()[:rows])
+    if terminated:
+        payload += b"\r\n"
+    server = OVERVIEW_FMT + yenczlib(b"224", payload) + DATE
+    client, _ = connect(WELCOME + MODE_READER + server)
+    expected = [
+        (1, HeaderDict({"Subject": "hello", "From": "me"})),
+        (2, HeaderDict({"Subject": ".dot", "From": "you"})),
+    ]
+    assert list(client.xzver((1, 2))) == expected[:rows]
+    assert client.date().year == 2024
+
+
+@pytest.mark.parametrize("terminated", [False, True])
+@pytest.mark.parametrize("rows", [1, 2])
+def test_xzhdr_last_row(connect: Connect, terminated: bool, rows: int) -> None:
+    payload = b"\r\n".join([b"1 hello", b"2 world"][:rows])
+    if terminated:
+        payload += b"\r\n"
+    client, _ = connect(WELCOME + MODE_READER + yenczlib(b"221", payload) + DATE)
+    assert list(client.xzhdr("Subject", (1, 2))) == [(1, "hello"), (2, "world")][:rows]
+    assert client.date().year == 2024
+
+
+def test_xzver_empty_compressed_stream(connect: Connect) -> None:
+    client, _ = connect(
+        WELCOME + MODE_READER + OVERVIEW_FMT + yenczlib(b"224", b"") + DATE
+    )
+    assert list(client.xzver()) == []
+    assert client.date().year == 2024
+
+
+def test_xzver_unterminated_row_bad_trailer(connect: Connect) -> None:
+    server = yenczlib(b"224", b"1\thello\tme", trailer="=yend size=0")
+    client, _ = connect(WELCOME + MODE_READER + OVERVIEW_FMT + server)
+    rows = client.xzver()
+    with pytest.raises(nntp.NNTPDataError, match="trailer says 0"):
+        next(rows)  # A partial row is only returned after validation
+
+
 @pytest.mark.parametrize(
     ("server", "match"),
     [
