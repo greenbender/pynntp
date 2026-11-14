@@ -526,12 +526,13 @@ class BaseNNTPClient:
 
         Used by XZVER and XZHDR. The lines are the same as _info_plain() would
         give for the uncompressed command. Only the first =yend is checked;
-        any lines after it are read and ignored.
+        the lines after it are read and ignored, except a second =ybegin,
+        which is an error as the response carries one block.
 
         Raises:
             NNTPDataError: If the yEnc header or trailer is bad, the size or CRC
-                check fails, decompression fails or ends early, or a line is
-                too long.
+                check fails, a second =ybegin follows the trailer, decompression
+                fails or ends early, or a line is too long.
         """
         decoder = YEnc()
         inflate = zlib.decompressobj(-15)
@@ -543,9 +544,10 @@ class BaseNNTPClient:
         if not header.startswith(b"=ybegin "):
             raise NNTPDataError("Bad yEnc header")
 
-        buf, trailer, size = BytesFifo(), b"", 0
+        buf, trailer, size, second_block = BytesFifo(), b"", 0, False
         for line in lines:
-            if trailer:  # Read to the terminator, but ignore what follows the trailer
+            if trailer:  # Read to the terminator; only a second =ybegin is noted
+                second_block = second_block or line.startswith(b"=ybegin ")
                 continue
             if line.startswith(b"=yend"):
                 trailer = line
@@ -564,6 +566,8 @@ class BaseNNTPClient:
             raise NNTPDataError("Missing yEnc trailer")
         if mismatch := check_trailer(trailer, size, decoder.crc32, part=False):
             raise NNTPDataError(f"Bad yEnc data: {mismatch}")
+        if second_block:
+            raise NNTPDataError("Bad yEnc data: second =ybegin after the trailer")
         if not inflate.eof:
             raise NNTPDataError("Decompression failed: compressed data is truncated")
 
