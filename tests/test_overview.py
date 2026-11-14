@@ -149,6 +149,32 @@ def test_xzver_tiny_lines(connect: Connect) -> None:
     check_xover(list(client.xzver((1, 2))))
 
 
+STRAY_AFTER = [
+    pytest.param(b"=yend size=0 crc32=00000000\r\n", id="stray-yend"),
+    pytest.param(
+        b"=yend size=0 crc32=00000000\r\n" + yenc_encode(b"junk"),
+        id="stray-yend-and-data",
+    ),
+]
+
+
+@pytest.mark.parametrize("after", STRAY_AFTER)
+def test_xzver_stray_yend_after_trailer(connect: Connect, after: bytes) -> None:
+    # Only the first =yend closes the block; a stray one must not replace it
+    server = OVERVIEW_FMT + yenczlib(b"224", XOVER_LINES, after=after) + DATE
+    client, _ = connect(WELCOME + MODE_READER + server)
+    check_xover(list(client.xzver((1, 2))))
+    assert client.date().year == 2024  # Read to the end; still in sync
+
+
+@pytest.mark.parametrize("after", STRAY_AFTER)
+def test_xzhdr_stray_yend_after_trailer(connect: Connect, after: bytes) -> None:
+    server = yenczlib(b"221", b"1 hello\r\n2 world\r\n", after=after) + DATE
+    client, _ = connect(WELCOME + MODE_READER + server)
+    assert list(client.xzhdr("Subject", (1, 2))) == [(1, "hello"), (2, "world")]
+    assert client.date().year == 2024
+
+
 def test_xzver_empty_response(connect: Connect) -> None:
     server = OVERVIEW_FMT + b"224 none\r\n.\r\n" + DATE
     client, _ = connect(WELCOME + MODE_READER + server)

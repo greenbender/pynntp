@@ -525,7 +525,8 @@ class BaseNNTPClient:
         """Yield the lines of a yEnc-encoded, zlib-compressed response.
 
         Used by XZVER and XZHDR. The lines are the same as _info_plain() would
-        give for the uncompressed command.
+        give for the uncompressed command. Only the first =yend is checked;
+        any lines after it are read and ignored.
 
         Raises:
             NNTPDataError: If the yEnc header or trailer is bad, the size or CRC
@@ -544,6 +545,8 @@ class BaseNNTPClient:
 
         buf, trailer, size = BytesFifo(), b"", 0
         for line in lines:
+            if trailer:  # Read to the terminator, but ignore what follows the trailer
+                continue
             if line.startswith(b"=yend"):
                 trailer = line
                 continue
