@@ -794,6 +794,8 @@ class BaseNNTPClient:
         can't be resumed: it raises NNTPSyncError, as after reconnect().
         """
         self._broken = True
+        # An open response is gone: its iterator's finally won't reset this
+        self._reading = False
         self._buffer = BytesFifo()  # Lines already buffered are not for the client
         self.socket.close()
 

@@ -14,6 +14,7 @@ import nntp
 from nntp.nntp import NNTPSyncError
 from nntp.types import SSLMode
 from tests.helpers import (
+    COMPRESS_OK,
     DATE,
     LIST,
     MODE_READER,
@@ -22,6 +23,7 @@ from tests.helpers import (
     WELCOME,
     Connect,
     FakeSocket,
+    deflated,
 )
 
 if TYPE_CHECKING:
@@ -568,8 +570,43 @@ def test_iterator_resumed_after_close_raises(
         if started:
             next(groups)
     assert sock.closed
+    read = sock.pos
     with pytest.raises(NNTPSyncError, match="or close"):
         next(groups)  # Must not yield the lines still buffered
+    assert sock.pos == read  # And must not read the closed socket
+
+
+@pytest.mark.parametrize("started", [True, False])
+@pytest.mark.parametrize("abandon", [False, True])
+def test_command_after_close_with_open_iterator(
+    connect: Connect, started: bool, abandon: bool
+) -> None:
+    listing = b"215 list\r\nalt.test 2 1 y\r\nalt.more 2 1 y\r\n.\r\n"
+    client, _ = connect(WELCOME + MODE_READER + listing)
+    groups = client.list_active()
+    if started:
+        next(groups)
+    client.close()
+    if abandon:
+        groups.close()  # type: ignore[attr-defined]  # Must not change the message
+    with pytest.raises(NNTPSyncError, match="closed or out of sync"):
+        client.date()
+
+
+def test_corrupt_compressed_data_during_response(connect: Connect) -> None:
+    # No terminating ".": the corrupt bytes arrive while the response is read
+    listing = b"215 list\r\nalt.test 2 1 y\r\n"
+    server = COMPRESS_OK + deflated(listing) + b"\xff\xff\xff\xff"
+    client, _ = connect(WELCOME + MODE_READER + server)
+
+    def compress_then_list() -> None:
+        client.compress()  # The bad bytes may already be buffered here
+        list(client.list_active())  # Or they are read during the response
+
+    with pytest.raises(nntp.NNTPDataError, match="Decompression failed"):
+        compress_then_list()
+    with pytest.raises(NNTPSyncError, match="closed or out of sync"):
+        client.date()
 
 
 def test_login_unexpected_multiline_reply_is_read(connect: Connect) -> None:
