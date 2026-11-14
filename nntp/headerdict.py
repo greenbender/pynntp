@@ -74,6 +74,19 @@ class HeaderDict(MutableMapping[str, str]):
     def __len__(self) -> int:
         return len(self._items)
 
+    def copy(self) -> HeaderDict:
+        """Return an independent copy with the same names, values and order.
+
+        Like dict.copy(): changing the copy does not change this HeaderDict,
+        and changing this HeaderDict does not change the copy.
+        """
+        dup = HeaderDict.__new__(HeaderDict)
+        dup._items = self._items.copy()  # noqa: SLF001
+        return dup
+
+    def __copy__(self) -> HeaderDict:
+        return self.copy()
+
     def _folded(self) -> dict[str, str]:
         return {folded: value for folded, (_, value) in self._items.items()}
 

@@ -1,3 +1,6 @@
+import copy
+import pickle
+
 import pytest
 
 from nntp.headerdict import HeaderDict
@@ -122,3 +125,51 @@ def test_eq_values_case_sensitive() -> None:
 )
 def test_not_equal(other: object) -> None:
     assert HeaderDict(A="1") != other
+
+
+def test_copy_module_is_independent() -> None:
+    original = HeaderDict(Subject="x")
+    dup = copy.copy(original)
+    dup["SUBJECT"] = "y"
+    dup["From"] = "me"
+    assert original == {"Subject": "x"}
+    assert dup == {"Subject": "y", "From": "me"}
+
+
+def test_copy_method_is_independent() -> None:
+    original = HeaderDict(Subject="x")
+    dup = original.copy()
+    assert type(dup) is HeaderDict
+    del dup["subject"]
+    original["From"] = "me"
+    assert dup == {}
+    assert original == {"Subject": "x", "From": "me"}
+
+
+def test_copy_keeps_names_and_order() -> None:
+    original = HeaderDict([("KeYMiXeD", "1"), ("Subject", "2")])
+    for dup in (copy.copy(original), original.copy()):
+        assert list(dup) == ["KeYMiXeD", "Subject"]
+        assert dup["keymixed"] == "1"
+        assert "SUBJECT" in dup
+        dup["keymixed"] = "3"
+        assert list(dup) == ["KeYMiXeD", "Subject"]
+        assert original["KEYMIXED"] == "1"
+
+
+def test_deepcopy_is_independent() -> None:
+    original = HeaderDict(Subject="x")
+    dup = copy.deepcopy(original)
+    assert type(dup) is HeaderDict
+    dup["SUBJECT"] = "y"
+    assert original == {"Subject": "x"}
+    assert dup == {"Subject": "y"}
+
+
+def test_pickle_round_trip() -> None:
+    original = HeaderDict([("KeYMiXeD", "1"), ("Subject", "2")])
+    restored = pickle.loads(pickle.dumps(original))  # noqa: S301 - our own data
+    assert type(restored) is HeaderDict
+    assert list(restored) == ["KeYMiXeD", "Subject"]
+    assert restored["keymixed"] == "1"
+    assert restored == original
