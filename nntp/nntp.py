@@ -524,8 +524,12 @@ class BaseNNTPClient:
     def _inflated_lines(
         self, inflate: _Decompress, data: bytes, buf: BytesFifo
     ) -> Iterator[bytes]:
-        """Decompress data into buf and yield the complete lines in buf."""
-        while True:
+        """Decompress data into buf and yield the complete lines in buf.
+
+        Nothing is fed once the stream has ended: the decompressor would keep it
+        in unused_data, which grows with every append.
+        """
+        while not inflate.eof:
             data = _inflate(inflate, data)
             buf.write(data)
             yield from self._lines(buf)
@@ -541,10 +545,14 @@ class BaseNNTPClient:
         the lines after it are read and ignored, except a second =ybegin,
         which is an error as the response carries one block.
 
+        Data after the end of the compressed stream is an error. It is read to the
+        terminator but not fed to the decompressor, which would keep it in memory.
+
         Raises:
             NNTPDataError: If the yEnc header or trailer is bad, the size or CRC
-                check fails, a second =ybegin follows the trailer, decompression
-                fails or ends early, or a line is too long.
+                check fails, data follows the end of the compressed stream, a
+                second =ybegin follows the trailer, decompression fails or ends
+                early, or a line is too long.
         """
         decoder = YEnc()
         inflate = zlib.decompressobj(-15)
@@ -556,7 +564,7 @@ class BaseNNTPClient:
         if not header.startswith(b"=ybegin "):
             raise NNTPDataError("Bad yEnc header")
 
-        buf, trailer, size, second_block = BytesFifo(), b"", 0, False
+        buf, trailer, size, second_block, extra = BytesFifo(), b"", 0, False, False
         for line in lines:
             if trailer:  # Read to the terminator; only a second =ybegin is noted
                 second_block = second_block or line.startswith(b"=ybegin ")
@@ -566,12 +574,18 @@ class BaseNNTPClient:
                 continue
             data = decoder.decode(line)
             size += len(data)
+            extra = extra or (inflate.eof and bool(data))  # Checked before feeding
             yield from self._inflated_lines(inflate, data, buf)
 
         if not trailer:
             raise NNTPDataError("Missing yEnc trailer")
         if mismatch := check_trailer(trailer, size, decoder.crc32, part=False):
             raise NNTPDataError(f"Bad yEnc data: {mismatch}")
+        # The trailer matched, so the block is intact and the data is the server's
+        if extra or inflate.unused_data:  # Also data after the end in the same line
+            raise NNTPDataError(
+                "Decompression failed: data after the end of the compressed stream"
+            )
         if second_block:
             raise NNTPDataError("Bad yEnc data: second =ybegin after the trailer")
         if not inflate.eof:
