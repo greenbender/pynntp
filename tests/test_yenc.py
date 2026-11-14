@@ -1,4 +1,5 @@
 import random
+import time
 import zlib
 from pathlib import Path
 
@@ -87,6 +88,32 @@ def test_parse_keywords() -> None:
         "line": "128",
         "size": "500",
     }
+
+
+@pytest.mark.parametrize(
+    ("line", "expected"),
+    [
+        (b"=ybegin line=128 size=5 name=a b=c", {"line": "128", "size": "5"}),
+        (b"a-b=c d_e=f", {"b": "c", "d_e": "f"}),  # Keys are whole words
+        (b"x=1x=2 y=", {"x": "1x=2", "y": ""}),
+        (b"ab_c=1 9z=2 ==4 a==5", {"ab_c": "1", "9z": "2", "a": "=5"}),
+        (
+            b"=yend size=5 part=1 pcrc32=11111111 crc32=22222222",
+            {"size": "5", "part": "1", "pcrc32": "11111111", "crc32": "22222222"},
+        ),
+    ],
+)
+def test_parse_keywords_table(line: bytes, expected: dict[str, str]) -> None:
+    assert parse_keywords(line) == expected
+
+
+def test_parse_keywords_long_word_run_is_linear() -> None:
+    # A long run of word characters with no "=" must not cost quadratic time.
+    run = b"a" * 65536
+    started = time.perf_counter()
+    assert parse_keywords(b"=ybegin " + run + b" size=5") == {"size": "5"}
+    assert parse_keywords(b"=yend size=5 " + run) == {"size": "5"}
+    assert time.perf_counter() - started < 1.0
 
 
 def test_trailer_part_crc32() -> None:

@@ -148,6 +148,19 @@ def test_body_ybegin_prefix_is_plain(connect: Connect) -> None:
     assert client.body(1) == b"=ybeginners guide\r\n"
 
 
+def test_body_yenc_long_word_run_keeps_sync(connect: Connect) -> None:
+    plain = b"hello world"
+    size, crc = len(plain), zlib.crc32(plain)
+    # Word characters without "=" on the =ybegin and =yend lines (under the line limit)
+    run = "a" * 60000
+    begin = f"222 1 <a@b>\r\n=ybegin {run} line=128 size={size} name=x\r\n"
+    end = f"=yend size={size} crc32={crc:08x} {run}\r\n.\r\n"
+    server = begin.encode() + dot_stuff(yenc_encode(plain)) + end.encode()
+    client, _ = connect(WELCOME + MODE_READER + server + DATE)
+    assert client.body(1) == plain
+    assert client.date().year == 2024
+
+
 def test_body_two_yenc_blocks(connect: Connect) -> None:
     first, second = b"first file", b"second file"
     blocks = b"".join(
