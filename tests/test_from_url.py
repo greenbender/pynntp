@@ -128,6 +128,19 @@ def test_invalid_urls(init_args: dict[str, Any], url: str, match: str) -> None:
     assert init_args == {}
 
 
+@pytest.mark.parametrize("url", ["nntp://h", "nntp://h:1119"])
+def test_plain_url_refuses_tls_context(
+    monkeypatch: pytest.MonkeyPatch, url: str
+) -> None:
+    def no_socket(*_: object, **__: object) -> FakeSocket:
+        raise AssertionError("a socket was opened")
+
+    monkeypatch.setattr("nntp.nntp.socket.create_connection", no_socket)
+    context = ssl.create_default_context()
+    with pytest.raises(ValueError, match="needs use_ssl=True"):
+        nntp.NNTPClient.from_url(url, password="pw", ssl_context=context)
+
+
 def test_connects_and_logs_in(monkeypatch: pytest.MonkeyPatch) -> None:
     server = WELCOME + b"480 auth\r\n381 pass\r\n281 ok\r\n" + DATE
     sock = FakeSocket(server, 4096)
