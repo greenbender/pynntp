@@ -521,6 +521,18 @@ class BaseNNTPClient:
         # Anything left over belongs to the next reply
         self._buffer.write(buf.read())
 
+    def _inflated_lines(
+        self, inflate: _Decompress, data: bytes, buf: BytesFifo
+    ) -> Iterator[bytes]:
+        """Decompress data into buf and yield the complete lines in buf."""
+        while True:
+            data = _inflate(inflate, data)
+            buf.write(data)
+            yield from self._lines(buf)
+            if len(data) < _INFLATE_SIZE:
+                return
+            data = b""  # More output may be pending
+
     def _info_yenczlib(self) -> Iterator[bytes]:
         """Yield the lines of a yEnc-encoded, zlib-compressed response.
 
@@ -554,13 +566,7 @@ class BaseNNTPClient:
                 continue
             data = decoder.decode(line)
             size += len(data)
-            while True:
-                data = _inflate(inflate, data)
-                buf.write(data)
-                yield from self._lines(buf)
-                if len(data) < _INFLATE_SIZE:
-                    break
-                data = b""  # More output may be pending
+            yield from self._inflated_lines(inflate, data, buf)
 
         if not trailer:
             raise NNTPDataError("Missing yEnc trailer")
