@@ -197,7 +197,9 @@ def parse_headers(obj: str | Iterable[str]) -> HeaderDict:
     """
     if isinstance(obj, str):
         obj = StringIO(obj)
-    hdrs: list[tuple[str, str]] = []
+    # Each header keeps its value pieces in a list, joined once at the end:
+    # joining on every continuation line is quadratic in the number of lines.
+    hdrs: list[tuple[str, list[str]]] = []
     for line in obj:
         line = line.rstrip("\r\n")
         # A blank line (CRLF or LF) ends the headers.
@@ -207,14 +209,13 @@ def parse_headers(obj: str | Iterable[str]) -> HeaderDict:
         if line[0] in " \t":
             if not hdrs:
                 raise ValueError("First header is a continuation")
-            name, value = hdrs[-1]
-            hdrs[-1] = name, value + line
+            hdrs[-1][1].append(line)
             continue
         name, sep, value = line.partition(":")
         if not sep:
             raise ValueError(f"Invalid header line: {line!r}")
-        hdrs.append((name.strip(), value))
-    return HeaderDict((name, value.strip()) for name, value in hdrs)
+        hdrs.append((name.strip(), [value]))
+    return HeaderDict((name, "".join(pieces).strip()) for name, pieces in hdrs)
 
 
 def unparse_headers(hdrs: Mapping[str, str]) -> str:
