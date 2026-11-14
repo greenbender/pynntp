@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import gc
 import ssl
+from contextlib import closing
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
@@ -553,6 +554,22 @@ def test_iterator_resumed_after_reconnect_raises(
     with pytest.raises(NNTPSyncError, match="after reconnect"):
         next(groups)  # Must not read the new connection's lines
     assert client.date().year == 2024  # The new connection is untouched
+
+
+@pytest.mark.parametrize("started", [True, False])
+@pytest.mark.parametrize("leave", ["close", "exit"])
+def test_iterator_resumed_after_close_raises(
+    connect: Connect, started: bool, leave: str
+) -> None:
+    listing = b"215 list\r\nalt.test 2 1 y\r\nalt.more 2 1 y\r\n.\r\n"
+    client, sock = connect(WELCOME + MODE_READER + listing)
+    with client if leave == "exit" else closing(client):
+        groups = client.list_active()
+        if started:
+            next(groups)
+    assert sock.closed
+    with pytest.raises(NNTPSyncError, match="or close"):
+        next(groups)  # Must not yield the lines still buffered
 
 
 def test_login_unexpected_multiline_reply_is_read(connect: Connect) -> None:

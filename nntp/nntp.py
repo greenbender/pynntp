@@ -340,7 +340,8 @@ class BaseNNTPClient:
 
         Use this to recover from NNTPSyncError. Session state such as the
         selected group, the current article and XFEATURE settings is not
-        restored.
+        restored. A response iterator opened before this call can't be resumed
+        afterwards: it raises NNTPSyncError.
         """
         self.close()
         self._connect()
@@ -589,11 +590,12 @@ class BaseNNTPClient:
         complete = False
         try:
             while True:
-                # After reconnect() the next line would come from the new
-                # connection, not from this response
+                # After reconnect() or close() the next line would come from
+                # the new connection, or from none, not from this response
                 if self._buffer is not buffer:
                     raise NNTPSyncError(
-                        "Response iterator used after reconnect(); its response is gone"
+                        "Response iterator used after reconnect() or close(); "
+                        "its response is gone"
                     )
                 try:
                     line = next(lines)
@@ -788,9 +790,11 @@ class BaseNNTPClient:
     def close(self) -> None:
         """Close the connection without sending QUIT.
 
-        After this, only reconnect() can be used.
+        After this, only reconnect() can be used. A response iterator still open
+        can't be resumed: it raises NNTPSyncError, as after reconnect().
         """
         self._broken = True
+        self._buffer = BytesFifo()  # Lines already buffered are not for the client
         self.socket.close()
 
 
@@ -804,7 +808,9 @@ class NNTPClient(BaseNNTPClient):
     to the end before issuing the next command; abandoning one part way leaves
     the connection out of sync (see NNTPSyncError and reconnect()). That
     includes never reading it: calling e.g. xover() and dropping the result
-    blocks the connection until reconnect().
+    blocks the connection until reconnect(). An iterator still open when
+    close() is called, or when a with block exits, can't be resumed either:
+    it raises NNTPSyncError.
 
     Any command can raise NNTPReplyError (and its subclasses), NNTPSyncError,
     NNTPProtocolError, NNTPDataError (e.g. for a line longer than
