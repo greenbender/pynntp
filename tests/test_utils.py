@@ -27,7 +27,14 @@ if TYPE_CHECKING:
 
 @pytest.mark.parametrize(
     ("range", "expected"),
-    [(1234, "1234"), ((1, 10), "1-10"), ((100,), "100-")],
+    [
+        (1234, "1234"),
+        (0, "0"),
+        ((1, 10), "1-10"),
+        ((0, 10), "0-10"),
+        ((100,), "100-"),
+        ((0,), "0-"),
+    ],
 )
 def test_unparse_range(range: Range, expected: str) -> None:  # noqa: A002
     assert unparse_range(range) == expected
@@ -46,6 +53,28 @@ def test_unparse_range_invalid(range: object) -> None:  # noqa: A002
 def test_unparse_range_rejects_boolean_tuple_bounds(bounds: tuple[int, ...]) -> None:
     with pytest.raises(ValueError, match="range"):
         unparse_range(bounds)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    "range",
+    [
+        -5,
+        (-1,),
+        (-5, 10),
+        (1, -10),
+        (None,),
+        (1, None),
+        (1.5,),
+        (1, 2.0),
+        ("1",),
+        (1, "foo"),
+        "1 foo",
+        1.5,
+    ],
+)
+def test_unparse_range_rejects_bad_bounds(range: object) -> None:  # noqa: A002
+    with pytest.raises(ValueError):  # noqa: PT011
+        unparse_range(range)  # type: ignore[arg-type]
 
 
 def test_unparse_msgid_range() -> None:

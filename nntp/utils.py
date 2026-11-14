@@ -39,7 +39,8 @@ def unparse_range(obj: Range) -> str:
     """Format an article range as a command argument.
 
     Args:
-        obj: An article number, (first,) for first onwards, or (first, last).
+        obj: A non-negative article number, (first,) for first onwards, or
+            (first, last). Each number must be an int (not a bool).
 
     Returns:
         The range, e.g. "4678", "4245-" or "4245-5234".
@@ -47,19 +48,23 @@ def unparse_range(obj: Range) -> str:
     Raises:
         ValueError: If obj is not one of those forms.
     """
-    if isinstance(obj, int) and not isinstance(obj, bool):
+    if _is_range_number(obj):
         return str(obj)
 
     if isinstance(obj, tuple):
-        if any(isinstance(bound, bool) for bound in obj):
-            raise ValueError("Invalid range format")
-        if len(obj) == 1:
+        if len(obj) == 1 and _is_range_number(obj[0]):
             return f"{obj[0]}-"
-        if len(obj) == 2:
+        if len(obj) == 2 and _is_range_number(obj[0]) and _is_range_number(obj[1]):
             return f"{obj[0]}-{obj[1]}"
-        raise ValueError("Invalid range format")
 
+    if isinstance(obj, (int, tuple)):
+        raise ValueError("Invalid range format")
     raise ValueError("Must be an integer or tuple")
+
+
+def _is_range_number(value: object) -> bool:
+    """Return True for a non-negative int that is not a bool."""
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
 
 
 def unparse_msgid_range(obj: str | Range) -> str:
