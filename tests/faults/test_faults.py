@@ -46,8 +46,10 @@ def test_fault(scenario: Scenario, fault_server: Path) -> None:
             f"client lines: {res['client_lines']}",
         ]
     )
+    # pytest.fail is not an AssertionError, so the xfail does not apply to it
+    if scenario.known and "server side:" in reason:
+        pytest.fail(f"server-side problem in a known scenario: {reason}\n{details}")
     if scenario.known and reason and scenario.known_why not in reason:
-        # pytest.fail is not an AssertionError, so the xfail does not apply
         pytest.fail(
             f"fails, but not for the known bug ({scenario.known_why!r}): "
             f"{reason}\n{details}"

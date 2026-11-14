@@ -266,6 +266,10 @@ class Scenario:
         if self.known and not self.known_why:
             msg = f"{self.name}: known= needs known_why"
             raise ValueError(msg)
+        unchecked = isinstance(self.expect, Err) and self.expect.state == "sync"
+        if unchecked and self.probe is None:
+            msg = f"{self.name}: state=sync needs a probe to be checked"
+            raise ValueError(msg)
 
 
 def lines_with(summary: JSON, prefix: str) -> list[str]:
@@ -1472,8 +1476,11 @@ def gzip_scenarios() -> Iterator[Scenario]:
             exp,
             RAW,
         )
-    # The gzip trailer comes 2.5 s after the terminator; the client times out
-    # after 1 s and marks the connection broken
+    # Pins today's behaviour, which issue #155 questions: the reply waits for
+    # the gzip trailer 2.5 s after the terminator, so the call times out after
+    # 1 s and marks the connection broken. If #155 is changed so the reply
+    # returns at the terminator, this becomes Ok(value) with probe=None (the
+    # DATE reply sits behind the 2.5 s gap, so a probe can't work).
     yield Scenario(
         "gzip/terminator-inside-trailer-late",
         script(
