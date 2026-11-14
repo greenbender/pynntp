@@ -5,10 +5,13 @@ with setup.sh, and with the variables below against other servers too. The
 groups may already hold articles, so each test posts its own and finds it by
 Message-ID, and tests of optional features skip when CAPABILITIES doesn't
 list them. Checks of INN's own setup (its default groups, the "junk" group)
-run only against INN. The tests post permanent articles.
+run only against INN. Skips for what another server may lack apply only
+with PYNNTP_HOST set; by default such a gap fails, so a client bug can't
+turn into a skip. The tests post permanent articles.
 
 Environment:
-    PYNNTP_HOST: The server (default localhost).
+    PYNNTP_HOST: The server (default localhost). Setting it marks another
+        server, which enables the skips described above.
     PYNNTP_PORT: Its plain-text and STARTTLS port (default 119).
     PYNNTP_TLS_PORT: Its implicit TLS port (default 563); 0 skips the
         implicit TLS tests.
@@ -31,11 +34,12 @@ import email.utils
 import functools
 import os
 import re
+import socket
 import ssl
 import time
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, NoReturn
 
 import pytest
 
@@ -60,6 +64,9 @@ def env(name: str, default: str) -> str:
 
 
 HOST = env("PYNNTP_HOST", "localhost")
+# Set when the tests point at another server. Only then do the skips for
+# features it may lack apply; on INN (the default) a gap is a failure.
+OTHER_SERVER = bool(os.environ.get("PYNNTP_HOST", "").strip())
 PORT = int(env("PYNNTP_PORT", "119"))
 TLS_PORT = int(env("PYNNTP_TLS_PORT", "563"))
 USER = os.environ.get("PYNNTP_USER", "")
@@ -90,29 +97,37 @@ def check_newsgroups(nntp_client: nntp.NNTPClient) -> None:
     """Check that LIST NEWSGROUPS has INN's default groups, or the test groups.
 
     The server may have more. INN 2.8 ends the descriptions with a period.
+    On another server (PYNNTP_HOST) that isn't INN, the test groups must be
+    listed by LIST ACTIVE instead.
     """
-    if is_inn():
-        newsgroups = {
-            (name, description.removesuffix("."))
-            for name, description in nntp_client.list_newsgroups()
-        }
-        assert newsgroups >= DEFAULT_NEWGROUPS
-    else:
+    if OTHER_SERVER and not is_inn():
         # LIST NEWSGROUPS may leave out groups without a description
         names = {
             group.name for name in GROUPS for group in nntp_client.list_active(name)
         }
         assert names >= set(GROUPS)
+    else:
+        newsgroups = {
+            (name, description.removesuffix("."))
+            for name, description in nntp_client.list_newsgroups()
+        }
+        assert newsgroups >= DEFAULT_NEWGROUPS
 
 
 @functools.cache
 def capabilities() -> tuple[str, ...]:
-    """The server's CAPABILITIES in reader mode, or () if it has none."""
+    """The server's CAPABILITIES in reader mode.
+
+    On another server (PYNNTP_HOST) a 500 reply, not implemented, gives (),
+    so the optional-feature tests skip. Any other error is raised.
+    """
     with client() as nntp_client:
         try:
             return tuple(nntp_client.capabilities())
-        except nntp.NNTPPermanentError:  # 5xx: not implemented (RFC 3977 5.2)
-            return ()
+        except nntp.NNTPPermanentError as e:
+            if OTHER_SERVER and e.code == 500:  # RFC 3977 5.2: not implemented
+                return ()
+            raise
 
 
 def require(capability: str) -> None:
@@ -129,6 +144,22 @@ def require(capability: str) -> None:
     pytest.skip(f"The server does not offer {capability}")
 
 
+def require_listed(capability: str) -> None:
+    """Skip unless CAPABILITIES lists capability, but only on another server.
+
+    By default the test runs anyway, so a missing feature fails it.
+    """
+    if OTHER_SERVER:
+        require(capability)
+
+
+def skip_or_fail(reason: str) -> NoReturn:
+    """Skip, on another server (PYNNTP_HOST) which may lack it; else fail."""
+    if OTHER_SERVER:
+        pytest.skip(reason)
+    pytest.fail(reason)
+
+
 def inn_version() -> tuple[int, ...]:
     """INN's version from CAPABILITIES, or () for other servers."""
     for line in capabilities():
@@ -143,7 +174,8 @@ def is_inn() -> bool:
 
 
 def require_inn() -> None:
-    if not is_inn():
+    """Skip INN's own checks on another server (PYNNTP_HOST) that isn't INN."""
+    if OTHER_SERVER and not is_inn():
         pytest.skip("Checks INN's default setup")
 
 
@@ -179,16 +211,16 @@ def number_in_group(
 ) -> int:
     """Return the number of an article in newsgroup, which is then selected.
 
-    The number comes from the Xref header, which is optional (RFC 5536), so
-    the test skips without one. Waits up to PYNNTP_POST_WAIT seconds for the
-    article to be listed in the group.
+    The number comes from the Xref header, which is optional (RFC 5536):
+    without one, another server skips the test and INN fails it. Waits up to
+    PYNNTP_POST_WAIT seconds for the article to be listed in the group.
     """
     deadline = time.monotonic() + POST_WAIT
     while True:
         try:
             headers = nntp_client.head(message_id)
             if "Xref" not in headers:
-                pytest.skip("The server sends no Xref header")
+                skip_or_fail("The server sends no Xref header")
             numbers = {
                 group: number
                 for group, _, number in (
@@ -233,9 +265,17 @@ def tls_context() -> ssl.SSLContext:
 
 
 def compress(nntp_client: nntp.NNTPClient) -> None:
-    """COMPRESS DEFLATE, logging in first: a login isn't allowed after it."""
+    """COMPRESS DEFLATE, logging in first if this connection offers AUTHINFO USER.
+
+    No login is allowed after COMPRESS, so one is done before it.
+    """
     if USER:
-        nntp_client.login()
+        lines = list(nntp_client.capabilities())
+        if any(
+            words[:1] == ["AUTHINFO"] and "USER" in words
+            for words in (line.split() for line in lines)
+        ):
+            nntp_client.login()
     nntp_client.compress()
 
 
@@ -272,15 +312,31 @@ def test_nntp_client_without_ssl() -> None:
 def test_tls_verifies_certificate_by_default() -> None:
     """The default trust store rejects the server's certificate.
 
-    A publicly trusted certificate passes it, so the test skips then. This
-    holds with or without PYNNTP_TLS_CAFILE, which the other TLS tests use.
+    The standard library decides first whether the store trusts the
+    certificate, so a client that stopped verifying can't skip this test. If
+    it does trust it, the test skips on another server and fails otherwise.
+    Else pynntp must raise SSLCertVerificationError. This holds with or
+    without PYNNTP_TLS_CAFILE, which the other TLS tests use.
     """
+    if not TLS_PORT:
+        pytest.skip("PYNNTP_TLS_PORT=0: no implicit TLS")
+    trusted = False
+    try:
+        with (
+            socket.create_connection((HOST, TLS_PORT), timeout=10) as sock,
+            ssl.create_default_context().wrap_socket(sock, server_hostname=HOST),
+        ):
+            trusted = True
+    except ssl.SSLCertVerificationError:
+        pass
+    if trusted:
+        skip_or_fail("The default trust store accepts the server's certificate")
     try:
         nntp_client = client(use_ssl=True)
     except ssl.SSLCertVerificationError:
         return
     nntp_client.close()
-    pytest.skip("The default trust store accepts the server's certificate")
+    pytest.fail("pynntp accepted a certificate that the default trust store rejects")
 
 
 def test_nntp_client_with_ssl() -> None:
@@ -361,7 +417,7 @@ SINCE = datetime(2000, 1, 1, tzinfo=UTC)
 
 def test_newgroups() -> None:
     """NEWGROUPS lists the groups that LIST ACTIVE.TIMES says are newer."""
-    require("LIST ACTIVE.TIMES")
+    require_listed("LIST ACTIVE.TIMES")
     with client() as nntp_client:
         active = {group.name for group in nntp_client.list_active()}
         created = {
@@ -387,7 +443,7 @@ def test_newnews() -> None:
 
 
 def test_xover_full_field() -> None:
-    require("OVER")
+    require_listed("OVER")
     with client() as nntp_client:
         number, message_id = post(nntp_client, "Overview test")
         [(article_number, overview)] = nntp_client.xover((number, number))
@@ -395,14 +451,17 @@ def test_xover_full_field() -> None:
         assert overview["subject"] == "Overview test"
         assert overview["message-id"] == message_id
         if "xref" not in overview:
-            pytest.skip("The overview has no Xref field (RFC 3977 8.3.2)")
+            skip_or_fail("The overview has no Xref field (RFC 3977 8.3.2)")
         # Xref is a "full" field: the "Xref: " prefix is stripped.
         assert overview["xref"].endswith(f" {GROUP}:{number}")
         assert not overview["xref"].lower().startswith("xref")
 
 
 def test_xhdr() -> None:
-    """XHDR (RFC 2980) isn't gated by CAPABILITIES: skip if the server refuses it."""
+    """XHDR (RFC 2980) isn't in CAPABILITIES; another server may refuse it.
+
+    On another server (PYNNTP_HOST) a 500 reply skips the test. Else it fails.
+    """
     subject = "XHDR test"
     with client() as nntp_client:
         number, message_id = post(nntp_client, subject)
@@ -412,14 +471,16 @@ def test_xhdr() -> None:
             # By message-id, the article number is 0
             by_message_id = list(nntp_client.xhdr("Subject", message_id))
         except nntp.NNTPPermanentError as e:
+            if not OTHER_SERVER or e.code != 500:
+                raise
             pytest.skip(f"The server refuses XHDR: {e.code}")
         assert by_number == [(number, subject)]
         assert by_message_id == [(0, subject)]
 
 
 def test_hdr_over_stat_listgroup() -> None:
-    require("HDR")
-    require("OVER")
+    require_listed("HDR")
+    require_listed("OVER")
     subject = "HDR test"
     with client() as nntp_client:
         number, message_id = post(nntp_client, subject)
