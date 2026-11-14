@@ -20,8 +20,8 @@ uv run pytest --ignore=tests/integration  # Unit tests, no server needed
 
 ## Integration tests
 
-`tests/integration` runs against a real INN server on localhost, ports 119
-and 563. CI runs it against the
+`tests/integration` runs against a real server, by default an INN server on
+localhost, ports 119 and 563. CI runs it against the
 [greenbender/inn](https://github.com/greenbender/inn-docker) image:
 
 ```sh
@@ -40,15 +40,43 @@ PYNNTP_TLS_CAFILE=/etc/news/pynntp-cert.pem uv run pytest
 ```
 
 `PYNNTP_TLS_CAFILE` is the certificate to verify the TLS tests against;
-without it they don't check it. The tests post articles but don't rely on the
-groups being empty, and those for optional features skip when the server
-doesn't list them in CAPABILITIES.
+without it they don't check it. The tests don't rely on the groups being
+empty.
+
+The tests post permanent articles: each has a unique Message-ID and
+`From: GitHub Actions <actions@github.com>`, and none is cancelled or removed.
+Run them only against a server where that is acceptable.
+
+What skips:
+
+- Tests of optional features, when CAPABILITIES doesn't list them: STARTTLS,
+  COMPRESS DEFLATE, POST or IHAVE (for the compressed article test), IHAVE,
+  NEWNEWS, XPAT, HDR, OVER, and LIST ACTIVE.TIMES. A server without
+  CAPABILITIES (a 5xx reply) skips all of them.
+- The XHDR test, if the server refuses XHDR.
+- The overview test, without an Xref overview field.
+- The posting tests, without an Xref header in HEAD (Xref is optional in
+  RFC 5536).
+- The test that the default trust store verifies the certificate, if the
+  store accepts it.
+- The empty-group test, without `PYNNTP_EMPTY_GROUP` (INN: `junk`).
+- The INN-only tests (the `junk` group, and posting to it being refused) skip
+  unless CAPABILITIES says `IMPLEMENTATION INN`. On other servers the check of
+  INN's default groups becomes a check that `PYNNTP_GROUPS` is listed.
+
+A server that isn't INN needs:
+
+- CAPABILITIES, for the features it offers; the tests skip the rest.
+- Each group in `PYNNTP_GROUPS` listed by LIST ACTIVE with status `y` (posting
+  allowed). Otherwise the tests fail rather than skip.
+- An Xref header in HEAD for posted articles, with the group and number. A
+  missing Xref skips the posting tests; an Xref without the group fails them
+  after `PYNNTP_POST_WAIT` seconds.
 
 To run them against another server, set `PYNNTP_HOST`, `PYNNTP_PORT`,
 `PYNNTP_TLS_PORT` (0 skips implicit TLS), `PYNNTP_USER`/`PYNNTP_PASS` and
 `PYNNTP_GROUPS` (groups the tests may post to); the docstring of
-`tests/integration/inn2/test_inn2.py` lists them all. Checks of INN's own
-default setup then skip.
+`tests/integration/inn2/test_inn2.py` lists them all.
 
 ## Docs
 

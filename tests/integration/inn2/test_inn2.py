@@ -5,7 +5,7 @@ with setup.sh, and with the variables below against other servers too. The
 groups may already hold articles, so each test posts its own and finds it by
 Message-ID, and tests of optional features skip when CAPABILITIES doesn't
 list them. Checks of INN's own setup (its default groups, the "junk" group)
-run only against INN.
+run only against INN. The tests post permanent articles.
 
 Environment:
     PYNNTP_HOST: The server (default localhost).
@@ -13,9 +13,12 @@ Environment:
     PYNNTP_TLS_PORT: Its implicit TLS port (default 563); 0 skips the
         implicit TLS tests.
     PYNNTP_USER, PYNNTP_PASS: Credentials for a server that wants a login;
-        the client logs in when the server answers 480.
+        the client logs in when the server answers 480, and the COMPRESS
+        tests log in before compressing.
     PYNNTP_GROUPS: Comma-separated groups the tests may post to, the last
-        one used by most tests (default local.general,local.test).
+        one used by most tests (default local.general,local.test). Each must
+        be listed by LIST ACTIVE with status "y", and posted articles must
+        show in its Xref header.
     PYNNTP_EMPTY_GROUP: An empty group, for the empty-group test (default
         junk on INN; the test skips on other servers without it).
     PYNNTP_TLS_CAFILE: Certificate to verify the TLS server against. Without
@@ -50,16 +53,28 @@ DEFAULT_NEWGROUPS = {
     ("local.test", "Local test group"),
 }
 
-HOST = os.environ.get("PYNNTP_HOST", "localhost")
-PORT = int(os.environ.get("PYNNTP_PORT", "119"))
-TLS_PORT = int(os.environ.get("PYNNTP_TLS_PORT", "563"))
+
+def env(name: str, default: str) -> str:
+    """The environment variable, stripped; unset or empty means default."""
+    return os.environ.get(name, "").strip() or default
+
+
+HOST = env("PYNNTP_HOST", "localhost")
+PORT = int(env("PYNNTP_PORT", "119"))
+TLS_PORT = int(env("PYNNTP_TLS_PORT", "563"))
 USER = os.environ.get("PYNNTP_USER", "")
 PASSWORD = os.environ.get("PYNNTP_PASS", "")
-GROUPS = os.environ.get("PYNNTP_GROUPS", "local.general,local.test").split(",")
+GROUPS = [
+    group.strip()
+    for group in env("PYNNTP_GROUPS", "local.general,local.test").split(",")
+    if group.strip()
+]
+if not GROUPS:
+    raise ValueError("PYNNTP_GROUPS names no group")
 GROUP = GROUPS[-1]
-EMPTY_GROUP = os.environ.get("PYNNTP_EMPTY_GROUP", "")
+EMPTY_GROUP = env("PYNNTP_EMPTY_GROUP", "")
 TLS_CAFILE = os.environ.get("PYNNTP_TLS_CAFILE")
-POST_WAIT = float(os.environ.get("PYNNTP_POST_WAIT", "10"))
+POST_WAIT = float(env("PYNNTP_POST_WAIT", "10"))
 
 
 def client(**kwargs: Any) -> nntp.NNTPClient:  # noqa: ANN401
@@ -76,27 +91,42 @@ def check_newsgroups(nntp_client: nntp.NNTPClient) -> None:
 
     The server may have more. INN 2.8 ends the descriptions with a period.
     """
-    newsgroups = {
-        (name, description.removesuffix("."))
-        for name, description in nntp_client.list_newsgroups()
-    }
     if is_inn():
+        newsgroups = {
+            (name, description.removesuffix("."))
+            for name, description in nntp_client.list_newsgroups()
+        }
         assert newsgroups >= DEFAULT_NEWGROUPS
     else:
-        assert {name for name, _ in newsgroups} >= set(GROUPS)
+        # LIST NEWSGROUPS may leave out groups without a description
+        names = {
+            group.name for name in GROUPS for group in nntp_client.list_active(name)
+        }
+        assert names >= set(GROUPS)
 
 
 @functools.cache
 def capabilities() -> tuple[str, ...]:
-    """The server's CAPABILITIES in reader mode."""
+    """The server's CAPABILITIES in reader mode, or () if it has none."""
     with client() as nntp_client:
-        return tuple(nntp_client.capabilities())
+        try:
+            return tuple(nntp_client.capabilities())
+        except nntp.NNTPPermanentError:  # 5xx: not implemented (RFC 3977 5.2)
+            return ()
 
 
 def require(capability: str) -> None:
-    """Skip the test unless CAPABILITIES lists capability, e.g. "COMPRESS"."""
-    if not any(f"{line} ".startswith(f"{capability} ") for line in capabilities()):
-        pytest.skip(f"The server does not offer {capability}")
+    """Skip the test unless CAPABILITIES lists capability.
+
+    The first word of a line must match and the other words must be on the
+    line too, so "COMPRESS DEFLATE" and "LIST ACTIVE.TIMES" both work.
+    """
+    name, *keywords = capability.split()
+    for line in capabilities():
+        words = line.split()
+        if words[:1] == [name] and all(keyword in words for keyword in keywords):
+            return
+    pytest.skip(f"The server does not offer {capability}")
 
 
 def inn_version() -> tuple[int, ...]:
@@ -149,21 +179,27 @@ def number_in_group(
 ) -> int:
     """Return the number of an article in newsgroup, which is then selected.
 
-    The number comes from the Xref header. Waits up to PYNNTP_POST_WAIT
-    seconds for the article to be listed in the group.
+    The number comes from the Xref header, which is optional (RFC 5536), so
+    the test skips without one. Waits up to PYNNTP_POST_WAIT seconds for the
+    article to be listed in the group.
     """
     deadline = time.monotonic() + POST_WAIT
     while True:
         try:
-            xref = nntp_client.head(message_id)["Xref"]
+            headers = nntp_client.head(message_id)
+            if "Xref" not in headers:
+                pytest.skip("The server sends no Xref header")
             numbers = {
                 group: number
-                for group, _, number in (ref.partition(":") for ref in xref.split())
+                for group, _, number in (
+                    ref.partition(":") for ref in headers["Xref"].split()
+                )
             }
-            number = int(numbers[newsgroup])
-            _, first, last, _ = nntp_client.group(newsgroup)
-            if first <= number <= last:
-                return number
+            if newsgroup in numbers:
+                number = int(numbers[newsgroup])
+                _, first, last, _ = nntp_client.group(newsgroup)
+                if first <= number <= last:
+                    return number
         except nntp.NNTPTemporaryError as e:
             if e.code != 430:  # No such article (yet)
                 raise
@@ -194,6 +230,13 @@ def tls_context() -> ssl.SSLContext:
     context.check_hostname = False
     context.verify_mode = ssl.CERT_NONE
     return context
+
+
+def compress(nntp_client: nntp.NNTPClient) -> None:
+    """COMPRESS DEFLATE, logging in first: a login isn't allowed after it."""
+    if USER:
+        nntp_client.login()
+    nntp_client.compress()
 
 
 def test_nntp_client() -> None:
@@ -227,8 +270,17 @@ def test_nntp_client_without_ssl() -> None:
 
 
 def test_tls_verifies_certificate_by_default() -> None:
-    with pytest.raises(ssl.SSLCertVerificationError):
-        client(use_ssl=True)
+    """The default trust store rejects the server's certificate.
+
+    A publicly trusted certificate passes it, so the test skips then. This
+    holds with or without PYNNTP_TLS_CAFILE, which the other TLS tests use.
+    """
+    try:
+        nntp_client = client(use_ssl=True)
+    except ssl.SSLCertVerificationError:
+        return
+    nntp_client.close()
+    pytest.skip("The default trust store accepts the server's certificate")
 
 
 def test_nntp_client_with_ssl() -> None:
@@ -309,6 +361,7 @@ SINCE = datetime(2000, 1, 1, tzinfo=UTC)
 
 def test_newgroups() -> None:
     """NEWGROUPS lists the groups that LIST ACTIVE.TIMES says are newer."""
+    require("LIST ACTIVE.TIMES")
     with client() as nntp_client:
         active = {group.name for group in nntp_client.list_active()}
         created = {
@@ -334,27 +387,46 @@ def test_newnews() -> None:
 
 
 def test_xover_full_field() -> None:
+    require("OVER")
     with client() as nntp_client:
         number, message_id = post(nntp_client, "Overview test")
         [(article_number, overview)] = nntp_client.xover((number, number))
         assert article_number == number
         assert overview["subject"] == "Overview test"
         assert overview["message-id"] == message_id
+        if "xref" not in overview:
+            pytest.skip("The overview has no Xref field (RFC 3977 8.3.2)")
         # Xref is a "full" field: the "Xref: " prefix is stripped.
         assert overview["xref"].endswith(f" {GROUP}:{number}")
         assert not overview["xref"].lower().startswith("xref")
 
 
+def test_xhdr() -> None:
+    """XHDR (RFC 2980) isn't gated by CAPABILITIES: skip if the server refuses it."""
+    subject = "XHDR test"
+    with client() as nntp_client:
+        number, message_id = post(nntp_client, subject)
+        span = (number, number)
+        try:
+            by_number = list(nntp_client.xhdr("Subject", span))
+            # By message-id, the article number is 0
+            by_message_id = list(nntp_client.xhdr("Subject", message_id))
+        except nntp.NNTPPermanentError as e:
+            pytest.skip(f"The server refuses XHDR: {e.code}")
+        assert by_number == [(number, subject)]
+        assert by_message_id == [(0, subject)]
+
+
 def test_hdr_over_stat_listgroup() -> None:
+    require("HDR")
+    require("OVER")
     subject = "HDR test"
     with client() as nntp_client:
         number, message_id = post(nntp_client, subject)
         span = (number, number)
         assert list(nntp_client.hdr("Subject", span)) == [(number, subject)]
-        assert list(nntp_client.xhdr("Subject", span)) == [(number, subject)]
         # By message-id, the article number is 0
         assert list(nntp_client.hdr("Subject", message_id)) == [(0, subject)]
-        assert list(nntp_client.xhdr("Subject", message_id)) == [(0, subject)]
         [(article_number, overview)] = nntp_client.over(span)
         assert (article_number, overview["message-id"]) == (number, message_id)
         assert nntp_client.stat(number) == (number, message_id)
@@ -387,7 +459,7 @@ def test_compress(ssl_mode: SSLMode | None) -> None:
         ssl_mode=ssl_mode or SSLMode.IMPLICIT,
         ssl_context=tls_context(),
     ) as nntp_client:
-        nntp_client.compress()
+        compress(nntp_client)
         assert "COMPRESS DEFLATE" not in list(nntp_client.capabilities())
         check_newsgroups(nntp_client)
         assert nntp_client.date().year >= 2024
@@ -407,7 +479,7 @@ def test_compressed_article(verb: str) -> None:
     message_id = headers["Message-ID"]
     body = ".first\n.\n" + ("x" * 200 + "\n") * 400 + "last\n"
     with client() as nntp_client:
-        nntp_client.compress()
+        compress(nntp_client)
         if verb == "POST":
             assert nntp_client.post(headers, body) in (message_id, True)
         else:
