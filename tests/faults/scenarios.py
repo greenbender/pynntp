@@ -25,6 +25,7 @@ import gc
 import json
 import re
 import resource
+import select
 import ssl
 import subprocess
 import sys
@@ -35,9 +36,8 @@ import zlib
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from functools import cache
 from pathlib import Path
-from typing import Any
+from typing import IO, Any
 
 import nntp
 
@@ -254,10 +254,18 @@ class Scenario:
     connect: JSON = field(default_factory=dict)
     server_check: ServerCheck | None = None
     known: str = ""  # an open bug: the scenario is expected to fail
+    # A fragment of the failure reason that the open bug gives. Any other
+    # failure of a known scenario fails the run.
+    known_why: str = ""
     known_strict: bool = True  # False: it fails only on some Python versions
     deadline: float = 20.0
     probe: str | None = "raw"  # raw: the exact 2020 DATE; store: any DATE
     max_s: float | None = None
+
+    def __post_init__(self) -> None:
+        if self.known and not self.known_why:
+            msg = f"{self.name}: known= needs known_why"
+            raise ValueError(msg)
 
 
 def lines_with(summary: JSON, prefix: str) -> list[str]:
@@ -849,6 +857,7 @@ def leftover_scenarios() -> Iterator[Scenario]:
         RAW,
         probe=None,
         known=UNREAD_DATA,
+        known_why="the second group() must not return",
     )
     yield Scenario(
         "leftover/status-after-terminator-same-packet",
@@ -861,6 +870,7 @@ def leftover_scenarios() -> Iterator[Scenario]:
         RAW,
         probe=None,
         known=UNREAD_DATA,
+        known_why="date() must not return the unsolicited 2099 line",
     )
     yield Scenario(
         "leftover/extra-line-after-greeting",
@@ -873,13 +883,16 @@ def leftover_scenarios() -> Iterator[Scenario]:
         RAW,
         probe=None,
         known=UNREAD_DATA,
+        known_why="date() must not return the 2099 line",
     )
     yield Scenario(
         "leftover/crlf-after-terminator",
         script(step("BODY 1", ml(b"222 1 <a@b>", [b"x"]) + CRLF)),
         lambda c: c.body(1),
-        Clean(pred=lambda v: v == b"x\r\n"),
+        Ok(b"x\r\n"),
         RAW,
+        known=UNREAD_DATA,
+        known_why="result ok but the connection is late-broken",
     )
 
 
@@ -981,7 +994,7 @@ def timeout_scenarios() -> Iterator[Scenario]:
         "timeout/store-then-reconnect",
         store_cfg(faults={"delay_ms": {"BODY": 2500}}),
         timeout_reconnect,
-        Clean(pred=lambda v: v == (3, 1, 3, "alt.test")),
+        Ok((3, 1, 3, "alt.test")),
         {"timeout": 1},
         probe="store",
         max_s=10,
@@ -1459,6 +1472,8 @@ def gzip_scenarios() -> Iterator[Scenario]:
             exp,
             RAW,
         )
+    # The gzip trailer comes 2.5 s after the terminator; the client times out
+    # after 1 s and marks the connection broken
     yield Scenario(
         "gzip/terminator-inside-trailer-late",
         script(
@@ -1466,11 +1481,9 @@ def gzip_scenarios() -> Iterator[Scenario]:
             step("XHDR Subject 1-3", status, head, chunk(tail, gap=2500)),
         ),
         gzip_xhdr(terminator=True),
-        value,
+        Err(OSError, state="broken"),
         {"reader": False, "timeout": 1},
         max_s=6,
-        known="with TERMINATOR, the reply waits for the end of the gzip stream "
-        "after the terminator",
     )
     yield Scenario(
         "gzip/drop-mid-stream",
@@ -1562,6 +1575,10 @@ def xzver_scenarios() -> Iterator[Scenario]:
         # Junk after the end of the DEFLATE stream is accepted (observed)
         ("data-after-deflate-end", yenc_of(junk), Clean(pred=over_check), False, ""),
     ]
+    known_why = {
+        "sync-flushed-not-finished": "expected a result, got NNTPDataError",
+        "last-row-without-crlf": "expected 2 rows",
+    }
     for name, lines, exp, slow, known in cases:
         reply = ml(b"224 compressed data follows", lines)
         yield Scenario(
@@ -1574,6 +1591,7 @@ def xzver_scenarios() -> Iterator[Scenario]:
             exp,
             RAW,
             known=known,
+            known_why=known_why.get(name, ""),
         )
     yield Scenario(
         "xzver/xzhdr-finished",
@@ -1669,6 +1687,7 @@ def yenc_scenarios() -> Iterator[Scenario]:
             "",
         ),
     ]
+    known_why = {"stray-yend-after-block": "expected a result, got NNTPYEncError"}
     for name, lines, exp, decode, known in cases:
         yield Scenario(
             f"yenc/{name}",
@@ -1677,6 +1696,7 @@ def yenc_scenarios() -> Iterator[Scenario]:
             exp,
             RAW,
             known=known,
+            known_why=known_why.get(name, ""),
         )
     yield Scenario(
         "yenc/single-bytewise",
@@ -1886,7 +1906,7 @@ def auth_scenarios() -> Iterator[Scenario]:
         lambda c: c.group("alt.test"),
         Err(nntp.NNTPTemporaryError, state="sync", match="480"),
         RAW,
-        probe=None,
+        probe="store",
     )
     yield Scenario(
         "auth/store-bad-password",
@@ -1894,7 +1914,7 @@ def auth_scenarios() -> Iterator[Scenario]:
         lambda c: c.group("alt.test"),
         Err(nntp.NNTPReplyError, state="sync", match="481"),
         {"reader": False, "username": "u", "password": "x"},
-        probe=None,
+        probe="store",
     )
     relogin: list[tuple[str, Action, Expect]] = [
         ("GROUP", lambda c: c.group("alt.test"), Ok((3, 1, 3, "alt.test"))),
@@ -2047,6 +2067,7 @@ def malformed_scenarios() -> Iterator[Scenario]:
         Err(nntp.NNTPDataError, state="sync"),
         RAW,
         known="group() accepts negative numbers in the 211 reply",
+        known_why="expected NNTPDataError, got result",
     )
     yield Scenario(
         "malformed/stat-msgid-without-at",
@@ -2212,10 +2233,10 @@ def session_scenarios() -> Iterator[Scenario]:
         probe=None,
         known="a response iterator resumed after reconnect() reads the new "
         "connection's reply",
+        known_why="the old iterator must not yield lines of the new connection",
     )
 
 
-@cache
 def longline_scenarios() -> Iterator[Scenario]:
     """A response line at and over max_line_length (64 KiB with CRLF)."""
     limit = nntp.NNTPClient.max_line_length
@@ -2296,8 +2317,26 @@ def names(types: tuple[type[BaseException], ...]) -> str:
     return "/".join(t.__name__ for t in types)
 
 
+def needs_state(sc: Scenario) -> bool:
+    """Is the state after the action part of the outcome?
+
+    A probe-less scenario that expects a marked connection is probed as well:
+    a connection the client marked broken raises NNTPSyncError without sending
+    anything, and a connection it did not mark gets DATE, which the script
+    answers or finds closed. A scenario that expects "sync" needs a probe.
+    """
+    if sc.probe is not None:
+        return True
+    return isinstance(sc.expect, Err) and sc.expect.state == "broken"
+
+
 def probe_state(c: nntp.NNTPClient, sc: Scenario) -> tuple[str, str]:
-    """Send DATE: is the connection in sync, marked broken, or neither?"""
+    """Send DATE: is the connection in sync, marked broken, or neither?
+
+    A connection the client marked broken raises NNTPSyncError at once, and
+    that is "broken". A clean error on the probe itself is "late-broken" if the
+    client marked the connection only then: the action did not mark it.
+    """
     try:
         d = c.date()
     except nntp.NNTPSyncError as e:
@@ -2309,7 +2348,7 @@ def probe_state(c: nntp.NNTPClient, sc: Scenario) -> tuple[str, str]:
     except Exception as e:  # noqa: BLE001
         return "desync", f"probe raised {type(e).__name__}: {e}"
     got = d.timetuple()[:6]
-    good = got == PROBE_TUPLE if sc.probe == "raw" else got[0] >= 2025
+    good = got[0] >= 2025 if sc.probe == "store" else got == PROBE_TUPLE
     return ("sync", "") if good else ("desync", f"probe got stale/wrong DATE {got}")
 
 
@@ -2329,11 +2368,11 @@ def judge_error(sc: Scenario, e: BaseException, state: str) -> str:
         ),
         (exp.pred is not None and not exp.pred(e), f"{what} fails the check"),
         (
-            exp.state == "sync" and sc.probe is not None and state != "sync",
+            exp.state == "sync" and state != "sync",
             f"expected the connection to stay in sync, it is {state}",
         ),
         (
-            exp.state == "broken" and sc.probe is not None and state != "broken",
+            exp.state == "broken" and state != "broken",
             f"expected the connection marked broken, it is {state}",
         ),
     ]
@@ -2385,7 +2424,7 @@ def run_client(sc: Scenario, host: str, port: int, ca: str) -> JSON:
         error = e
     elapsed = time.monotonic() - t0
     state, detail = "n/a", ""
-    if c is not None and sc.probe:
+    if c is not None and needs_state(sc):
         state, detail = probe_state(c, sc)
     if c is not None:
         with contextlib.suppress(Exception):
@@ -2527,6 +2566,37 @@ def wire_summary(server: JSON) -> list[str]:
     return out or [json.dumps({k: v for k, v in server.items() if k != "store"})]
 
 
+SERVER_WAIT = 10  # seconds the server may take to print a line
+
+
+def server_json(pipe: IO[str], timeout: float) -> JSON:
+    """The JSON line the server prints, or {} if none comes within timeout s."""
+    if not select.select([pipe], [], [], timeout)[0]:
+        return {}
+    try:
+        got: JSON = json.loads(pipe.readline() or "{}")
+    except json.JSONDecodeError:
+        return {}
+    return got
+
+
+def run_client_process(sc: Scenario, info: JSON) -> JSON:
+    """Run the client of sc against the server that info describes."""
+    cmd = [sys.executable, "-I", __file__, sc.name, info["host"]]
+    cmd += [str(info["port"]), info["ca"]]
+    try:
+        child = subprocess.run(  # noqa: S603
+            cmd, capture_output=True, text=True, timeout=sc.deadline, check=False
+        )
+    except subprocess.TimeoutExpired:
+        return {"reason": f"hang: no result within {sc.deadline}s"}
+    out = [ln for ln in child.stdout.splitlines() if ln.startswith("{")]
+    if not out:
+        return {"reason": f"client died: {child.stderr.strip()[-600:]}"}
+    res: JSON = json.loads(out[-1])
+    return res
+
+
 def run(sc: Scenario, server: Path) -> JSON:
     """Run sc against the server binary; result["reason"] is "" if it passed."""
     with tempfile.TemporaryDirectory() as tmp:
@@ -2537,29 +2607,31 @@ def run(sc: Scenario, server: Path) -> JSON:
         ) as srv:
             assert srv.stdin is not None
             assert srv.stdout is not None
-            info = json.loads(srv.stdout.readline())
-            cmd = [sys.executable, "-I", __file__, sc.name, info["host"]]
-            cmd += [str(info["port"]), info["ca"]]
+            info = server_json(srv.stdout, SERVER_WAIT)
+            res: JSON
+            summary: JSON
+            if info:
+                res = run_client_process(sc, info)
+                srv.stdin.close()  # the server then prints its summary and exits
+                summary = server_json(srv.stdout, SERVER_WAIT)
+            else:
+                srv.kill()
+                res = {"reason": "server printed no address"}
+                summary = {}
             try:
-                child = subprocess.run(  # noqa: S603
-                    cmd,
-                    capture_output=True,
-                    text=True,
-                    timeout=sc.deadline,
-                    check=False,
-                )
-                out = [ln for ln in child.stdout.splitlines() if ln.startswith("{")]
-                res: JSON = (
-                    json.loads(out[-1])
-                    if out
-                    else {"reason": f"client died: {child.stderr.strip()[-600:]}"}
-                )
+                status = srv.wait(SERVER_WAIT)
             except subprocess.TimeoutExpired:
-                res = {"reason": f"hang: no result within {sc.deadline}s"}
-            srv.stdin.close()
-            summary = json.loads(srv.stdout.readline() or "{}")
-            srv.wait(10)
-    if not res["reason"] and sc.server_check and summary:
+                srv.kill()
+                status = srv.wait()
+    problems = []
+    if not summary:
+        problems.append("server printed no summary")
+    if status != 0:
+        problems.append(f"server exit status {status}")
+    if problems:
+        found = "server side: " + ", ".join(problems)
+        res["reason"] = "; ".join(filter(None, [res["reason"], found]))
+    if not res["reason"] and sc.server_check:
         summary["articles"] = summary.get("articles") or []
         if why := sc.server_check(summary):
             res["reason"] = f"server side: {why}"

@@ -1,8 +1,10 @@
 """pynntp against the nntp-testkit fake server, with injected faults.
 
 Scenarios marked as known fail on the current code; each tracks an open bug.
-Fixing it makes the scenario pass, which is reported as XPASS and fails the
-run, so remove its known reason in the same change.
+Such a scenario fails with the reason named by its known_why, and any other
+failure of it fails the run. Fixing the bug makes the scenario pass, which is
+reported as XPASS and fails the run, so remove its known reason in the same
+change.
 """
 
 from __future__ import annotations
@@ -36,6 +38,7 @@ if TYPE_CHECKING:
 )
 def test_fault(scenario: Scenario, fault_server: Path) -> None:
     res = run(scenario, fault_server)
+    reason = res["reason"]
     details = "\n".join(
         [
             f"result: {res.get('result')} (state {res.get('state')})",
@@ -43,4 +46,10 @@ def test_fault(scenario: Scenario, fault_server: Path) -> None:
             f"client lines: {res['client_lines']}",
         ]
     )
-    assert not res["reason"], f"{res['reason']}\n{details}"
+    if scenario.known and reason and scenario.known_why not in reason:
+        # pytest.fail is not an AssertionError, so the xfail does not apply
+        pytest.fail(
+            f"fails, but not for the known bug ({scenario.known_why!r}): "
+            f"{reason}\n{details}"
+        )
+    assert not reason, f"{reason}\n{details}"

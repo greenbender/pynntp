@@ -32,13 +32,22 @@ short keys; `kit_config()` turns them into the program's JSON schema.
 
 `scenarios.py` holds the scenarios. For each one, `run()` starts the server and
 runs the client in a child process under a deadline and (except on
-free-threaded builds) a memory limit. After the action the client sends DATE: a
-scenario passes when the client returns the right result, or raises an
+free-threaded builds) a memory limit. After the action the client sends DATE:
+a scenario passes when the client returns the right result, or raises an
 `NNTPError` or `OSError` and the connection is either still in sync (DATE gets
 the right reply) or marked broken (the next command raises `NNTPSyncError`). A
 hang, a wrong result, another exception or a connection out of sync fails, as
 does a failed server-side check (for example, the client sent AUTHINFO before
 TLS).
+
+A scenario with `probe=None` has no DATE step in its script. If it expects a
+marked connection (`Err(..., state="broken")`), the client still sends DATE as a
+check: a connection the client marked raises `NNTPSyncError` without sending
+anything, and one it did not mark gets a DATE reply or a closed socket, which
+fails the scenario. A scenario that expects `state="sync"` needs a probe.
+
+The server must print its summary and exit with status 0. A missing summary or
+a non-zero exit fails the scenario, since its server-side checks did not run.
 
 ```python
 yield Scenario(
@@ -53,14 +62,16 @@ yield Scenario(
 ## Known failures
 
 A scenario with `known=` set fails on the current code and is marked as an
-expected failure, with the reason shown by `-rxX`. When a fix makes it pass,
-pytest reports XPASS and the run fails: remove `known=` in the same change.
+expected failure, with the reason shown by `-rxX`. Its `known_why` is a fragment
+of the failure reason that the bug gives: a known scenario that fails for any
+other reason (a hang, a crash, another wrong result) fails the run. When a fix
+makes it pass, pytest reports XPASS and the run fails: remove `known=` and
+`known_why` in the same change.
 
 | Scenarios | Open bug | Issue |
 |---|---|---|
-| `leftover/second-status-same-packet`, `leftover/status-after-terminator-same-packet`, `leftover/extra-line-after-greeting` | Data the server sent after a reply is taken as the reply to the next command | #161 |
+| `leftover/second-status-same-packet`, `leftover/status-after-terminator-same-packet`, `leftover/extra-line-after-greeting`, `leftover/crlf-after-terminator` | Data the server sent after a reply is taken as the reply to the next command | #161 |
 | `session/resume-abandoned-iterator-after-reconnect` | A response iterator resumed after reconnect() reads the new connection's reply | #162 |
-| `gzip/terminator-inside-trailer-late` | With TERMINATOR, the reply waits for the end of the gzip stream after the terminator | #155 |
 | `xzver/sync-flushed-not-finished` | XZVER rejects a complete DEFLATE stream that is sync-flushed, not finished | #154 |
 | `xzver/last-row-without-crlf` | XZVER drops a last row that has no CRLF | #160 |
 | `yenc/stray-yend-after-block` | A =yend line after a complete block raises NNTPYEncError | #159 |
