@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import gc
+import gzip
 import ssl
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
@@ -19,9 +20,11 @@ from tests.helpers import (
     ODD,
     OVERVIEW_FMT,
     WELCOME,
+    XOVER_LINES,
     Connect,
     FakeSocket,
     Packets,
+    xzver_server,
 )
 
 if TYPE_CHECKING:
@@ -316,6 +319,47 @@ def test_login_retry_refuses_unread_data(connect: Connect) -> None:
     assert sock.sent == b"MODE READER\r\nDATE\r\n"  # No AUTHINFO
     with pytest.raises(NNTPSyncError, match="reconnect"):
         client.date()
+
+
+def gzip_xover_reply(payload: bytes, *, terminator: bool) -> bytes:
+    """A 224 reply with gzip data; the "." line is outside it, or inside it."""
+    head = b"224 ok COMPRESS=GZIP\r\n"
+    if terminator:
+        return head + gzip.compress(payload + b".\r\n")
+    return head + gzip.compress(payload) + b".\r\n"
+
+
+@BIG_RECV
+@pytest.mark.parametrize("terminator", [False, True], ids=["dot-line", "terminator"])
+def test_line_after_gzip_response_is_refused(
+    connect: Connect, terminator: bool
+) -> None:
+    reply = gzip_xover_reply(XOVER_LINES, terminator=terminator) + STRAY_DATE
+    client, sock = connect(Packets(WELCOME, MODE_READER, reply, DATE), LATER)
+    code, message = client.command("XOVER")
+    assert "".join(client.info(code, message)) == XOVER_LINES.decode()
+    assert_refused(client, sock, lambda c: c.date())
+
+
+@BIG_RECV
+def test_line_inside_gzip_after_terminator_is_refused(connect: Connect) -> None:
+    # The stray line is in the gzip stream, behind the "." that ends the reply
+    reply = b"224 ok COMPRESS=GZIP\r\n" + gzip.compress(
+        XOVER_LINES + b".\r\n" + STRAY_DATE
+    )
+    client, sock = connect(Packets(WELCOME, MODE_READER, reply, DATE), LATER)
+    code, message = client.command("XOVER")
+    assert "".join(client.info(code, message)) == XOVER_LINES.decode()
+    assert_refused(client, sock, lambda c: c.date())
+
+
+@BIG_RECV
+def test_line_after_xzver_response_is_refused(connect: Connect) -> None:
+    packets = Packets(WELCOME, MODE_READER, xzver_server() + STRAY_DATE, DATE)
+    client, sock = connect(packets, LATER)
+    code, message = client.command("XZVER")
+    assert "".join(client.info(code, message, yz=True)) == XOVER_LINES.decode()
+    assert_refused(client, sock, lambda c: c.date())
 
 
 def test_480_without_username_raises(connect: Connect) -> None:

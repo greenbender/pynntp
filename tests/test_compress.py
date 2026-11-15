@@ -89,7 +89,8 @@ def test_corrupt_compressed_data_closes(connect: Connect) -> None:
     client, sock = connect(WELCOME + MODE_READER + COMPRESS_OK + b"\xff\xff\xff\xff")
 
     def compress_then_date() -> None:
-        # compress() raises if the bad bytes arrive with the 206, else date()
+        # The bad bytes arrive after the 206 (a recv ends there), so date()
+        # raises; see the Packets test below for compress() raising
         client.compress()
         client.date()
 
@@ -231,3 +232,50 @@ def test_compress_reply_filling_inflate_output_exactly(connect: Connect) -> None
     client.compress()
     assert len(list(client.list_active())) == 66
     assert client.date().year == 2024
+
+
+def assert_next_date_refused(client: nntp.NNTPClient, sock: FakeSocket) -> None:
+    """date() raises for unread data, sends nothing, and the connection is broken."""
+    sent = sent_after_compress(sock)
+    with pytest.raises(nntp.NNTPProtocolError, match="Unexpected data"):
+        client.date()
+    assert sent_after_compress(sock) == sent
+    with pytest.raises(nntp.NNTPSyncError, match="reconnect"):
+        client.date()
+
+
+# The next tests put data in the same recv as the 206 reply, which only Packets
+# can do: that is the pending-data branch of compress()
+@pytest.mark.parametrize("chunk", [4096])
+def test_compress_corrupt_data_with_reply_closes(connect: Connect) -> None:
+    client, sock = connect(Packets(WELCOME, MODE_READER, COMPRESS_OK + b"\xff" * 4))
+    with pytest.raises(nntp.NNTPDataError, match="Decompression failed"):
+        client.compress()
+    assert sock.closed
+
+
+@pytest.mark.parametrize("chunk", [4096])
+def test_compress_refuses_data_with_reply(connect: Connect) -> None:
+    server = Packets(
+        WELCOME, MODE_READER, COMPRESS_OK + deflated(STRAY_DATE), deflated(DATE)
+    )
+    client, sock = connect(server)
+    client.compress()
+    assert_next_date_refused(client, sock)
+
+
+@pytest.mark.parametrize("chunk", [4096])
+def test_compress_refuses_data_after_gzip_response_in_block(connect: Connect) -> None:
+    inner = b"224 ok COMPRESS=GZIP\r\n" + gzip.compress(XOVER_LINES) + b".\r\n"
+    server = Packets(
+        WELCOME,
+        MODE_READER,
+        COMPRESS_OK,
+        deflated(OVERVIEW_FMT),
+        deflated(inner + STRAY_DATE),
+        deflated(DATE),
+    )
+    client, sock = connect(server)
+    client.compress()
+    check_xover(list(client.xover((1, 2))))
+    assert_next_date_refused(client, sock)

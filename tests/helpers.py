@@ -57,7 +57,10 @@ def _reply_ends(data: bytes) -> list[int]:
     the next reply already received. This marks the end of each single-line
     reply, of each multi-line response (its "." line, or the end of its gzip
     data) and, once COMPRESS is on (a 206 reply), of each sync-flushed block. A
-    wrong mark only splits a recv.
+    wrong mark only splits a recv. A missing mark can merge later replies into
+    one recv (e.g. a body line starting with "206 " switches the rest to
+    sync-flush marks); that shows up as a test failing with "Unexpected data",
+    not as a hidden bug.
     """
     ends: list[int] = []
     pos = 0

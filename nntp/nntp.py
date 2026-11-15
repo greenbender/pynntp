@@ -665,8 +665,9 @@ class BaseNNTPClient:
             NNTPTemporaryError: For status codes 400-499.
             NNTPPermanentError: For status codes 500-599.
             NNTPProtocolError: If the status line can't be parsed, or the server
-                sent data beyond the reply to the previous command. Nothing is
-                sent, and the connection is out of sync.
+                sent data beyond the reply to the previous command. In the
+                second case nothing is sent. Either way the connection is
+                then out of sync.
         """
         code, message = self._command(verb, args)
         if expect is not None:
@@ -1898,6 +1899,9 @@ class NNTPClient(BaseNNTPClient):
             code, message = self.command(verb, args, expect=ready)
 
             with self._sync():
+                # Data that came with the ready reply, such as a fake final
+                # reply, would be taken for the answer to the article
+                self._check_nothing_unread()
                 while chunk := article.read(_SEND_SIZE):
                     self._send(chunk)
                 code, message = self.status()
