@@ -1,5 +1,6 @@
 import copy
 import pickle
+from collections.abc import Iterable
 
 import pytest
 
@@ -172,4 +173,38 @@ def test_pickle_round_trip() -> None:
     assert type(restored) is HeaderDict
     assert list(restored) == ["KeYMiXeD", "Subject"]
     assert restored["keymixed"] == "1"
+    assert restored == original
+
+
+class _Sub(HeaderDict):
+    note = "class attribute"
+
+    def __init__(self, other: Iterable[tuple[str, str]] = ()) -> None:
+        super().__init__(other)
+        self.tag = "instance attribute"
+
+
+def test_copy_keeps_subclass_type() -> None:
+    original = _Sub([("KeYMiXeD", "1"), ("Subject", "2")])
+    for dup in (copy.copy(original), original.copy(), copy.deepcopy(original)):
+        assert type(dup) is _Sub
+        assert dup == original
+        assert dup.tag == "instance attribute"
+        assert list(dup) == ["KeYMiXeD", "Subject"]
+        assert dup["keymixed"] == "1"
+        assert "SUBJECT" in dup
+        dup["keymixed"] = "3"
+        dup["From"] = "me"
+        del dup["subject"]
+        assert list(dup) == ["KeYMiXeD", "From"]
+        assert list(original) == ["KeYMiXeD", "Subject"]
+        assert original["KEYMIXED"] == "1"
+        assert original["subject"] == "2"
+
+
+def test_pickle_round_trip_subclass() -> None:
+    original = _Sub([("KeYMiXeD", "1")])
+    restored = pickle.loads(pickle.dumps(original))  # noqa: S301 - our own data
+    assert type(restored) is _Sub
+    assert list(restored) == ["KeYMiXeD"]
     assert restored == original
