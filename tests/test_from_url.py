@@ -11,7 +11,7 @@ import pytest
 import nntp
 from nntp import SSLMode
 from nntp.nntp import FromURLOptions
-from tests.helpers import DATE, WELCOME, FakeSocket
+from tests.helpers import DATE, MODE_READER, WELCOME, FakeSocket
 
 TIMEOUT = 5.5
 
@@ -137,8 +137,38 @@ def test_plain_url_refuses_tls_context(
 
     monkeypatch.setattr("nntp.nntp.socket.create_connection", no_socket)
     context = ssl.create_default_context()
-    with pytest.raises(ValueError, match="needs use_ssl=True"):
+    with pytest.raises(ValueError, match=r"nntps://.*nntp\+starttls://") as info:
         nntp.NNTPClient.from_url(url, password="pw", ssl_context=context)
+    assert "pw" not in str(info.value)
+
+
+@pytest.mark.parametrize(
+    ("url", "reply"),
+    [
+        ("nntps://h", b""),
+        ("snews://h", b""),
+        ("nntp+starttls://h", b"382 go ahead\r\n"),
+    ],
+)
+def test_tls_url_uses_ssl_context(
+    monkeypatch: pytest.MonkeyPatch, url: str, reply: bytes
+) -> None:
+    # One octet per read: nothing may follow the 382 reply in the buffer
+    sock = FakeSocket(WELCOME + reply + MODE_READER + DATE, 1)
+    wrapped: list[ssl.SSLContext] = []
+
+    def wrap_socket(
+        context: ssl.SSLContext, sock: FakeSocket, **_: object
+    ) -> FakeSocket:
+        wrapped.append(context)
+        return sock
+
+    monkeypatch.setattr("nntp.nntp.socket.create_connection", lambda *_, **__: sock)
+    monkeypatch.setattr(ssl.SSLContext, "wrap_socket", wrap_socket)
+    context = ssl.create_default_context()
+    client = nntp.NNTPClient.from_url(url, ssl_context=context)
+    assert wrapped == [context]
+    assert client.date().year == 2024
 
 
 def test_connects_and_logs_in(monkeypatch: pytest.MonkeyPatch) -> None:
