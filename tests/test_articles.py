@@ -193,3 +193,24 @@ def test_article_bad_header_line_keeps_connection(connect: Connect) -> None:
     with pytest.raises(nntp.NNTPDataError, match="Invalid article headers"):
         client.article(1)
     assert client.date().year == 2024  # Whole response was read; still in sync
+
+
+def test_head_connection_lost_breaks_connection(connect: Connect) -> None:
+    # Cut off before the end of the HEAD response
+    client, _ = connect(WELCOME + MODE_READER + b"221 1 <a@b>\r\nSubject: hi\r\n")
+    with pytest.raises(nntp.NNTPError, match="Failed to read"):
+        client.head(1)
+    with pytest.raises(nntp.NNTPSyncError, match="reconnect"):
+        client.date()
+
+
+def test_article_bad_header_then_connection_lost_breaks_connection(
+    connect: Connect,
+) -> None:
+    # The bad line stops the header parse; reading the rest then fails
+    server = b"220 1 <a@b>\r\nSubject: hi\r\nno colon here\r\n"
+    client, _ = connect(WELCOME + MODE_READER + server)
+    with pytest.raises(nntp.NNTPError, match="Failed to read"):
+        client.article(1)
+    with pytest.raises(nntp.NNTPSyncError, match="reconnect"):
+        client.date()

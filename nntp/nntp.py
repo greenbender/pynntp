@@ -1490,7 +1490,9 @@ class NNTPClient(BaseNNTPClient):
 
         Raises:
             NNTPReplyError: If there is no such article.
-            NNTPDataError: If the reply or headers can't be parsed.
+            NNTPDataError: If the reply or headers can't be parsed. If the
+                headers can't be parsed, the rest of the response (the body) is
+                read first, so the connection stays in sync.
             NNTPYEncError: If yEnc data fails its size or CRC check. The decoded
                 body is in its data attribute.
         """
@@ -1504,7 +1506,8 @@ class NNTPClient(BaseNNTPClient):
         try:
             headers = utils.parse_headers(self._decode(lines))
         except ValueError as e:
-            # Read the rest of the response first, so the connection stays in sync
+            # parse_headers() stopped at the bad line: read the rest of the
+            # response, so the connection stays in sync
             for _ in lines:
                 pass
             raise NNTPDataError(f"Invalid article headers: {e}") from e
@@ -1539,7 +1542,8 @@ class NNTPClient(BaseNNTPClient):
         """
         code, message = self.command("HEAD", _msgid_article(msgid_article), expect=221)
 
-        # HEAD responses are small: read all of it before parsing
+        # Read the whole response before parsing: parse_headers() stops at a
+        # blank or bad line, and the rest must not be left unread. HEAD is small.
         lines = list(self._info(code, message))
         with self._data_errors("article headers"):
             return utils.parse_headers(self._decode(iter(lines)))
