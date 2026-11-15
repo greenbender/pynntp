@@ -321,6 +321,9 @@ def test_login_retry_refuses_unread_data(connect: Connect) -> None:
         client.date()
 
 
+XFEATURE_GZIP_OK = b"290 feature enabled\r\n"
+
+
 def gzip_xover_reply(payload: bytes, *, terminator: bool) -> bytes:
     """A 224 reply with gzip data; the "." line is outside it, or inside it."""
     head = b"224 ok COMPRESS=GZIP\r\n"
@@ -335,7 +338,9 @@ def test_line_after_gzip_response_is_refused(
     connect: Connect, terminator: bool
 ) -> None:
     reply = gzip_xover_reply(XOVER_LINES, terminator=terminator) + STRAY_DATE
-    client, sock = connect(Packets(WELCOME, MODE_READER, reply, DATE), LATER)
+    packets = Packets(WELCOME, MODE_READER, XFEATURE_GZIP_OK, reply, DATE)
+    client, sock = connect(packets, LATER)
+    client.xfeature_compress_gzip()
     code, message = client.command("XOVER")
     assert "".join(client.info(code, message)) == XOVER_LINES.decode()
     assert_refused(client, sock, lambda c: c.date())
@@ -347,7 +352,9 @@ def test_line_inside_gzip_after_terminator_is_refused(connect: Connect) -> None:
     reply = b"224 ok COMPRESS=GZIP\r\n" + gzip.compress(
         XOVER_LINES + b".\r\n" + STRAY_DATE
     )
-    client, sock = connect(Packets(WELCOME, MODE_READER, reply, DATE), LATER)
+    packets = Packets(WELCOME, MODE_READER, XFEATURE_GZIP_OK, reply, DATE)
+    client, sock = connect(packets, LATER)
+    client.xfeature_compress_gzip()
     code, message = client.command("XOVER")
     assert "".join(client.info(code, message)) == XOVER_LINES.decode()
     assert_refused(client, sock, lambda c: c.date())

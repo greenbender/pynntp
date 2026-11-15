@@ -270,12 +270,14 @@ def test_compress_refuses_data_after_gzip_response_in_block(connect: Connect) ->
     server = Packets(
         WELCOME,
         MODE_READER,
+        b"290 feature enabled\r\n",
         COMPRESS_OK,
         deflated(OVERVIEW_FMT),
         deflated(inner + STRAY_DATE),
         deflated(DATE),
     )
     client, sock = connect(server)
+    client.xfeature_compress_gzip()  # gzip is used only after XFEATURE
     client.compress()
     check_xover(list(client.xover((1, 2))))
     assert_next_date_refused(client, sock)
