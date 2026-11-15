@@ -46,9 +46,10 @@ used. With `use_ssl=True` the port defaults to 563;
 for STARTTLS on port 119 instead, also pass `ssl_mode=nntp.SSLMode.STARTTLS`.
 TLS certificates are verified;
 pass `ssl_context=` (an `ssl.SSLContext`) to trust a private CA or change other
-TLS settings. `ssl_context=` and `ssl_mode=nntp.SSLMode.STARTTLS` need `use_ssl=True` (or an
-`nntps://` / `nntp+starttls://` URL below): without TLS they raise `ValueError`
-instead of being ignored, so the password is never sent in clear text by mistake. Leaving the `with` block sends QUIT.
+TLS settings. `ssl_context=` and `ssl_mode=nntp.SSLMode.STARTTLS` need
+`use_ssl=True` (or an `nntps://` / `nntp+starttls://` URL below): without TLS
+they raise `ValueError` instead of being ignored, so the password is never sent
+in clear text by mistake. Leaving the `with` block sends QUIT.
 
 Or connect from a URL, such as one held in an environment variable. The schemes
 are `nntp://`, `nntps://` (or `snews://`) and `nntp+starttls://`:
