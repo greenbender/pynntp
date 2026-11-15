@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import bisect
+import itertools
+import re
 import zlib
 from collections.abc import Callable
 from typing import TYPE_CHECKING
@@ -17,13 +20,82 @@ WELCOME = b"200 server ready\r\n"
 MODE_READER = b"200 reader mode\r\n"
 
 
+_STATUS_LINE = re.compile(rb"\d{3}(?: |\r\n)")
+_MULTILINE = {100, 101, 215, 220, 221, 222, 224, 225, 230, 231, 282}
+_SYNC_FLUSH = b"\x00\x00\xff\xff"  # Ends each deflated(...) response
+
+
+class Packets:
+    """Server bytes with the recv boundaries given: a recv never crosses one.
+
+    For tests that need data arriving together, e.g. two replies in one packet.
+    """
+
+    def __init__(self, *packets: bytes) -> None:
+        self.packets = packets
+
+
+def _gzip_end(data: bytes, pos: int) -> int | None:
+    """Where the gzip stream starting at pos ends, with a "." line after it."""
+    inflate = zlib.decompressobj(15 + 32)
+    try:
+        inflate.decompress(data[pos:], 0x10000)
+        while inflate.unconsumed_tail and not inflate.eof:
+            inflate.decompress(inflate.unconsumed_tail, 0x10000)
+    except zlib.error:
+        return None
+    if not inflate.eof:
+        return None
+    end = len(data) - len(inflate.unused_data)
+    return end + 3 if data[end : end + 3] == b".\r\n" else end
+
+
+def _reply_ends(data: bytes) -> list[int]:
+    """Offsets where a server reply ends, so a recv can stop there.
+
+    A real server answers a command and then waits, so the client never finds
+    the next reply already received. This marks the end of each single-line
+    reply, of each multi-line response (its "." line, or the end of its gzip
+    data) and, once COMPRESS is on (a 206 reply), of each sync-flushed block. A
+    wrong mark only splits a recv.
+    """
+    ends: list[int] = []
+    pos = 0
+    while (nl := data.find(b"\n", pos)) >= 0:
+        line, pos = data[pos : nl + 1], nl + 1
+        if line == b".\r\n":
+            ends.append(pos)
+        elif _STATUS_LINE.match(line):
+            if b"COMPRESS=GZIP" in line and (end := _gzip_end(data, pos)):
+                ends.append(end)
+                pos = end
+            elif int(line[:3]) not in _MULTILINE:
+                ends.append(pos)
+            if line.startswith(b"206 "):
+                while (flush := data.find(_SYNC_FLUSH, pos)) >= 0:
+                    pos = flush + len(_SYNC_FLUSH)
+                    ends.append(pos)
+                break
+    return ends
+
+
 class FakeSocket:
-    """Replays a server byte stream, ``chunk`` bytes per recv, and records sends."""
+    """Replays a server byte stream, ``chunk`` bytes per recv, and records sends.
+
+    A recv ends at the end of a reply (see _reply_ends()), or at the end of a
+    packet if the server data is given as Packets.
+    """
 
     last: FakeSocket  # Most recently created, for tests where connect() raises
 
-    def __init__(self, data: bytes, chunk: int) -> None:
+    def __init__(self, data: bytes | Packets, chunk: int) -> None:
+        if isinstance(data, Packets):
+            ends = list(itertools.accumulate(len(p) for p in data.packets))
+            data = b"".join(data.packets)
+        else:
+            ends = _reply_ends(data)
         self.data = data
+        self.ends = ends
         self.pos = 0  # Bytes of data served so far
         self.chunk = chunk
         self.sent = b""
@@ -33,7 +105,10 @@ class FakeSocket:
         FakeSocket.last = self
 
     def recv(self, size: int) -> bytes:
-        out = self.data[self.pos : self.pos + min(size, self.chunk)]
+        end = self.pos + min(size, self.chunk)
+        if (i := bisect.bisect_right(self.ends, self.pos)) < len(self.ends):
+            end = min(end, self.ends[i])
+        out = self.data[self.pos : end]
         self.pos += len(out)
         return out
 

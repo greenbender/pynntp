@@ -21,6 +21,7 @@ from tests.helpers import (
     WELCOME,
     Connect,
     FakeSocket,
+    Packets,
 )
 
 if TYPE_CHECKING:
@@ -228,10 +229,93 @@ def test_command_rejects_line_breaks(connect: Connect, arg: str) -> None:
 def test_starttls_rejects_data_after_reply(connect: Connect) -> None:
     # A man-in-the-middle appends a fake reply to the plaintext 382. If it
     # arrives in a later read it goes to the TLS handshake instead, and fails.
-    injected = b"200 hi\r\n382 go ahead\r\n211 1 1 1 fake.group\r\n"
+    injected = b"382 go ahead\r\n211 1 1 1 fake.group\r\n"
     with pytest.raises(nntp.NNTPProtocolError, match="after STARTTLS"):
-        connect(injected, use_ssl=True, ssl_mode=SSLMode.STARTTLS)
+        connect(
+            Packets(b"200 hi\r\n", injected), use_ssl=True, ssl_mode=SSLMode.STARTTLS
+        )
     assert FakeSocket.last.closed
+
+
+# Data the server sent beyond a reply must not become the reply to the next
+# command. Only data in the same recv is found, so these run with one big recv;
+# data arriving later is read as the reply, as it can't be told apart.
+BIG_RECV = pytest.mark.parametrize("chunk", [4096])
+STRAY_DATE = b"111 20250506070809\r\n"  # A reply nobody asked for
+LATER = WELCOME + MODE_READER + DATE  # What reconnect() reads
+
+
+def assert_refused(
+    client: nntp.NNTPClient, sock: FakeSocket, call: Callable[[nntp.NNTPClient], object]
+) -> None:
+    """The call raises, sends nothing and leaves the connection out of sync."""
+    sent = sock.sent
+    with pytest.raises(nntp.NNTPProtocolError, match="Unexpected data"):
+        call(client)
+    assert sock.sent == sent
+    with pytest.raises(NNTPSyncError, match="reconnect"):
+        client.date()
+    assert sock.sent == sent
+    client.reconnect()
+    assert client.date().year == 2024
+
+
+@BIG_RECV
+def test_second_reply_in_same_packet_is_refused(connect: Connect) -> None:
+    packets = Packets(
+        WELCOME,
+        MODE_READER,
+        b"211 1 1 1 alt.a\r\n211 9 9 9 alt.b\r\n",
+        b"211 5 5 5 alt.c\r\n",
+    )
+    client, sock = connect(packets, LATER)
+    assert client.group("alt.a") == (1, 1, 1, "alt.a")
+    assert_refused(client, sock, lambda c: c.group("alt.c"))
+
+
+@BIG_RECV
+def test_line_after_terminator_is_refused(connect: Connect) -> None:
+    packets = Packets(WELCOME, MODE_READER, LIST + STRAY_DATE, DATE)
+    client, sock = connect(packets, LATER)
+    assert len(list(client.list_active())) == 2
+    assert_refused(client, sock, lambda c: c.date())
+
+
+@BIG_RECV
+def test_line_after_greeting_is_refused(connect: Connect) -> None:
+    packets = Packets(WELCOME + STRAY_DATE, DATE)
+    client, sock = connect(packets, WELCOME + DATE, reader=False)
+    assert_refused(client, sock, lambda c: c.date())
+
+
+@BIG_RECV
+def test_line_after_greeting_fails_mode_reader(connect: Connect) -> None:
+    with pytest.raises(nntp.NNTPProtocolError, match="Unexpected data"):
+        connect(Packets(WELCOME + STRAY_DATE, MODE_READER))
+    assert FakeSocket.last.sent == b""
+    assert FakeSocket.last.closed
+
+
+@BIG_RECV
+@pytest.mark.parametrize("stray", [b"stray text\r\n", STRAY_DATE], ids=["text", "date"])
+def test_lines_after_error_reply_are_refused(connect: Connect, stray: bytes) -> None:
+    packets = Packets(WELCOME, MODE_READER, b"430 no such article\r\n" + stray, DATE)
+    client, sock = connect(packets, LATER)
+    with pytest.raises(nntp.NNTPTemporaryError):
+        client.article(1)
+    assert_refused(client, sock, lambda c: c.date())
+
+
+@BIG_RECV
+def test_login_retry_refuses_unread_data(connect: Connect) -> None:
+    # The 480 comes with a stray line: the login must not read it as a reply
+    packets = Packets(WELCOME, MODE_READER, b"480 auth\r\n" + STRAY_DATE, b"281 ok\r\n")
+    client, sock = connect(packets, LATER, username="fred", password="pw")
+    with pytest.raises(nntp.NNTPProtocolError, match="Unexpected data"):
+        client.date()
+    assert sock.sent == b"MODE READER\r\nDATE\r\n"  # No AUTHINFO
+    with pytest.raises(NNTPSyncError, match="reconnect"):
+        client.date()
 
 
 def test_480_without_username_raises(connect: Connect) -> None:

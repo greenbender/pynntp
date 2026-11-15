@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 import nntp
+from nntp.nntp import _INFLATE_SIZE
 from tests.helpers import (
     COMPRESS_OK,
     DATE,
@@ -19,6 +20,7 @@ from tests.helpers import (
     XOVER_LINES,
     Connect,
     FakeSocket,
+    Packets,
     check_xover,
     deflated,
     sent_after_compress,
@@ -147,3 +149,85 @@ def test_gzip_response_inside_compress(connect: Connect) -> None:
     client, _ = connect(WELCOME + MODE_READER + server)
     client.compress()
     check_xover(list(client.xover((1, 2))))
+
+
+STRAY_DATE = b"111 20250506070809\r\n"  # A reply nobody asked for
+EMPTY_BLOCK = b"\x00\x00\x00\xff\xff"  # Deflate data that inflates to nothing
+
+
+def list_of_inflate_size() -> bytes:
+    """A LIST response that is _INFLATE_SIZE octets long, as inflated."""
+    body = _INFLATE_SIZE - len(b"215 list\r\n.\r\n")
+    lines = [b"g" * 992 + b" 2 1 y\r\n"] * (body // 1000)  # 1000 octets each
+    lines.append(b"h" * (body % 1000 - 8) + b" 2 1 y\r\n")
+    return b"215 list\r\n" + b"".join(lines) + b".\r\n"
+
+
+# Only data inflated by the same recv is found: data arriving later can't be told
+# from the reply to the next command.
+@pytest.mark.parametrize("chunk", [4096])
+def test_compress_refuses_data_after_reply(connect: Connect) -> None:
+    server = Packets(
+        WELCOME,
+        MODE_READER,
+        COMPRESS_OK,
+        deflated(DATE + STRAY_DATE),
+        deflated(DATE),
+    )
+    client, sock = connect(server)
+    client.compress()
+    assert client.date().year == 2024
+    sent = sent_after_compress(sock)
+    with pytest.raises(nntp.NNTPProtocolError, match="Unexpected data"):
+        client.date()
+    assert sent_after_compress(sock) == sent  # Nothing was sent
+    with pytest.raises(nntp.NNTPSyncError, match="reconnect"):
+        client.date()
+
+
+@pytest.mark.parametrize("chunk", [4096])
+def test_compress_refuses_inflate_output_not_yet_read(connect: Connect) -> None:
+    # The reply fills the decompressor's output limit exactly; the stray line
+    # that follows is still inside it, not in the buffer
+    reply = list_of_inflate_size()
+    assert len(reply) == _INFLATE_SIZE
+    server = Packets(
+        WELCOME, MODE_READER, COMPRESS_OK, deflated(reply + STRAY_DATE), deflated(DATE)
+    )
+    client, sock = connect(server)
+    client.compress()
+    assert len(list(client.list_active())) == 66
+    sent = sent_after_compress(sock)
+    with pytest.raises(nntp.NNTPProtocolError, match="Unexpected data"):
+        client.date()
+    assert sent_after_compress(sock) == sent
+    with pytest.raises(nntp.NNTPSyncError, match="reconnect"):
+        client.date()
+
+
+def test_compress_flush_after_reply_is_not_data(connect: Connect) -> None:
+    server = Packets(
+        WELCOME,
+        MODE_READER,
+        COMPRESS_OK,
+        deflated(DATE) + EMPTY_BLOCK,
+        EMPTY_BLOCK + deflated(DATE),
+    )
+    client, _ = connect(server)
+    client.compress()
+    assert client.date().year == 2024
+    assert client.date().year == 2024
+
+
+def test_compress_reply_filling_inflate_output_exactly(connect: Connect) -> None:
+    server = Packets(
+        WELCOME,
+        MODE_READER,
+        COMPRESS_OK,
+        deflated(list_of_inflate_size()),
+        deflated(DATE),
+    )
+    client, _ = connect(server)
+    client.compress()
+    assert len(list(client.list_active())) == 66
+    assert client.date().year == 2024
