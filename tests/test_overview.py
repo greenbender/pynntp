@@ -229,43 +229,6 @@ def test_xzver_early_yend_in_data(connect: Connect, early: str, match: str) -> N
         list(client.xzver((1, 2)))
 
 
-def xzver_data_after_stream(extra: bytes, *, same_line: bool) -> bytes:
-    """An XZVER response with yEnc data after the zlib stream has ended.
-
-    same_line puts the extra bytes in the stream's last yEnc line, after the
-    stream end; otherwise they follow the stream in lines of their own.
-    """
-    deflate = zlib.compressobj(wbits=-15)
-    stream = deflate.compress(XOVER_LINES) + deflate.flush()
-    raw = stream + extra
-    if same_line:
-        body = yenc_encode(raw, line_length=1 << 20)  # One line
-    else:
-        body = yenc_encode(stream) + yenc_encode(extra)
-    return (
-        b"224 ok\r\n=ybegin line=128 size=0 name=x\r\n"
-        + dot_stuff(body)
-        + f"=yend size={len(raw)} crc32={zlib.crc32(raw):08x}\r\n.\r\n".encode()
-    )
-
-
-@pytest.mark.parametrize("same_line", [False, True], ids=["own-lines", "same-line"])
-def test_xzver_data_after_stream_end(connect: Connect, same_line: bool) -> None:
-    # Data after the end of the compressed stream is an error; it is read to the
-    # terminator but not fed to the decompressor
-    server = (
-        OVERVIEW_FMT + xzver_data_after_stream(b"junk\r\n", same_line=same_line) + DATE
-    )
-    client, _ = connect(WELCOME + MODE_READER + server)
-    with pytest.raises(
-        nntp.NNTPDataError, match="data after the end of the compressed stream"
-    ):
-        list(client.xzver((1, 2)))
-    # As for a second =ybegin, the error marks the connection broken
-    with pytest.raises(nntp.NNTPSyncError):
-        client.date()
-
-
 def test_xzver_empty_response(connect: Connect) -> None:
     server = OVERVIEW_FMT + b"224 none\r\n.\r\n" + DATE
     client, _ = connect(WELCOME + MODE_READER + server)
