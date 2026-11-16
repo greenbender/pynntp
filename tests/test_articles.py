@@ -94,6 +94,25 @@ def test_yenc_missing_trailer(connect: Connect) -> None:
         client.body(1)
 
 
+def test_yenc_missing_trailer_before_next_block(connect: Connect) -> None:
+    first, second = b"first file", b"second file"
+    block_1 = (
+        f"=ybegin line=128 size={len(first)} name=f\r\n".encode()
+        + dot_stuff(yenc_encode(first))  # No =yend: the block is open
+    )
+    block_2 = (
+        f"=ybegin line=128 size={len(second)} name=f\r\n".encode()
+        + dot_stuff(yenc_encode(second))
+        + f"=yend size={len(second)} crc32={zlib.crc32(second):08x}\r\n".encode()
+    )
+    server = b"222 1 <a@b>\r\n" + block_1 + block_2 + b".\r\n"
+    client, _ = connect(WELCOME + MODE_READER + server + DATE)
+    with pytest.raises(nntp.NNTPYEncError, match="missing =yend") as info:
+        client.body(1)
+    assert info.value.data == first + second  # Both blocks kept, as for other errors
+    assert client.date().year == 2024  # Whole response was read; still in sync
+
+
 def test_yenc_trailer_without_crc_checks_size_only(connect: Connect) -> None:
     server = yenc_body(PLAIN, trailer="size=768")
     client, _ = connect(WELCOME + MODE_READER + server)
