@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import gc
+import socket
 import ssl
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -200,6 +201,29 @@ def test_failed_reconnect_stays_broken(connect: Connect) -> None:
     with pytest.raises(nntp.NNTPTemporaryError):
         client.reconnect()
     with pytest.raises(NNTPSyncError):
+        client.date()
+    client.reconnect()
+    assert client.date().year == 2024
+
+
+def test_reconnect_socket_error_stays_broken(
+    monkeypatch: pytest.MonkeyPatch, connect: Connect
+) -> None:
+    client, _ = connect(WELCOME + MODE_READER, WELCOME + MODE_READER + DATE)
+    client.close()
+    open_socket: Any = socket.create_connection  # The fake from connect()
+    refused = [True]
+
+    def flaky(*args: object, **kwargs: object) -> object:
+        if refused:
+            refused.pop()
+            raise ConnectionRefusedError(111, "Connection refused")
+        return open_socket(*args, **kwargs)
+
+    monkeypatch.setattr("nntp.nntp.socket.create_connection", flaky)
+    with pytest.raises(ConnectionRefusedError):
+        client.reconnect()
+    with pytest.raises(NNTPSyncError, match="reconnect"):
         client.date()
     client.reconnect()
     assert client.date().year == 2024

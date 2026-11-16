@@ -310,13 +310,15 @@ class BaseNNTPClient:
         """Open the connection and read the welcome message."""
         self._buffer = BytesFifo()
         self._reading = False  # A multi-line response is being read
-        self._broken = False  # Closed, or unread/unknown data on the socket
         self._deflate: _Compress | None = None  # Set by COMPRESS (RFC 8054)
         self._inflate: _Decompress | None = None
         self._inflate_more = False  # _inflate may have more output pending
 
         host = self._address[0]
         self.socket = socket.create_connection(self._address, timeout=self._timeout)
+        # Only once the socket is open: if connecting fails, the client stays
+        # broken, as reconnect() closed it before calling this
+        self._broken = False  # Unread/unknown data on the socket, or closed
         try:
             if self._use_ssl and self._ssl_mode == SSLMode.IMPLICIT:
                 self._enable_tls(host)
@@ -341,6 +343,13 @@ class BaseNNTPClient:
         Use this to recover from NNTPSyncError. Session state such as the
         selected group, the current article and XFEATURE settings is not
         restored.
+
+        If it raises, the client stays closed: commands raise NNTPSyncError
+        until reconnect() succeeds, so it can be called again.
+
+        Raises:
+            OSError: On socket or TLS errors, including a failed connect.
+            NNTPReplyError: If the server does not accept the connection.
         """
         self.close()
         self._connect()
