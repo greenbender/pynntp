@@ -330,6 +330,8 @@ def test_raw_command(connect: Connect) -> None:
         ({}, 119),
         ({"use_ssl": True}, 563),
         ({"use_ssl": True, "ssl_mode": SSLMode.STARTTLS}, 119),
+        ({"use_ssl": True, "ssl_mode": "starttls"}, 119),  # The mode's value
+        ({"use_ssl": True, "ssl_mode": "implicit"}, 563),
         ({"port": 1119, "use_ssl": True}, 1119),
     ],
 )
@@ -346,6 +348,23 @@ def test_default_port(
     with pytest.raises(ConnectionRefusedError):
         nntp.NNTPClient("example.com", **kwargs)  # type: ignore[arg-type]
     assert addresses == [("example.com", port)]
+
+
+@pytest.mark.parametrize("ssl_mode", ["tls", "STARTTLS", "", None, 1])
+def test_invalid_ssl_mode(monkeypatch: pytest.MonkeyPatch, ssl_mode: object) -> None:
+    def no_socket(*_: object, **__: object) -> FakeSocket:
+        raise AssertionError("a socket was opened")
+
+    monkeypatch.setattr("nntp.nntp.socket.create_connection", no_socket)
+    with pytest.raises(ValueError, match="not a valid SSLMode"):
+        nntp.NNTPClient("example.com", use_ssl=True, ssl_mode=ssl_mode)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("ssl_mode", ["tls", None])
+def test_ssl_mode_ignored_without_use_ssl(connect: Connect, ssl_mode: object) -> None:
+    # Plain text was chosen with use_ssl=False, so the mode is not checked
+    client, _ = connect(WELCOME + MODE_READER + DATE, ssl_mode=ssl_mode)
+    assert client.date().year == 2024
 
 
 def test_starttls_480_never_logs_in(connect: Connect) -> None:

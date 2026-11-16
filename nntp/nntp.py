@@ -285,16 +285,23 @@ class BaseNNTPClient:
                 Without TLS it is sent in clear text, as is the password.
             password: Password, sent if the server asks for authentication.
             timeout: Socket timeout in seconds, or None to wait forever.
-            use_ssl: Use TLS.
-            ssl_mode: IMPLICIT (TLS from the start, usually port 563) or STARTTLS.
+            use_ssl: Use TLS. ssl_mode and ssl_context only take effect with it.
+            ssl_mode: IMPLICIT (TLS from the start, usually port 563) or STARTTLS,
+                as an SSLMode or its value ("implicit", "starttls").
             ssl_context: TLS settings, e.g. to trust a private CA. Defaults to
                 ssl.create_default_context() with TLS 1.2 as the minimum,
-                which verifies the certificate.
+                which verifies the certificate. Ignored without use_ssl=True.
 
         Raises:
+            ValueError: If use_ssl is true and ssl_mode is not a valid
+                SSLMode. Nothing is connected, so a misspelt mode never falls
+                back to clear text.
             OSError: On socket or TLS errors.
             NNTPReplyError: If the server does not accept the connection.
         """
+        if use_ssl:
+            # A misspelt mode used to take neither TLS branch: plain text
+            ssl_mode = SSLMode(ssl_mode)
         self.username = username
         self.password = password
         if port is None:
@@ -819,14 +826,17 @@ class NNTPClient(BaseNNTPClient):
                 Without TLS it is sent in clear text, as is the password.
             password: Password, sent if the server asks for authentication.
             timeout: Socket timeout in seconds, or None to wait forever.
-            use_ssl: Use TLS.
-            ssl_mode: IMPLICIT (TLS from the start, usually port 563) or STARTTLS.
+            use_ssl: Use TLS. ssl_mode and ssl_context only take effect with it.
+            ssl_mode: IMPLICIT (TLS from the start, usually port 563) or STARTTLS,
+                as an SSLMode or its value ("implicit", "starttls").
             ssl_context: TLS settings, e.g. to trust a private CA. Defaults to
                 ssl.create_default_context() with TLS 1.2 as the minimum,
-                which verifies the certificate.
+                which verifies the certificate. Ignored without use_ssl=True.
             reader: Send MODE READER after connecting, and after reconnect().
 
         Raises:
+            ValueError: If use_ssl is true and ssl_mode is not a valid
+                SSLMode. Nothing is connected.
             OSError: On socket or TLS errors.
             NNTPReplyError: If the server does not accept the connection.
         """
@@ -857,7 +867,8 @@ class NNTPClient(BaseNNTPClient):
 
         Keyword arguments override the URL, and the constructor's defaults
         apply to anything set by neither. Passing the password as an argument
-        keeps it out of the URL, which tends to end up in logs.
+        keeps it out of the URL, which tends to end up in logs. An ssl_context
+        only takes effect with an nntps://, snews:// or nntp+starttls:// URL.
 
         Args:
             url: The server URL. It may not have a path or fragment.
