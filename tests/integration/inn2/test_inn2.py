@@ -403,10 +403,15 @@ def test_article_in_empty_group() -> None:
     group = empty_group()
     with client() as nntp_client:
         total, low, high, name = nntp_client.group(group)
-        # RFC 3977 6.1.1.2: an empty group reports high = low - 1 (INN: 1 0),
-        # all zeros, or a high water mark below the low one
-        assert (total, name) == (0, group)
-        assert high < low or (low, high) == (0, 0)
+        if OTHER_SERVER or EMPTY_GROUP:
+            # RFC 3977 6.1.1.2 allows three forms: high = low - 1 (the
+            # preferred one), all zeros, and high >= low (a count of zero is
+            # then possible). A high more than one below low is none of them.
+            assert (total, name) == (0, group)
+            assert high >= low - 1
+        else:
+            # INN's own reply for its junk group
+            assert (total, low, high, name) == (0, 1, 0, "junk")
         with pytest.raises(nntp.NNTPTemporaryError) as info:
             nntp_client.article()
         assert info.value.code == 420
@@ -432,21 +437,31 @@ def test_newgroups() -> None:
 
 def test_newnews() -> None:
     require("NEWNEWS")
+    # By default a wildmat, as INN's setup allows; another server may not
+    wildmat = GROUP if OTHER_SERVER or not GROUP.startswith("local.") else "local.*"
     with client() as nntp_client:
         since = nntp_client.date() - timedelta(minutes=1)
         _, message_id = post(nntp_client, "NEWNEWS test")
-        msgids = list(nntp_client.newnews(GROUP, since))
+        msgids = list(nntp_client.newnews(wildmat, since))
         assert message_id in msgids
         assert all(m.startswith("<") and m.endswith(">") for m in msgids)
         tomorrow = nntp_client.date() + timedelta(days=1)
-        assert list(nntp_client.newnews(GROUP, tomorrow)) == []
+        assert list(nntp_client.newnews(wildmat, tomorrow)) == []
 
 
 def test_xover_full_field() -> None:
-    require_listed("OVER")
+    """XOVER (RFC 2980) isn't in CAPABILITIES; another server may refuse it.
+
+    On another server (PYNNTP_HOST) a 500 reply skips the test. Else it fails.
+    """
     with client() as nntp_client:
         number, message_id = post(nntp_client, "Overview test")
-        [(article_number, overview)] = nntp_client.xover((number, number))
+        try:
+            [(article_number, overview)] = nntp_client.xover((number, number))
+        except nntp.NNTPPermanentError as e:
+            if not OTHER_SERVER or e.code != 500:
+                raise
+            pytest.skip(f"The server refuses XOVER: {e.code}")
         assert article_number == number
         assert overview["subject"] == "Overview test"
         assert overview["message-id"] == message_id
@@ -568,7 +583,8 @@ def test_reconnect_after_abandoned_response() -> None:
 def test_login_refused_keeps_connection() -> None:
     with client() as nntp_client:
         with pytest.raises(nntp.NNTPReplyError) as info:
-            nntp_client.login("user", "secret")
+            # A password that no configured login can have
+            nntp_client.login("user", uuid.uuid4().hex)
         # 502: no logins here. INN with TLS set up wants TLS first (483).
         # A server with logins refuses the wrong one (481, RFC 4643).
         assert info.value.code in {481, 483, 502}
@@ -590,12 +606,17 @@ def test_xpat() -> None:
 def test_from_url(scheme: str) -> None:
     if scheme == "nntp+starttls":
         require("STARTTLS")
-    port = PORT
+    # The port is left out unless set, so the defaults (nntps 563, else 119)
+    # are used against the real server
+    port = ""
     if scheme == "nntps":
         if not TLS_PORT:
             pytest.skip("PYNNTP_TLS_PORT=0: no implicit TLS")
-        port = TLS_PORT
-    url = f"{scheme}://{HOST}:{port}"
+        if env("PYNNTP_TLS_PORT", ""):
+            port = f":{TLS_PORT}"
+    elif env("PYNNTP_PORT", ""):
+        port = f":{PORT}"
+    url = f"{scheme}://{HOST}{port}"
     with nntp.NNTPClient.from_url(
         url, username=USER, password=PASSWORD, ssl_context=tls_context()
     ) as nntp_client:

@@ -59,7 +59,8 @@ it (default INN runs) these fail instead, so a client bug can't become a skip:
 
 - Tests of HDR, OVER and LIST ACTIVE.TIMES, when CAPABILITIES doesn't list
   them.
-- The XHDR test, when the server answers 500 to XHDR.
+- The XHDR and XOVER tests, when the server answers 500 to the command (they
+  are not in CAPABILITIES).
 - The overview test, without an Xref overview field.
 - The posting tests, without an Xref header in HEAD (Xref is optional in
   RFC 5536). An Xref that doesn't list the group fails them on any server,
