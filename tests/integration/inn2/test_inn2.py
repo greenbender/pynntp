@@ -332,8 +332,7 @@ def test_compress(ssl_mode: SSLMode | None) -> None:
         "localhost",
         use_ssl=ssl_mode is not None,
         ssl_mode=ssl_mode or SSLMode.IMPLICIT,
-        # ssl_context needs use_ssl=True
-        ssl_context=tls_context() if ssl_mode is not None else None,
+        ssl_context=tls_context(),
     ) as nntp_client:
         nntp_client.compress()
         assert "COMPRESS DEFLATE" not in list(nntp_client.capabilities())
@@ -406,9 +405,7 @@ def test_xpat() -> None:
 def test_from_url(url: str) -> None:
     if url.startswith("nntp+starttls"):
         require("STARTTLS")
-    # ssl_context is refused for a plain-text nntp:// URL
-    context = None if url.startswith("nntp://") else tls_context()
-    with nntp.NNTPClient.from_url(url, ssl_context=context) as nntp_client:
+    with nntp.NNTPClient.from_url(url, ssl_context=tls_context()) as nntp_client:
         check_newsgroups(nntp_client)
 
 

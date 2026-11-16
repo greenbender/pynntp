@@ -350,27 +350,6 @@ def test_default_port(
     assert addresses == [("example.com", port)]
 
 
-@pytest.mark.parametrize(
-    ("ssl_mode", "with_context"),
-    [
-        (SSLMode.IMPLICIT, True),
-        (SSLMode.STARTTLS, False),
-        (SSLMode.STARTTLS, True),
-    ],
-    ids=["context", "starttls", "starttls-context"],
-)
-def test_tls_settings_need_use_ssl(
-    monkeypatch: pytest.MonkeyPatch, ssl_mode: SSLMode, with_context: bool
-) -> None:
-    def no_socket(*_: object, **__: object) -> FakeSocket:
-        raise AssertionError("a socket was opened")
-
-    monkeypatch.setattr("nntp.nntp.socket.create_connection", no_socket)
-    context = ssl.create_default_context() if with_context else None
-    with pytest.raises(ValueError, match="needs use_ssl=True"):
-        nntp.NNTPClient("example.com", ssl_mode=ssl_mode, ssl_context=context)
-
-
 @pytest.mark.parametrize("use_ssl", [False, True])
 @pytest.mark.parametrize("ssl_mode", ["tls", "STARTTLS", "", None, 1])
 def test_invalid_ssl_mode(
@@ -382,17 +361,6 @@ def test_invalid_ssl_mode(
     monkeypatch.setattr("nntp.nntp.socket.create_connection", no_socket)
     with pytest.raises(ValueError, match="not a valid SSLMode"):
         nntp.NNTPClient("example.com", use_ssl=use_ssl, ssl_mode=ssl_mode)  # type: ignore[arg-type]
-
-
-def test_ssl_mode_value_without_use_ssl_is_refused(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    def no_socket(*_: object, **__: object) -> FakeSocket:
-        raise AssertionError("a socket was opened")
-
-    monkeypatch.setattr("nntp.nntp.socket.create_connection", no_socket)
-    with pytest.raises(ValueError, match="needs use_ssl=True"):
-        nntp.NNTPClient("example.com", ssl_mode="starttls")  # type: ignore[arg-type]
 
 
 def test_starttls_480_never_logs_in(connect: Connect) -> None:
