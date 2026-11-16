@@ -139,9 +139,11 @@ def test_parse_headers_fold_whitespace(
 
 
 def test_parse_headers_many_continuation_lines() -> None:
-    # The client passes lines without their line endings
+    # Lines are passed without their line endings here; both forms work
     count = 500_000
-    limit = 3.0  # seconds
+    # The linear code takes well under 1 s and the quadratic code about 20 s, so
+    # a generous limit keeps a slow or loaded CI runner from failing the test
+    limit = 10.0  # seconds
     lines = ["X-Long: start", *[" x"] * count, "Other: y"]
     start = time.perf_counter()
     headers = parse_headers(lines)
