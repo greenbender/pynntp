@@ -586,7 +586,7 @@ def split_scenarios() -> Iterator[Scenario]:
         "split/post-bytewise",
         script(
             step("POST", bytewise(b"340 send\r\n")),
-            step(None, bytewise(b"240 ok <p@x>\r\n"), read_dot=True),
+            step(None, bytewise(b"240 Article received <p@x>\r\n"), read_dot=True),
         ),
         lambda c: c.post(HEADERS, b"x\n.dot\n..\n.\n"),
         Ok("<p@x>"),
@@ -1848,7 +1848,7 @@ def post_scenarios() -> Iterator[Scenario]:
             step("AUTHINFO USER u", b"381 pass\r\n"),
             step("AUTHINFO PASS p", b"281 ok\r\n"),
             step("POST", b"340 go\r\n"),
-            step(None, b"240 ok <z@x>\r\n", read_dot=True),
+            step(None, b"240 Article received <z@x>\r\n", read_dot=True),
         ),
         lambda c: c.post(HEADERS, b"x"),
         Ok("<z@x>"),
