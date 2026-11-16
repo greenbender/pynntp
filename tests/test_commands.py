@@ -15,6 +15,8 @@ from tests.helpers import LIST, MODE_READER, WELCOME, Connect
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
 
+    from nntp.types import Range
+
 
 def test_group(connect: Connect) -> None:
     client, sock = connect(WELCOME + MODE_READER + b"211 3 10 12 alt.test\r\n")
@@ -332,6 +334,42 @@ def test_header_rows_reject_invalid_identifiers(
     args = ("Subject", (1, 2), "*") if verb == "xpat" else ("Subject", (1, 2))
     with pytest.raises(nntp.NNTPDataError):
         list(getattr(client, verb)(*args))
+
+
+@pytest.mark.parametrize(
+    ("verb", "code"), [("hdr", b"225"), ("xhdr", b"221"), ("xpat", b"221")]
+)
+@pytest.mark.parametrize("request_", [(1, 2), 5, (3,)])
+def test_header_numeric_request_rejects_message_id_row(
+    connect: Connect, verb: str, code: bytes, request_: Range
+) -> None:
+    server = code + b" ok\r\n<a@b> value\r\n.\r\n"
+    client, _ = connect(WELCOME + MODE_READER + server)
+    args = ("Subject", request_, "*") if verb == "xpat" else ("Subject", request_)
+    with pytest.raises(nntp.NNTPDataError):
+        list(getattr(client, verb)(*args))
+
+
+@pytest.mark.parametrize(("verb", "code"), [("hdr", b"225"), ("xhdr", b"221")])
+def test_header_current_article_rejects_message_id_row(
+    connect: Connect, verb: str, code: bytes
+) -> None:
+    server = code + b" ok\r\n<a@b> value\r\n.\r\n"
+    client, _ = connect(WELCOME + MODE_READER + server)
+    with pytest.raises(nntp.NNTPDataError):
+        list(getattr(client, verb)("Subject"))
+
+
+@pytest.mark.parametrize(
+    ("verb", "code"), [("hdr", b"225"), ("xhdr", b"221"), ("xpat", b"221")]
+)
+def test_header_message_id_request_message_id_row(
+    connect: Connect, verb: str, code: bytes
+) -> None:
+    server = code + b" ok\r\n<a@b> value\r\n.\r\n"
+    client, _ = connect(WELCOME + MODE_READER + server)
+    args = ("Subject", "<a@b>", "*") if verb == "xpat" else ("Subject", "<a@b>")
+    assert list(getattr(client, verb)(*args)) == [(0, "value")]
 
 
 def test_newgroups_year_zero_padded(connect: Connect) -> None:

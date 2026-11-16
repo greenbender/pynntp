@@ -1569,15 +1569,23 @@ class NNTPClient(BaseNNTPClient):
             args += " " + utils.unparse_msgid_range(msgid_range)
 
         code, message = self.command(verb, args, expect=225 if verb == "HDR" else 221)
-        return self._number_values(verb, self.info(code, message, yz=verb == "XZHDR"))
+        return self._number_values(
+            verb,
+            self.info(code, message, yz=verb == "XZHDR"),
+            allow_msgid=isinstance(msgid_range, str),
+        )
 
     def _number_values(
-        self, verb: str, lines: Iterator[str]
+        self, verb: str, lines: Iterator[str], allow_msgid: bool
     ) -> Iterator[tuple[int, str]]:
-        """Parse "<article number> <value>" lines, as sent by HDR and XPAT."""
+        """Parse "<article number> <value>" lines, as sent by HDR and XPAT.
+
+        allow_msgid is True if the request was by message-id, the only case
+        where a message-id line (number 0) can be the answer.
+        """
         for line in lines:
             with self._data_errors(f"{verb} response"):
-                number, value = utils.parse_number_value(line)
+                number, value = utils.parse_number_value(line, allow_msgid)
             yield number, value
 
     def hdr(
@@ -1600,7 +1608,8 @@ class NNTPClient(BaseNNTPClient):
 
         Raises:
             NNTPReplyError: If there is no such article.
-            NNTPDataError: If a line can't be parsed.
+            NNTPDataError: If a line can't be parsed, or if a message-id line
+                answers a request that was not by message-id.
         """
         return self._hdr(header, msgid_range)
 
@@ -1750,12 +1759,15 @@ class NNTPClient(BaseNNTPClient):
 
         Raises:
             NNTPReplyError: If there is no such article.
-            NNTPDataError: If a line can't be parsed.
+            NNTPDataError: If a line can't be parsed, or if a message-id line
+                answers a request that was not by message-id.
         """
         args = " ".join([header, utils.unparse_msgid_range(msgid_range), *pattern])
 
         code, message = self.command("XPAT", args, expect=221)
-        return self._number_values("XPAT", self.info(code, message))
+        return self._number_values(
+            "XPAT", self.info(code, message), allow_msgid=isinstance(msgid_range, str)
+        )
 
     def xfeature_compress_gzip(self, terminator: bool = False) -> None:
         """XFEATURE COMPRESS GZIP command.

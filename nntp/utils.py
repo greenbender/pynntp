@@ -161,14 +161,17 @@ def parse_overview_fmt(line: str) -> tuple[str, bool]:
     return name, full
 
 
-def parse_number_value(line: str) -> tuple[int, str]:
+def parse_number_value(line: str, allow_msgid: bool = True) -> tuple[int, str]:
     """Parse an HDR, XHDR or XPAT line: an article number, then a value.
 
     A line starting with a message-id (older XHDR by message-id) gets
-    number 0, as HDR gives.
+    number 0, as HDR gives. Only a request by message-id may be answered
+    with such a line.
 
     Args:
         line: The response line.
+        allow_msgid: False if the request was not by message-id (a range or
+            the current article), so a message-id line is an error.
 
     Returns:
         The article number and the value ("" if there is none).
@@ -178,6 +181,8 @@ def parse_number_value(line: str) -> tuple[int, str]:
     """
     first, *value = line.rstrip("\r\n").split(None, 1)
     if _MESSAGE_ID_RE.fullmatch(first):
+        if not allow_msgid:
+            raise ValueError(f"message-id {first!r} in the reply to a numeric request")
         number = 0
     elif first.isascii() and first.isdecimal():
         number = int(first)
