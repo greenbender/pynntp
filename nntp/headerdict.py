@@ -19,6 +19,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 from __future__ import annotations
 
 from collections.abc import Iterable, Iterator, Mapping, MutableMapping
+from typing import Self
 
 __all__ = ["HeaderDict"]
 
@@ -73,6 +74,31 @@ class HeaderDict(MutableMapping[str, str]):
 
     def __len__(self) -> int:
         return len(self._items)
+
+    def copy(self) -> Self:
+        """Return an independent copy with the same names, values and order.
+
+        Like dict.copy(): changing the copy does not change this HeaderDict,
+        and changing this HeaderDict does not change the copy. The copy has
+        the same type as this object (a subclass stays a subclass); other
+        instance attributes of a subclass, including those in __slots__, are
+        copied shallowly.
+        """
+        dup = type(self).__new__(type(self))
+        # The state copy.copy() uses: the __dict__, or a (dict, slots) tuple
+        state = object.__getstate__(self)
+        slots: dict[str, object] = {}
+        if isinstance(state, tuple):
+            state, slots = state
+        if isinstance(state, dict):
+            dup.__dict__.update(state)
+        for name, value in slots.items():
+            setattr(dup, name, value)
+        dup._items = self._items.copy()  # noqa: SLF001
+        return dup
+
+    def __copy__(self) -> Self:
+        return self.copy()
 
     def _folded(self) -> dict[str, str]:
         return {folded: value for folded, (_, value) in self._items.items()}
