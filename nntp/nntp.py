@@ -293,12 +293,15 @@ class BaseNNTPClient:
                 which verifies the certificate. Ignored without use_ssl=True.
 
         Raises:
-            ValueError: If ssl_mode is not a valid SSLMode. Nothing is
-                connected, so a misspelt mode never falls back to clear text.
+            ValueError: If use_ssl is true and ssl_mode is not a valid
+                SSLMode. Nothing is connected, so a misspelt mode never falls
+                back to clear text.
             OSError: On socket or TLS errors.
             NNTPReplyError: If the server does not accept the connection.
         """
-        ssl_mode = SSLMode(ssl_mode)  # ValueError for anything but a mode or value
+        if use_ssl:
+            # A misspelt mode used to take neither TLS branch: plain text
+            ssl_mode = SSLMode(ssl_mode)
         self.username = username
         self.password = password
         if port is None:
@@ -832,8 +835,8 @@ class NNTPClient(BaseNNTPClient):
             reader: Send MODE READER after connecting, and after reconnect().
 
         Raises:
-            ValueError: If ssl_mode is not a valid SSLMode. Nothing is
-                connected.
+            ValueError: If use_ssl is true and ssl_mode is not a valid
+                SSLMode. Nothing is connected.
             OSError: On socket or TLS errors.
             NNTPReplyError: If the server does not accept the connection.
         """

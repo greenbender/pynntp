@@ -47,9 +47,9 @@ for STARTTLS on port 119 instead, also pass `ssl_mode=nntp.SSLMode.STARTTLS`.
 TLS certificates are verified;
 pass `ssl_context=` (an `ssl.SSLContext`) to trust a private CA or change other
 TLS settings. `ssl_context=` and `ssl_mode=` only take effect with
-`use_ssl=True` (an `nntps://` or `nntp+starttls://` URL below sets it); an
-invalid `ssl_mode` raises `ValueError` before anything is connected. Leaving
-the `with` block sends QUIT.
+`use_ssl=True` (an `nntps://` or `nntp+starttls://` URL below sets it); with
+it, an invalid `ssl_mode` raises `ValueError` before anything is connected.
+Leaving the `with` block sends QUIT.
 
 Or connect from a URL, such as one held in an environment variable. The schemes
 are `nntp://`, `nntps://` (or `snews://`) and `nntp+starttls://`:
