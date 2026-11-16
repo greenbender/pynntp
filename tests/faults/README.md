@@ -75,7 +75,7 @@ makes it pass, pytest reports XPASS and the run fails: remove `known=` and
 
 | Scenarios | Open bug | Issue |
 |---|---|---|
-| `leftover/second-status-same-packet`, `leftover/status-after-terminator-same-packet`, `leftover/extra-line-after-greeting`, `leftover/crlf-after-terminator` | Data the server sent after a reply is taken as the reply to the next command | #161 |
+| `leftover/second-status-same-packet`, `leftover/status-after-terminator-same-packet`, `leftover/extra-line-after-greeting` | Data the server sent after a reply is taken as the reply to the next command | #161 |
 | `session/resume-abandoned-iterator-after-reconnect` | A response iterator resumed after reconnect() reads the new connection's reply | #162 |
 | `xzver/sync-flushed-not-finished` | XZVER rejects a complete DEFLATE stream that is sync-flushed, not finished | #154 |
 | `xzver/last-row-without-crlf` | XZVER drops a last row that has no CRLF | #160 |

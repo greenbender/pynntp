@@ -304,6 +304,26 @@ def max_lines(prefix: str, n: int) -> ServerCheck:
     return check
 
 
+def line_sequence(*want: str) -> ServerCheck:
+    """The client lines named in want come in this order, and no others of them.
+
+    A line counts under its first word, or under its first two for AUTHINFO.
+    Other lines (MODE, GROUP, the DATE probe) are left out of the comparison.
+    """
+
+    def key(line: str) -> str:
+        words = line.upper().split()
+        if words[:1] == ["AUTHINFO"]:
+            return " ".join(words[:2])
+        return words[0] if words else ""
+
+    def check(s: JSON) -> str | None:
+        got = [k for k in map(key, s["lines"]) if k in want]
+        return None if got == list(want) else f"server got {got}, expected {list(want)}"
+
+    return check
+
+
 def all_of(*checks: ServerCheck) -> ServerCheck:
     def check(s: JSON) -> str | None:
         return next((why for c in checks if (why := c(s))), None)
@@ -351,6 +371,16 @@ def in_group(f: Action) -> Action:
 
     def act(c: nntp.NNTPClient) -> object:
         c.group("alt.test")
+        return f(c)
+
+    return act
+
+
+def logged_in(f: Action) -> Action:
+    """Log in (AUTHINFO USER, PASS), then f."""
+
+    def act(c: nntp.NNTPClient) -> object:
+        c.login()
         return f(c)
 
     return act
@@ -893,10 +923,13 @@ def leftover_scenarios() -> Iterator[Scenario]:
         "leftover/crlf-after-terminator",
         script(step("BODY 1", ml(b"222 1 <a@b>", [b"x"]) + CRLF)),
         lambda c: c.body(1),
-        Ok(b"x\r\n"),
+        # An empty line after the terminator is data after the reply, which the
+        # next command refuses (#161): the connection ends up marked broken
+        Clean(
+            pred=lambda v: v == b"x\r\n",
+            desc="body() must return the article",
+        ),
         RAW,
-        known=UNREAD_DATA,
-        known_why="result ok but the connection is late-broken",
     )
 
 
@@ -1923,6 +1956,9 @@ def auth_scenarios() -> Iterator[Scenario]:
         {"reader": False, "username": "u", "password": "x"},
         probe="store",
     )
+    # The store answers 480 to every command before the login, so each action
+    # logs in first: the injected 480 is then one on a logged-in connection,
+    # and exactly one more AUTHINFO USER/PASS and the retried command follow.
     relogin: list[tuple[str, Action, Expect]] = [
         ("GROUP", lambda c: c.group("alt.test"), Ok((3, 1, 3, "alt.test"))),
         ("ARTICLE", lambda c: c.article("<1@test>")[2], Ok(STORE_BODY_BYTES)),
@@ -1940,20 +1976,30 @@ def auth_scenarios() -> Iterator[Scenario]:
         ),
     ]
     for cmd, act, exp in relogin:
+        # The store looks up POST's override twice (the reply, then whether an
+        # article follows), and each lookup counts: 2 gives one 480 reply.
+        times = 2 if cmd == "POST" else 1
         yield Scenario(
             f"auth/480-once-on-{cmd.lower()}",
             store_cfg(
                 store=auth,
                 faults={
                     "override": {cmd: ["480 login expired"]},
-                    "override_times": {cmd: 1},
+                    "override_times": {cmd: times},
                 },
             ),
-            act,
+            logged_in(act),
             exp,
             CREDS,
             probe="store",
-            server_check=max_lines("AUTHINFO USER", 2),
+            server_check=line_sequence(
+                "AUTHINFO USER",
+                "AUTHINFO PASS",
+                cmd,
+                "AUTHINFO USER",
+                "AUTHINFO PASS",
+                cmd,
+            ),
         )
     yield Scenario(
         "auth/481-after-480",
