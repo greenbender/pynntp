@@ -1438,19 +1438,20 @@ class NNTPClient(BaseNNTPClient):
 
         Only lines between =ybegin and =yend are decoded; text outside them,
         such as a signature, is dropped. A stray =yend outside a block is
-        ignored, unless text was dropped since the last block closed: then an
-        early =yend has hidden the data of its block, which is an error.
+        ignored, unless text was dropped since the last =yend (or the start of
+        the body): then an early =yend has hidden the data of its block, which
+        is an error.
 
         Raises:
             NNTPYEncError: If yEnc data does not match its trailer, a =ybegin
-                has no =yend, or there is no =ybegin. The decoded body is in
-                its data attribute.
+                has no =yend, there is no =ybegin, or a =yend follows text
+                outside a block. The decoded body is in its data attribute.
         """
         body: list[bytes] = []
         encoded: list[bytes] = []  # yEnc data lines not yet decoded
         decoder, size, multipart, open_block = YEnc(), 0, False, False
         seen_block = False
-        dropped = False  # Text dropped outside a block since it closed
+        dropped = False  # Text dropped outside a block since the last =yend
         error: str | None = None
 
         def decode_pending() -> None:
