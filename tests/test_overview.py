@@ -141,6 +141,25 @@ def test_xzhdr_last_row(connect: Connect, terminated: bool, rows: int) -> None:
     assert client.date().year == 2024
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [b"1\thello\tme\n2\t.dot\tyou\n", b"1\thello\tme\r\n2\t.dot\tyou\n3\tx"],
+)
+def test_xzver_lf_only_rows(connect: Connect, payload: bytes) -> None:
+    # Rows split by a bare LF are not merged into one row, nor dropped
+    server = OVERVIEW_FMT + yenczlib(b"224", payload) + DATE
+    client, _ = connect(WELCOME + MODE_READER + server)
+    with pytest.raises(nntp.NNTPDataError, match="without CRLF"):
+        list(client.xzver((1, 2)))
+
+
+def test_xzhdr_lf_only_rows(connect: Connect) -> None:
+    server = yenczlib(b"221", b"1 hello\n2 world\n") + DATE
+    client, _ = connect(WELCOME + MODE_READER + server)
+    with pytest.raises(nntp.NNTPDataError, match="without CRLF"):
+        list(client.xzhdr("Subject", (1, 2)))
+
+
 def test_xzver_empty_compressed_stream(connect: Connect) -> None:
     client, _ = connect(
         WELCOME + MODE_READER + OVERVIEW_FMT + yenczlib(b"224", b"") + DATE
