@@ -176,9 +176,33 @@ def test_yenc_early_trailer_does_not_hide_data(
 
 
 def test_yenc_stray_trailer_after_blank_lines(connect: Connect) -> None:
-    server = yenc_body(PLAIN)[:-3] + b"\r\n \r\n=yend size=0\r\n.\r\n"
+    server = yenc_body(PLAIN)[:-3] + b"\r\n\r\n=yend size=0\r\n.\r\n"
     client, _ = connect(WELCOME + MODE_READER + server + DATE)
     assert client.body(1) == PLAIN
+    assert client.date().year == 2024
+
+
+def test_yenc_space_line_is_data_not_blank(connect: Connect) -> None:
+    # A space encodes byte 0xf6, so the line is data outside a block, and the
+    # last trailer, which does not match the empty block, must not be ignored
+    server = (
+        b"222 1 <a@b>\r\n=ybegin line=128 size=1 name=x\r\n=yend size=0\r\n"
+        b" \r\n=yend size=1\r\n.\r\n"
+    )
+    client, _ = connect(WELCOME + MODE_READER + server + DATE)
+    with pytest.raises(nntp.NNTPYEncError, match="outside a block") as info:
+        client.body(1)
+    assert info.value.data == b""
+    assert client.date().year == 2024
+
+
+def test_yenc_duplicate_trailer_after_signature(connect: Connect) -> None:
+    server = (
+        b"222 1 <a@b>\r\n=ybegin line=128 size=1 name=x\r\nk\r\n=yend size=1\r\n"
+        b"-- \r\nsignature\r\n=yend size=1\r\n.\r\n"
+    )
+    client, _ = connect(WELCOME + MODE_READER + server + DATE)
+    assert client.body(1) == b"A"
     assert client.date().year == 2024
 
 

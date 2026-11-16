@@ -168,6 +168,31 @@ def _msgid_article(msgid_article: str | int | None) -> str | None:
     return None if msgid_article is None else str(msgid_article)
 
 
+def _stray_yend_error(
+    line: bytes, size: int, crc32: int, *, part: bool, dropped: bool, closed: bool
+) -> str | None:
+    """Check a =yend outside a block.
+
+    Args:
+        line: The =yend line.
+        size: Decoded length of the last closed block.
+        crc32: CRC32 of the last closed block.
+        part: The last closed block was a part of a multipart post.
+        dropped: Text was dropped since the last =yend.
+        closed: A block has been closed, so size and crc32 are its own.
+
+    Returns:
+        None if no text was dropped (a harmless stray) or the line repeats
+        the trailer of the last closed block (a duplicate), else a description
+        of the error: an early =yend has hidden the data of its block.
+    """
+    if not dropped:
+        return None
+    if closed and check_trailer(line, size, crc32, part=part) is None:
+        return None
+    return "=yend after data outside a block"
+
+
 def _inflate(inflate: _Decompress, data: bytes) -> bytes:
     """Decompress at most _INFLATE_SIZE bytes of output.
 
@@ -1439,13 +1464,17 @@ class NNTPClient(BaseNNTPClient):
         Only lines between =ybegin and =yend are decoded; text outside them,
         such as a signature, is dropped. A stray =yend outside a block is
         ignored, unless text was dropped since the last =yend (or the start of
-        the body): then an early =yend has hidden the data of its block, which
-        is an error.
+        the body). Only empty lines are not text; a line of spaces is data
+        (a space encodes byte 0xF6). After dropped text, a stray =yend is
+        accepted if it matches the last closed block (a duplicate trailer after
+        a signature); otherwise an early =yend has hidden the data of its
+        block, which is an error.
 
         Raises:
             NNTPYEncError: If yEnc data does not match its trailer, a =ybegin
                 has no =yend, there is no =ybegin, or a =yend follows text
-                outside a block. The decoded body is in its data attribute.
+                outside a block and does not match the last closed block. The
+                decoded body is in its data attribute.
         """
         body: list[bytes] = []
         encoded: list[bytes] = []  # yEnc data lines not yet decoded
@@ -1468,7 +1497,7 @@ class NNTPClient(BaseNNTPClient):
                 if open_block:
                     encoded.append(line)
                 else:  # Text outside blocks (e.g. a signature) is dropped
-                    dropped |= bool(line.strip())
+                    dropped |= line not in (b"", b"\r\n", b"\n")
                 continue
             decode_pending()
             if line.startswith(b"=ybegin "):
@@ -1477,8 +1506,15 @@ class NNTPClient(BaseNNTPClient):
             elif line.startswith(b"=yend"):
                 if open_block:
                     mismatch = check_trailer(line, size, decoder.crc32, part=multipart)
-                else:  # A stray, unless text came before it: an early =yend
-                    mismatch = "=yend after data outside a block" if dropped else None
+                else:  # A stray: a duplicate, or an early =yend after text
+                    mismatch = _stray_yend_error(
+                        line,
+                        size,
+                        decoder.crc32,
+                        part=multipart,
+                        dropped=dropped,
+                        closed=seen_block,
+                    )
                 error = error or mismatch
                 open_block, dropped = False, False
             # =ypart and other =y lines carry nothing to decode
