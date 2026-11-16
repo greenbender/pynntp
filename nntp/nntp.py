@@ -246,6 +246,14 @@ class NNTPYEncError(NNTPDataError):
         super().__init__(message)
         self.data = data
 
+    def __reduce__(
+        self,
+    ) -> tuple[type[NNTPYEncError], tuple[str, bytes], dict[str, object]]:
+        # Pickle and copy call cls(*args), but args holds only the message.
+        # Keep __dict__ too, as BaseException does, for notes and attributes.
+        message = self.args[0] if self.args else ""
+        return (type(self), (message, self.data), self.__dict__)
+
 
 class BaseNNTPClient:
     """NNTP connection, command and response handling.
