@@ -214,3 +214,13 @@ def test_post_body_item_lines_are_split(
     sock.sent = b""
     client.post({"Subject": "hi"}, items)
     assert sock.sent == b"POST\r\nSubject: hi\r\n\r\n" + lines + b".\r\n"
+
+
+def test_ihave_body_item_lines_are_split(connect: Connect) -> None:
+    client, sock = connect(WELCOME + MODE_READER + IHAVE_OK)
+    sock.sent = b""
+    client.ihave("<a@b>", {"Subject": "hi"}, [b"x\n.\nQUIT\n"])
+    assert sock.sent == (
+        b"IHAVE <a@b>\r\nSubject: hi\r\nMessage-ID: <a@b>\r\n\r\n"
+        b"x\r\n..\r\nQUIT\r\n.\r\n"
+    )

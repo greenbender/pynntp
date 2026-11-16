@@ -1803,8 +1803,9 @@ class NNTPClient(BaseNNTPClient):
         Args:
             headers: The article headers.
             body: The body as str, bytes, or an iterable of byte lines such as a
-                binary file. Each item ends a line, and items are split at LF,
-                so an item may hold several lines.
+                binary file. Each item is one or more complete lines: items
+                are split at LF, and an item without LF still ends a line, so
+                pass lines, not arbitrary chunks.
 
         Returns:
             The message-id if the server's reply includes one (common, though not
