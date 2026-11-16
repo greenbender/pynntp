@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from datetime import UTC, datetime
 from io import StringIO
 from typing import TYPE_CHECKING
@@ -110,6 +111,45 @@ def test_parse_headers_continuation() -> None:
         "X-Items": "Apple\tBanana\tCarrot",
     }
     assert parse_headers(headers) == expected
+
+
+@pytest.mark.parametrize("eol", ["\r\n", "\n"])
+@pytest.mark.parametrize(
+    ("lines", "expected"),
+    [
+        (["X-Text: one ", " two"], "one  two"),
+        (["X-Text: one\t", "\ttwo"], "one\t\ttwo"),
+        (["X-Text: one", " two \t", " three"], "one two \t three"),
+        (['X-Text: "one ', ' two"'], '"one  two"'),
+        (["X-Text: \t one ", " two \t"], "one  two"),
+        (["X-Text: ", " two "], "two"),
+        (["X-Text: one \t"], "one"),
+        (["X-Text: \t"], ""),
+    ],
+)
+def test_parse_headers_fold_whitespace(
+    eol: str, lines: list[str], expected: str
+) -> None:
+    text = eol.join([*lines, "Other: value \t", "", "body"])
+    headers = {"X-Text": expected, "Other": "value"}
+    assert parse_headers(text) == headers
+    assert parse_headers(StringIO(text)) == headers
+    assert parse_headers(text.splitlines(keepends=True)) == headers
+    assert parse_headers(text.splitlines()) == headers
+
+
+def test_parse_headers_many_continuation_lines() -> None:
+    # Lines are passed without their line endings here; both forms work
+    count = 500_000
+    # The linear code takes well under 1 s and the quadratic code about 20 s, so
+    # a generous limit keeps a slow or loaded CI runner from failing the test
+    limit = 10.0  # seconds
+    lines = ["X-Long: start", *[" x"] * count, "Other: y"]
+    start = time.perf_counter()
+    headers = parse_headers(lines)
+    elapsed = time.perf_counter() - start
+    assert headers == {"X-Long": "start" + " x" * count, "Other": "y"}
+    assert elapsed < limit  # Quadratic joining takes about 20 s here
 
 
 def test_parse_headers_value_with_colon() -> None:

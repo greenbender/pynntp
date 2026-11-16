@@ -182,7 +182,8 @@ def parse_number_value(line: str) -> tuple[int, str]:
 def parse_headers(obj: str | Iterable[str]) -> HeaderDict:
     """Parse header lines up to the first blank line.
 
-    Continuation lines are unfolded. CRLF and LF line endings are accepted.
+    Continuation lines are unfolded without changing internal whitespace.
+    CRLF and LF line endings are accepted; whole values are trimmed.
 
     Args:
         obj: A string, or an iterable of lines such as a file.
@@ -196,23 +197,25 @@ def parse_headers(obj: str | Iterable[str]) -> HeaderDict:
     """
     if isinstance(obj, str):
         obj = StringIO(obj)
-    hdrs: list[tuple[str, str]] = []
+    # Each header keeps its value pieces in a list, joined once at the end:
+    # joining on every continuation line is quadratic in the number of lines.
+    hdrs: list[tuple[str, list[str]]] = []
     for line in obj:
+        line = line.rstrip("\r\n")
         # A blank line (CRLF or LF) ends the headers.
-        if not line.rstrip("\r\n"):
+        if not line:
             break
         # A line starting with whitespace continues the previous header.
         if line[0] in " \t":
             if not hdrs:
                 raise ValueError("First header is a continuation")
-            name, value = hdrs[-1]
-            hdrs[-1] = name, value + line.rstrip()
+            hdrs[-1][1].append(line)
             continue
         name, sep, value = line.partition(":")
         if not sep:
             raise ValueError(f"Invalid header line: {line!r}")
-        hdrs.append((name.strip(), value.strip()))
-    return HeaderDict(hdrs)
+        hdrs.append((name.strip(), [value]))
+    return HeaderDict((name, "".join(pieces).strip()) for name, pieces in hdrs)
 
 
 def unparse_headers(hdrs: Mapping[str, str]) -> str:
