@@ -22,6 +22,17 @@ def test_group(connect: Connect) -> None:
     assert sock.sent.endswith(b"GROUP alt.test\r\n")
 
 
+@pytest.mark.parametrize("bounds", [(True,), (False, 1), (1, True)])
+def test_over_rejects_boolean_bounds_before_sending(
+    connect: Connect, bounds: tuple[int, ...]
+) -> None:
+    client, sock = connect(WELCOME + MODE_READER)
+    sent = sock.sent
+    with pytest.raises(ValueError, match="range"):
+        client.over(bounds)  # type: ignore[arg-type]
+    assert sock.sent == sent
+
+
 @pytest.mark.parametrize(
     "when",
     [

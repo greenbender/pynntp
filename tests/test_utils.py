@@ -40,6 +40,14 @@ def test_unparse_range_invalid(range: object) -> None:  # noqa: A002
         unparse_range(range)  # type: ignore[arg-type]
 
 
+@pytest.mark.parametrize(
+    "bounds", [(True,), (False,), (False, 1), (1, True), (True, False)]
+)
+def test_unparse_range_rejects_boolean_tuple_bounds(bounds: tuple[int, ...]) -> None:
+    with pytest.raises(ValueError, match="range"):
+        unparse_range(bounds)  # type: ignore[arg-type]
+
+
 def test_unparse_msgid_range() -> None:
     assert unparse_msgid_range("<msgid@example.com>") == "<msgid@example.com>"
     with pytest.raises(ValueError):  # noqa: PT011
