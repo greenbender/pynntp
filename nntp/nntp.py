@@ -1585,7 +1585,7 @@ class NNTPClient(BaseNNTPClient):
         """
         for line in lines:
             with self._data_errors(f"{verb} response"):
-                number, value = utils.parse_number_value(line, allow_msgid)
+                number, value = utils.parse_number_value(line, allow_msgid=allow_msgid)
             yield number, value
 
     def hdr(

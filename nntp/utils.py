@@ -161,7 +161,7 @@ def parse_overview_fmt(line: str) -> tuple[str, bool]:
     return name, full
 
 
-def parse_number_value(line: str, allow_msgid: bool = True) -> tuple[int, str]:
+def parse_number_value(line: str, *, allow_msgid: bool = True) -> tuple[int, str]:
     """Parse an HDR, XHDR or XPAT line: an article number, then a value.
 
     A line starting with a message-id (older XHDR by message-id) gets
