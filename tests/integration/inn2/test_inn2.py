@@ -5,9 +5,11 @@ with setup.sh, and with the variables below against other servers too. The
 groups may already hold articles, so each test posts its own and finds it by
 Message-ID, and tests of optional features skip when CAPABILITIES doesn't
 list them. Checks of INN's own setup (its default groups, the "junk" group)
-run only against INN. Skips for what another server may lack apply only
-with PYNNTP_HOST set; by default such a gap fails, so a client bug can't
-turn into a skip. The tests post permanent articles.
+run only against INN, and its default groups only when neither PYNNTP_HOST
+nor PYNNTP_GROUPS is set; else the configured groups must be listed. Skips
+for what another server may lack apply only with PYNNTP_HOST set; by default
+such a gap fails, so a client bug can't turn into a skip. The tests post
+permanent articles.
 
 Environment:
     PYNNTP_HOST: The server (default localhost). Setting it marks another
@@ -16,8 +18,9 @@ Environment:
     PYNNTP_TLS_PORT: Its implicit TLS port (default 563); 0 skips the
         implicit TLS tests.
     PYNNTP_USER, PYNNTP_PASS: Credentials for a server that wants a login;
-        the client logs in when the server answers 480, and the COMPRESS
-        tests log in before compressing.
+        the client logs in when the server answers 480, the COMPRESS tests log
+        in before compressing, and the capabilities that gate the tests are
+        read after a login if the server offers AUTHINFO USER.
     PYNNTP_GROUPS: Comma-separated groups the tests may post to, the last
         one used by most tests (default local.general,local.test). Each must
         be listed by LIST ACTIVE with status "y", and posted articles must
@@ -79,9 +82,13 @@ GROUPS = [
 if not GROUPS:
     raise ValueError("PYNNTP_GROUPS names no group")
 GROUP = GROUPS[-1]
+# Set when the groups are the caller's: check those, not INN's stock groups
+CUSTOM_GROUPS = OTHER_SERVER or bool(os.environ.get("PYNNTP_GROUPS", "").strip())
 EMPTY_GROUP = env("PYNNTP_EMPTY_GROUP", "")
 TLS_CAFILE = os.environ.get("PYNNTP_TLS_CAFILE")
 POST_WAIT = float(env("PYNNTP_POST_WAIT", "10"))
+# A URL needs brackets around an IPv6 literal; a socket doesn't
+URL_HOST = f"[{HOST}]" if ":" in HOST and not HOST.startswith("[") else HOST
 
 
 def client(**kwargs: Any) -> nntp.NNTPClient:  # noqa: ANN401
@@ -97,10 +104,10 @@ def check_newsgroups(nntp_client: nntp.NNTPClient) -> None:
     """Check that LIST NEWSGROUPS has INN's default groups, or the test groups.
 
     The server may have more. INN 2.8 ends the descriptions with a period.
-    On another server (PYNNTP_HOST) that isn't INN, the test groups must be
-    listed by LIST ACTIVE instead.
+    With PYNNTP_HOST or PYNNTP_GROUPS set, the test groups must be listed by
+    LIST ACTIVE instead, whatever the server is.
     """
-    if OTHER_SERVER and not is_inn():
+    if CUSTOM_GROUPS:
         # LIST NEWSGROUPS may leave out groups without a description
         names = {
             group.name for name in GROUPS for group in nntp_client.list_active(name)
@@ -114,16 +121,35 @@ def check_newsgroups(nntp_client: nntp.NNTPClient) -> None:
         assert newsgroups >= DEFAULT_NEWGROUPS
 
 
+def offers_login(lines: list[str]) -> bool:
+    """Whether CAPABILITIES lines list AUTHINFO USER."""
+    return any(
+        words[:1] == ["AUTHINFO"] and "USER" in words
+        for words in (line.split() for line in lines)
+    )
+
+
 @functools.cache
 def capabilities() -> tuple[str, ...]:
     """The server's CAPABILITIES in reader mode.
+
+    With PYNNTP_USER set and AUTHINFO USER offered, the client logs in and
+    the list read afterwards is added, since a server may list POST, OVER and
+    more only to a logged-in client. The list before the login stays in it for
+    STARTTLS, which is not offered after a login.
 
     On another server (PYNNTP_HOST) a 500 reply, not implemented, gives (),
     so the optional-feature tests skip. Any other error is raised.
     """
     with client() as nntp_client:
         try:
-            return tuple(nntp_client.capabilities())
+            lines = list(nntp_client.capabilities())
+            if USER and offers_login(lines):
+                nntp_client.login()
+                lines += [
+                    line for line in nntp_client.capabilities() if line not in lines
+                ]
+            return tuple(lines)
         except nntp.NNTPPermanentError as e:
             if OTHER_SERVER and e.code == 500:  # RFC 3977 5.2: not implemented
                 return ()
@@ -269,13 +295,8 @@ def compress(nntp_client: nntp.NNTPClient) -> None:
 
     No login is allowed after COMPRESS, so one is done before it.
     """
-    if USER:
-        lines = list(nntp_client.capabilities())
-        if any(
-            words[:1] == ["AUTHINFO"] and "USER" in words
-            for words in (line.split() for line in lines)
-        ):
-            nntp_client.login()
+    if USER and offers_login(list(nntp_client.capabilities())):
+        nntp_client.login()
     nntp_client.compress()
 
 
@@ -585,6 +606,9 @@ def test_login_refused_keeps_connection() -> None:
         with pytest.raises(nntp.NNTPReplyError) as info:
             # A password that no configured login can have
             nntp_client.login("user", uuid.uuid4().hex)
+        # The client keeps what login() was given: put back the configured
+        # login, which a server that wants one asks for again (480) next
+        nntp_client.username, nntp_client.password = USER, PASSWORD
         # 502: no logins here. INN with TLS set up wants TLS first (483).
         # A server with logins refuses the wrong one (481, RFC 4643).
         assert info.value.code in {481, 483, 502}
@@ -616,7 +640,7 @@ def test_from_url(scheme: str) -> None:
             port = f":{TLS_PORT}"
     elif env("PYNNTP_PORT", ""):
         port = f":{PORT}"
-    url = f"{scheme}://{HOST}{port}"
+    url = f"{scheme}://{URL_HOST}{port}"
     with nntp.NNTPClient.from_url(
         url, username=USER, password=PASSWORD, ssl_context=tls_context()
     ) as nntp_client:
@@ -624,7 +648,7 @@ def test_from_url(scheme: str) -> None:
 
 
 def test_from_url_with_options() -> None:
-    url = f"nntp://{HOST}:{PORT}?timeout=5&reader=false"
+    url = f"nntp://{URL_HOST}:{PORT}?timeout=5&reader=false"
     with nntp.NNTPClient.from_url(url, username=USER, password=PASSWORD) as nntp_client:
         assert nntp_client.socket.gettimeout() == 5
         assert nntp_client.date().year >= 2024

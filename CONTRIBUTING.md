@@ -74,12 +74,17 @@ it (default INN runs) these fail instead, so a client bug can't become a skip:
 A server that isn't INN needs:
 
 - Each group in `PYNNTP_GROUPS` listed by LIST ACTIVE with status `y` (posting
-  allowed). Otherwise the tests fail rather than skip. Its check of INN's
-  default groups becomes a check that these groups are listed.
+  allowed). Otherwise the tests fail rather than skip.
 - An Xref header in HEAD for posted articles, with the group and number.
 - CAPABILITIES, which the optional-feature tests read. A server that answers
   500 to CAPABILITIES is accepted only with `PYNNTP_HOST` set; then every
   optional-feature test skips. Without `PYNNTP_HOST`, the error fails the test.
+
+With `PYNNTP_HOST` or `PYNNTP_GROUPS` set, the check of INN's default groups
+(`local.general`, `local.test` and the `control.*` groups with their
+descriptions) becomes a check that the `PYNNTP_GROUPS` are listed, so a remote
+INN needs no stock groups. With `PYNNTP_USER` set, the tests that read
+CAPABILITIES log in first if the server offers AUTHINFO USER.
 
 To run them against another server, set `PYNNTP_HOST`, `PYNNTP_PORT`,
 `PYNNTP_TLS_PORT` (0 skips implicit TLS), `PYNNTP_USER`/`PYNNTP_PASS` and
