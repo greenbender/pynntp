@@ -190,7 +190,7 @@ def yenc_of(comp: bytes, crc: int | None = None, line: int = 128) -> list[bytes]
 
 
 def xz_payload(
-    rows: list[bytes], finish: bool = True, crc: int | None = None, line: int = 128
+    rows: list[bytes], *, finish: bool = True, crc: int | None = None, line: int = 128
 ) -> list[bytes]:
     """XZVER/XZHDR body lines: yEnc of the raw DEFLATE of the rows."""
     c = zlib.compressobj(wbits=-15)
@@ -1016,7 +1016,7 @@ def timeout_scenarios() -> Iterator[Scenario]:
         "timeout/drip-under-timeout",
         store_cfg(faults={"drip_ms": {"DATE": 30}}),
         lambda c: c.date().year > 2000,
-        Ok(True),
+        Ok(value=True),
         {"timeout": 1},
         probe="store",
     )
@@ -2650,4 +2650,4 @@ def run(sc: Scenario, server: Path) -> JSON:
 if __name__ == "__main__":
     name, host, port, ca = sys.argv[1:]
     sc = next(s for s in scenarios() if s.name == name)
-    print(json.dumps(run_client(sc, host, int(port), ca)))
+    sys.stdout.write(json.dumps(run_client(sc, host, int(port), ca)) + "\n")
