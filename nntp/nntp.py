@@ -1437,7 +1437,9 @@ class NNTPClient(BaseNNTPClient):
         raised, so the connection stays in sync.
 
         Only lines between =ybegin and =yend are decoded; text outside them,
-        such as a signature, is dropped.
+        such as a signature, is dropped. A stray =yend outside a block is
+        ignored, unless text was dropped since the last block closed: then an
+        early =yend has hidden the data of its block, which is an error.
 
         Raises:
             NNTPYEncError: If yEnc data does not match its trailer, a =ybegin
@@ -1448,6 +1450,7 @@ class NNTPClient(BaseNNTPClient):
         encoded: list[bytes] = []  # yEnc data lines not yet decoded
         decoder, size, multipart, open_block = YEnc(), 0, False, False
         seen_block = False
+        dropped = False  # Text dropped outside a block since it closed
         error: str | None = None
 
         def decode_pending() -> None:
@@ -1461,17 +1464,22 @@ class NNTPClient(BaseNNTPClient):
 
         for line in lines:
             if line[:2] != b"=y":
-                if open_block:  # Text outside blocks (e.g. a signature) is dropped
+                if open_block:
                     encoded.append(line)
+                else:  # Text outside blocks (e.g. a signature) is dropped
+                    dropped |= bool(line.strip())
                 continue
             decode_pending()
             if line.startswith(b"=ybegin "):
                 decoder, size, open_block, seen_block = YEnc(), 0, True, True
                 multipart = "part" in parse_keywords(line)
-            elif open_block and line.startswith(b"=yend"):
-                mismatch = check_trailer(line, size, decoder.crc32, part=multipart)
+            elif line.startswith(b"=yend"):
+                if open_block:
+                    mismatch = check_trailer(line, size, decoder.crc32, part=multipart)
+                else:  # A stray, unless text came before it: an early =yend
+                    mismatch = "=yend after data outside a block" if dropped else None
                 error = error or mismatch
-                open_block = False
+                open_block, dropped = False, False
             # =ypart and other =y lines carry nothing to decode
 
         decode_pending()
