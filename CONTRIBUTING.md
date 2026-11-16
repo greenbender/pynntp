@@ -82,8 +82,9 @@ A server that isn't INN needs:
 
 With `PYNNTP_HOST` or `PYNNTP_GROUPS` set, the check of INN's default groups
 (`local.general`, `local.test` and the `control.*` groups with their
-descriptions) becomes a check that the `PYNNTP_GROUPS` are listed, so a remote
-INN needs no stock groups. With `PYNNTP_USER` set, the tests that read
+descriptions) becomes a check that the `PYNNTP_GROUPS` are listed. A remote
+INN still needs an empty `junk` group that refuses posts, for the INN-only
+tests above (or `PYNNTP_EMPTY_GROUP` for the empty-group test). With `PYNNTP_USER` set, the tests that read
 CAPABILITIES log in first if the server offers AUTHINFO USER.
 
 To run them against another server, set `PYNNTP_HOST`, `PYNNTP_PORT`,
