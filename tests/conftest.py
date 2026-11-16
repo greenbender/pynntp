@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 import nntp
-from tests.helpers import Connect, FakeSocket
+from tests.helpers import Connect, FakeSocket, Packets
 
 
 @pytest.fixture(params=[1, 7, 4096], ids=lambda c: f"chunk{c}")
@@ -18,12 +18,13 @@ def chunk(request: pytest.FixtureRequest) -> int:
 def connect(monkeypatch: pytest.MonkeyPatch, chunk: int) -> Connect:
     """Return a factory: connect(server_bytes) -> (client, fake_socket).
 
-    Extra positional byte strings are served to later connections, made by
-    reconnect().
+    A recv ends at the end of a reply, unless the server data is given as
+    Packets. Extra positional byte strings are served to later connections,
+    made by reconnect().
     """
 
     def factory(
-        server: bytes, *later: bytes, **kwargs: object
+        server: bytes | Packets, *later: bytes | Packets, **kwargs: object
     ) -> tuple[nntp.NNTPClient, FakeSocket]:
         socks = [FakeSocket(data, chunk) for data in (server, *later)]
         monkeypatch.setattr(

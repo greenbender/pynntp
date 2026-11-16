@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 import nntp
+from nntp.nntp import _INFLATE_SIZE
 from tests.helpers import (
     COMPRESS_OK,
     DATE,
@@ -19,6 +20,7 @@ from tests.helpers import (
     XOVER_LINES,
     Connect,
     FakeSocket,
+    Packets,
     check_xover,
     deflated,
     sent_after_compress,
@@ -87,7 +89,8 @@ def test_corrupt_compressed_data_closes(connect: Connect) -> None:
     client, sock = connect(WELCOME + MODE_READER + COMPRESS_OK + b"\xff\xff\xff\xff")
 
     def compress_then_date() -> None:
-        # compress() raises if the bad bytes arrive with the 206, else date()
+        # The bad bytes arrive after the 206 (a recv ends there), so date()
+        # raises; see the Packets test below for compress() raising
         client.compress()
         client.date()
 
@@ -147,3 +150,134 @@ def test_gzip_response_inside_compress(connect: Connect) -> None:
     client, _ = connect(WELCOME + MODE_READER + server)
     client.compress()
     check_xover(list(client.xover((1, 2))))
+
+
+STRAY_DATE = b"111 20250506070809\r\n"  # A reply nobody asked for
+EMPTY_BLOCK = b"\x00\x00\x00\xff\xff"  # Deflate data that inflates to nothing
+
+
+def list_of_inflate_size() -> bytes:
+    """A LIST response that is _INFLATE_SIZE octets long, as inflated."""
+    body = _INFLATE_SIZE - len(b"215 list\r\n.\r\n")
+    lines = [b"g" * 992 + b" 2 1 y\r\n"] * (body // 1000)  # 1000 octets each
+    lines.append(b"h" * (body % 1000 - 8) + b" 2 1 y\r\n")
+    return b"215 list\r\n" + b"".join(lines) + b".\r\n"
+
+
+# Only data inflated by the same recv is found: data arriving later can't be told
+# from the reply to the next command.
+@pytest.mark.parametrize("chunk", [4096])
+def test_compress_refuses_data_after_reply(connect: Connect) -> None:
+    server = Packets(
+        WELCOME,
+        MODE_READER,
+        COMPRESS_OK,
+        deflated(DATE + STRAY_DATE),
+        deflated(DATE),
+    )
+    client, sock = connect(server)
+    client.compress()
+    assert client.date().year == 2024
+    sent = sent_after_compress(sock)
+    with pytest.raises(nntp.NNTPProtocolError, match="Unexpected data"):
+        client.date()
+    assert sent_after_compress(sock) == sent  # Nothing was sent
+    with pytest.raises(nntp.NNTPSyncError, match="reconnect"):
+        client.date()
+
+
+@pytest.mark.parametrize("chunk", [4096])
+def test_compress_refuses_inflate_output_not_yet_read(connect: Connect) -> None:
+    # The reply fills the decompressor's output limit exactly; the stray line
+    # that follows is still inside it, not in the buffer
+    reply = list_of_inflate_size()
+    assert len(reply) == _INFLATE_SIZE
+    server = Packets(
+        WELCOME, MODE_READER, COMPRESS_OK, deflated(reply + STRAY_DATE), deflated(DATE)
+    )
+    client, sock = connect(server)
+    client.compress()
+    assert len(list(client.list_active())) == 66
+    sent = sent_after_compress(sock)
+    with pytest.raises(nntp.NNTPProtocolError, match="Unexpected data"):
+        client.date()
+    assert sent_after_compress(sock) == sent
+    with pytest.raises(nntp.NNTPSyncError, match="reconnect"):
+        client.date()
+
+
+def test_compress_flush_after_reply_is_not_data(connect: Connect) -> None:
+    server = Packets(
+        WELCOME,
+        MODE_READER,
+        COMPRESS_OK,
+        deflated(DATE) + EMPTY_BLOCK,
+        EMPTY_BLOCK + deflated(DATE),
+    )
+    client, _ = connect(server)
+    client.compress()
+    assert client.date().year == 2024
+    assert client.date().year == 2024
+
+
+def test_compress_reply_filling_inflate_output_exactly(connect: Connect) -> None:
+    server = Packets(
+        WELCOME,
+        MODE_READER,
+        COMPRESS_OK,
+        deflated(list_of_inflate_size()),
+        deflated(DATE),
+    )
+    client, _ = connect(server)
+    client.compress()
+    assert len(list(client.list_active())) == 66
+    assert client.date().year == 2024
+
+
+def assert_next_date_refused(client: nntp.NNTPClient, sock: FakeSocket) -> None:
+    """date() raises for unread data, sends nothing, and the connection is broken."""
+    sent = sent_after_compress(sock)
+    with pytest.raises(nntp.NNTPProtocolError, match="Unexpected data"):
+        client.date()
+    assert sent_after_compress(sock) == sent
+    with pytest.raises(nntp.NNTPSyncError, match="reconnect"):
+        client.date()
+
+
+# The next tests put data in the same recv as the 206 reply, which only Packets
+# can do: that is the pending-data branch of compress()
+@pytest.mark.parametrize("chunk", [4096])
+def test_compress_corrupt_data_with_reply_closes(connect: Connect) -> None:
+    client, sock = connect(Packets(WELCOME, MODE_READER, COMPRESS_OK + b"\xff" * 4))
+    with pytest.raises(nntp.NNTPDataError, match="Decompression failed"):
+        client.compress()
+    assert sock.closed
+
+
+@pytest.mark.parametrize("chunk", [4096])
+def test_compress_refuses_data_with_reply(connect: Connect) -> None:
+    server = Packets(
+        WELCOME, MODE_READER, COMPRESS_OK + deflated(STRAY_DATE), deflated(DATE)
+    )
+    client, sock = connect(server)
+    client.compress()
+    assert_next_date_refused(client, sock)
+
+
+@pytest.mark.parametrize("chunk", [4096])
+def test_compress_refuses_data_after_gzip_response_in_block(connect: Connect) -> None:
+    inner = b"224 ok COMPRESS=GZIP\r\n" + gzip.compress(XOVER_LINES) + b".\r\n"
+    server = Packets(
+        WELCOME,
+        MODE_READER,
+        b"290 feature enabled\r\n",
+        COMPRESS_OK,
+        deflated(OVERVIEW_FMT),
+        deflated(inner + STRAY_DATE),
+        deflated(DATE),
+    )
+    client, sock = connect(server)
+    client.xfeature_compress_gzip()  # gzip is used only after XFEATURE
+    client.compress()
+    check_xover(list(client.xover((1, 2))))
+    assert_next_date_refused(client, sock)
