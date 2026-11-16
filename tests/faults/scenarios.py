@@ -218,7 +218,12 @@ class Ok:
 
 
 class Err:
-    """One of the exception types; state is "sync", "broken" or "any"."""
+    """One of the exception types; state is "sync", "broken" or "any".
+
+    "any" means in sync or marked broken. A connection that is "late-broken"
+    (the DATE probe fails cleanly and only then marks it broken) is refused
+    for every state, unless late_broken is set.
+    """
 
     def __init__(
         self,
@@ -226,19 +231,22 @@ class Err:
         state: str = "any",
         match: str = "",
         pred: Callable[[BaseException], bool] | None = None,
+        late_broken: bool = False,
     ) -> None:
         self.types = types
         self.state = state
         self.match = match
         self.pred = pred
+        self.late_broken = late_broken
 
 
 @dataclass(frozen=True)
 class Clean:
     """Any result passing pred, or any clean error; in sync or marked broken.
 
-    A result is also refused if the connection is "late-broken" (the DATE probe
-    fails cleanly and only then marks it broken), unless late_broken is set.
+    A result or an error is refused if the connection is "late-broken" (the
+    DATE probe fails cleanly and only then marks it broken), unless late_broken
+    is set.
     """
 
     pred: Pred | None = None
@@ -1822,8 +1830,9 @@ def post_scenarios() -> Iterator[Scenario]:
             probe=None,
         )
     # The 4 MB upload races with the server's 441 and close: the client sees the
-    # 441, or EPIPE or a reset while it still writes. Any clean error is right;
-    # the server check (no unexpected client lines) covers what it sent.
+    # 441, or EPIPE or a reset while it still writes. Any clean error is right.
+    # The server closes right after the POST line and reads nothing more, so
+    # the server-side check has nothing to cover here.
     yield Scenario(
         "post/early-441-then-close",
         script(step("POST", b"340 go\r\n441 too big\r\n", then="close"), probe=False),
@@ -2432,8 +2441,12 @@ def judge_error(sc: Scenario, e: BaseException, state: str) -> str:
     what = f"{type(e).__name__}: {e}"
     if not isinstance(e, CLEAN_ERRORS):
         return f"unexpected exception {what}"
-    if not isinstance(exp, Err):
-        return f"expected a result, got {what}" if isinstance(exp, Ok) else ""
+    if isinstance(exp, Ok):
+        return f"expected a result, got {what}"
+    if isinstance(exp, Clean):
+        if state == "late-broken" and not exp.late_broken:
+            return f"{what}, but the connection broke only at the next command"
+        return ""
     problems = [
         (not isinstance(e, exp.types), f"expected {names(exp.types)}, got {what}"),
         (
@@ -2449,6 +2462,10 @@ def judge_error(sc: Scenario, e: BaseException, state: str) -> str:
         (
             exp.state == "broken" and state != "broken",
             f"expected the connection marked broken, it is {state}",
+        ),
+        (
+            state == "late-broken" and not exp.late_broken,
+            f"{what}, but the connection broke only at the next command",
         ),
     ]
     return next((why for bad, why in problems if bad), "")
@@ -2712,13 +2729,19 @@ def run(sc: Scenario, server: Path) -> JSON:
     if problems:
         found = "server side: " + ", ".join(problems)
         res["reason"] = "; ".join(filter(None, [res["reason"], found]))
+    # The server side is judged apart from the client verdict: a known scenario
+    # fails with a client reason, and an unexpected client line or a failed
+    # server check must still fail it for real (test_faults.py fails on any
+    # "server side:" in the reason before it looks at known_why).
     bad = summary.get("mismatches")
-    if not res["reason"] and bad and not sc.mismatch_ok:
-        res["reason"] = f"server side: unexpected client lines: {bad[:4]}"
-    if not res["reason"] and sc.server_check:
+    if bad and not sc.mismatch_ok:
+        found = f"server side: unexpected client lines: {bad[:4]}"
+        res["reason"] = "; ".join(filter(None, [res["reason"], found]))
+    if sc.server_check:
         summary["articles"] = summary.get("articles") or []
         if why := sc.server_check(summary):
-            res["reason"] = f"server side: {why}"
+            found = f"server side: {why}"
+            res["reason"] = "; ".join(filter(None, [res["reason"], found]))
     res["wire"] = wire_summary(sc.server)
     res["client_lines"] = summary.get("lines", [])[:20]
     return res

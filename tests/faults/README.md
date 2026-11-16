@@ -40,10 +40,16 @@ a scenario passes when the client returns the right result, or raises an
 the right reply) or marked broken (the next command raises `NNTPSyncError`). A
 hang, a wrong result, another exception or a connection out of sync fails, as
 does a failed server-side check (for example, the client sent AUTHINFO before
-TLS). A `Clean` scenario that returns a result fails if the probe finds the
-connection "late-broken" (the probe fails cleanly and only then marks it
-broken), unless the expectation sets `late_broken=True`. The server also records client lines it did not expect;
+TLS). A scenario also fails if the probe finds the connection "late-broken"
+(the probe fails cleanly and only then marks it broken, so the action itself
+left it unmarked and out of sync), whether the action returned a result or
+raised a clean error, unless the expectation sets `late_broken=True` (`Clean` and
+`Err` take it). The server also records client lines it did not expect;
 that fails a scenario unless it sets `mismatch_ok` with a reason.
+
+The server side is judged apart from the client: unexpected client lines and a
+failed server check fail a scenario with a reason that contains "server side:",
+also when the client side failed too.
 
 A scenario with `probe=None` makes no DATE probe after its action. If it expects
 a marked connection (`Err(..., state="broken")`), the client is probed anyway,
@@ -70,8 +76,9 @@ yield Scenario(
 A scenario with `known=` set fails on the current code and is marked as an
 expected failure, with the reason shown by `-rxX`. Its `known_why` is a fragment
 that the failure reason must contain: a known scenario whose reason lacks it
-fails the run, and so does one that reports a server-side problem (a hang, a
-crash and a missing summary are not the known bug). The fragment names the
+fails the run, and so does one that reports a server-side problem (unexpected
+client lines, a failed server check, a missing summary or a bad exit status; a
+hang or a crash is not the known bug either). The fragment names the
 wrong outcome of the bug (the wrong value or the error text the current code
 gives), so a different error or result does not hide behind it. When a fix
 makes it pass, pytest reports XPASS and the run fails: remove `known=` and
