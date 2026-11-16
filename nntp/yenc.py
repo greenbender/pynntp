@@ -24,7 +24,9 @@ import zlib
 __all__ = ["YEnc", "check_trailer", "parse_keywords", "trailer_crc32"]
 
 
-_KEYWORD_RE = re.compile(rb"(\w+)=(\S*)")
+# The lookbehind anchors a key at a word start: without it, a long run of word
+# characters with no "=" is retried from every position (quadratic).
+_KEYWORD_RE = re.compile(rb"(?<!\w)(\w+)=(\S*)")
 # Some encoders drop leading zeros, so accept 1-8 hex digits.
 _CRC32_RE = re.compile(r"[0-9a-fA-F]{1,8}")
 _DIGITS_RE = re.compile(r"[0-9]+")
