@@ -40,7 +40,10 @@ a scenario passes when the client returns the right result, or raises an
 the right reply) or marked broken (the next command raises `NNTPSyncError`). A
 hang, a wrong result, another exception or a connection out of sync fails, as
 does a failed server-side check (for example, the client sent AUTHINFO before
-TLS).
+TLS). A `Clean` scenario that returns a result fails if the probe finds the
+connection "late-broken" (the probe fails cleanly and only then marks it
+broken), unless the expectation sets `late_broken=True`. The server also records client lines it did not expect;
+that fails a scenario unless it sets `mismatch_ok` with a reason.
 
 A scenario with `probe=None` makes no DATE probe after its action. If it expects
 a marked connection (`Err(..., state="broken")`), the client is probed anyway,
@@ -68,8 +71,9 @@ A scenario with `known=` set fails on the current code and is marked as an
 expected failure, with the reason shown by `-rxX`. Its `known_why` is a fragment
 that the failure reason must contain: a known scenario whose reason lacks it
 fails the run, and so does one that reports a server-side problem (a hang, a
-crash and a missing summary are not the known bug). A different wrong result
-of the same kind still counts as the known failure. When a fix
+crash and a missing summary are not the known bug). The fragment names the
+wrong outcome of the bug (the wrong value or the error text the current code
+gives), so a different error or result does not hide behind it. When a fix
 makes it pass, pytest reports XPASS and the run fails: remove `known=` and
 `known_why` in the same change.
 

@@ -235,10 +235,15 @@ class Err:
 
 @dataclass(frozen=True)
 class Clean:
-    """Any result passing pred, or any clean error; in sync or marked broken."""
+    """Any result passing pred, or any clean error; in sync or marked broken.
+
+    A result is also refused if the connection is "late-broken" (the DATE probe
+    fails cleanly and only then marks it broken), unless late_broken is set.
+    """
 
     pred: Pred | None = None
     desc: str = ""
+    late_broken: bool = False
 
 
 Expect = Ok | Err | Clean
@@ -261,6 +266,8 @@ class Scenario:
     deadline: float = 20.0
     probe: str | None = "raw"  # raw: the exact 2020 DATE; store: any DATE
     max_s: float | None = None
+    # A reason, if the server may see client lines it did not expect
+    mismatch_ok: str = ""
 
     def __post_init__(self) -> None:
         if self.known and not self.known_why:
@@ -331,11 +338,6 @@ def all_of(*checks: ServerCheck) -> ServerCheck:
     return check
 
 
-def no_mismatch(s: JSON) -> str | None:
-    bad = s["mismatches"]
-    return f"unexpected client lines: {bad[:4]}" if bad else None
-
-
 def article_is(expected: list[str]) -> ServerCheck:
     def check(s: JSON) -> str | None:
         arts = s["articles"]
@@ -343,7 +345,7 @@ def article_is(expected: list[str]) -> ServerCheck:
             return "server read no article"
         if arts[-1] != expected:
             return f"server read article {arts[-1]!r}, expected {expected!r}"
-        return no_mismatch(s)
+        return None
 
     return check
 
@@ -835,7 +837,6 @@ def code_scenarios() -> Iterator[Scenario]:
             act,
             exp,
             RAW,
-            server_check=no_mismatch,
         )
     for name, second in [
         ("post-340-then-340", b"340 again\r\n"),
@@ -847,7 +848,6 @@ def code_scenarios() -> Iterator[Scenario]:
             lambda c: c.post(HEADERS, b"x"),
             reply_error,
             RAW,
-            server_check=no_mismatch,
         )
     yield Scenario(
         "code/authinfo-user-281",
@@ -923,11 +923,15 @@ def leftover_scenarios() -> Iterator[Scenario]:
         "leftover/crlf-after-terminator",
         script(step("BODY 1", ml(b"222 1 <a@b>", [b"x"]) + CRLF)),
         lambda c: c.body(1),
-        # An empty line after the terminator is data after the reply, which the
-        # next command refuses (#161): the connection ends up marked broken
+        # The article is returned. The empty line after the terminator is data
+        # after the reply, which the next command refuses (#161): the DATE
+        # probe fails with a clean error, and only then is the connection marked
+        # broken ("late-broken", observed). Not refusing the stray line at the
+        # first command is the open part of #161, so this is allowed here.
         Clean(
             pred=lambda v: v == b"x\r\n",
             desc="body() must return the article",
+            late_broken=True,
         ),
         RAW,
     )
@@ -1142,6 +1146,7 @@ def tls_scenarios() -> Iterator[Scenario]:
         {**TLS, "timeout": 2},
         probe=None,
         max_s=6,
+        mismatch_ok="the plaintext server reads the client's TLS handshake",
     )
     yield Scenario(
         "tls/starttls-ok",
@@ -1166,7 +1171,6 @@ def tls_scenarios() -> Iterator[Scenario]:
         Err(nntp.NNTPProtocolError),
         STARTTLS,
         probe=None,
-        server_check=no_mismatch,
     )
     yield Scenario(
         "tls/starttls-data-after-382-next-packet",
@@ -1417,7 +1421,7 @@ def compress_raw_scenarios() -> Iterator[Scenario]:
         "compress/stream-finished-exactly",
         compress_raw(step("DATE", Deflate().finish(PROBE_REPLY))),
         date_ok,
-        Clean(pred=lambda v: v == PROBE_TUPLE),
+        Ok(PROBE_TUPLE),
         RAW,
         probe=None,
     )
@@ -1577,7 +1581,7 @@ def xzver_scenarios() -> Iterator[Scenario]:
         (
             "last-row-without-crlf",
             xz_payload([*rows[:-1], OVER_ROWS[-1]]),
-            two_rows,
+            Ok(pred=over_check, desc="both rows, the last one without CRLF"),
             False,
             "XZVER drops a last row that has no CRLF",
         ),
@@ -1613,11 +1617,24 @@ def xzver_scenarios() -> Iterator[Scenario]:
             "",
         ),
         # Junk after the end of the DEFLATE stream is accepted (observed)
-        ("data-after-deflate-end", yenc_of(junk), Clean(pred=over_check), False, ""),
+        (
+            "data-after-deflate-end",
+            yenc_of(junk),
+            Ok(pred=over_check, desc="2 rows"),
+            False,
+            "",
+        ),
     ]
+    # What the current code gives: a decompression error, and only the first row
     known_why = {
-        "sync-flushed-not-finished": "expected a result, got NNTPDataError",
-        "last-row-without-crlf": "expected 2 rows",
+        "sync-flushed-not-finished": (
+            "expected a result, got NNTPDataError: "
+            "Decompression failed: compressed data is truncated"
+        ),
+        "last-row-without-crlf": (
+            "('Xref', 'h alt.test:1')]))], expected both rows, the last one "
+            "without CRLF"
+        ),
     }
     for name, lines, exp, slow, known in cases:
         reply = ml(b"224 compressed data follows", lines)
@@ -1727,7 +1744,12 @@ def yenc_scenarios() -> Iterator[Scenario]:
             "",
         ),
     ]
-    known_why = {"stray-yend-after-block": "expected a result, got NNTPYEncError"}
+    known_why = {
+        "stray-yend-after-block": (
+            "expected a result, got NNTPYEncError: "
+            "Bad yEnc data: decoded 1025 bytes, trailer says 0"
+        )
+    }
     for name, lines, exp, decode, known in cases:
         yield Scenario(
             f"yenc/{name}",
@@ -1773,7 +1795,6 @@ def post_scenarios() -> Iterator[Scenario]:
         lambda c: c.post(HEADERS, b"x"),
         Err(nntp.NNTPTemporaryError, state="sync"),
         RAW,
-        server_check=no_mismatch,
     )
     yield Scenario(
         "post/440-not-allowed",
@@ -1781,7 +1802,6 @@ def post_scenarios() -> Iterator[Scenario]:
         lambda c: c.post(HEADERS, b"x"),
         Err(nntp.NNTPTemporaryError, state="sync"),
         RAW,
-        server_check=no_mismatch,
     )
     drops: list[tuple[str, bytes, str]] = [
         ("drop-mid-article-small", b"x\n" * 10, "close"),
@@ -1801,6 +1821,9 @@ def post_scenarios() -> Iterator[Scenario]:
             RAW,
             probe=None,
         )
+    # The 4 MB upload races with the server's 441 and close: the client sees the
+    # 441, or EPIPE or a reset while it still writes. Any clean error is right;
+    # the server check (no unexpected client lines) covers what it sent.
     yield Scenario(
         "post/early-441-then-close",
         script(step("POST", b"340 go\r\n441 too big\r\n", then="close"), probe=False),
@@ -1821,7 +1844,6 @@ def post_scenarios() -> Iterator[Scenario]:
         lambda c: c.post(HEADERS, b"x"),
         Ok("<z@x>"),
         {"reader": False, **CREDS},
-        server_check=no_mismatch,
     )
     yield Scenario(
         "post/store-ok",
@@ -2057,7 +2079,7 @@ def auth_scenarios() -> Iterator[Scenario]:
         None,
         Ok("connected"),
         {"reader": True, **CREDS},
-        server_check=all_of(max_lines("MODE READER", 1), no_mismatch),
+        server_check=max_lines("MODE READER", 1),
     )
 
 
@@ -2432,14 +2454,20 @@ def judge_error(sc: Scenario, e: BaseException, state: str) -> str:
     return next((why for bad, why in problems if bad), "")
 
 
+def judge_clean(exp: Clean, value: object, state: str) -> str:
+    if exp.pred is not None and not exp.pred(value):
+        return f"{value!r:.300}: {exp.desc}"
+    if state == "late-broken" and not exp.late_broken:
+        return "result ok but the connection broke only at the next command"
+    return ""
+
+
 def judge_value(sc: Scenario, value: object, state: str) -> str:
     exp = sc.expect
     if isinstance(exp, Err):
         return f"expected {names(exp.types)}, got result {value!r:.200}"
     if isinstance(exp, Clean):
-        return (
-            "" if exp.pred is None or exp.pred(value) else f"{value!r:.300}: {exp.desc}"
-        )
+        return judge_clean(exp, value, state)
     good = exp.pred(value) if exp.pred else value == exp.value
     if not good:
         return (
@@ -2684,6 +2712,9 @@ def run(sc: Scenario, server: Path) -> JSON:
     if problems:
         found = "server side: " + ", ".join(problems)
         res["reason"] = "; ".join(filter(None, [res["reason"], found]))
+    bad = summary.get("mismatches")
+    if not res["reason"] and bad and not sc.mismatch_ok:
+        res["reason"] = f"server side: unexpected client lines: {bad[:4]}"
     if not res["reason"] and sc.server_check:
         summary["articles"] = summary.get("articles") or []
         if why := sc.server_check(summary):
