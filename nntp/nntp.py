@@ -165,7 +165,20 @@ def _after_compress_forbidden(words: list[str]) -> bool:
 
 
 def _msgid_article(msgid_article: str | int | None) -> str | None:
-    return None if msgid_article is None else str(msgid_article)
+    """Format a message-id or article number argument; None is the current article.
+
+    Raises:
+        ValueError: If the argument is empty or blank, or a bool. An empty
+            argument would be dropped from the command, and a bool sent as
+            "True" or "False".
+    """
+    if msgid_article is None:
+        return None
+    if isinstance(msgid_article, bool) or (
+        isinstance(msgid_article, str) and not msgid_article.strip()
+    ):
+        raise ValueError(f"Invalid message-id or article number: {msgid_article!r}")
+    return str(msgid_article)
 
 
 def _inflate(inflate: _Decompress, data: bytes) -> bytes:
@@ -1378,6 +1391,8 @@ class NNTPClient(BaseNNTPClient):
             message-id is given.
 
         Raises:
+            ValueError: If the message-id or article number is empty or blank,
+                or a bool. Nothing is sent.
             NNTPReplyError: If there is no such article.
             NNTPDataError: If the reply can't be parsed.
         """
@@ -1489,6 +1504,8 @@ class NNTPClient(BaseNNTPClient):
             The article number, headers and body. The body is bytes.
 
         Raises:
+            ValueError: If the message-id or article number is empty or blank,
+                or a bool. Nothing is sent.
             NNTPReplyError: If there is no such article.
             NNTPDataError: If the reply or headers can't be parsed.
             NNTPYEncError: If yEnc data fails its size or CRC check. The decoded
@@ -1527,6 +1544,8 @@ class NNTPClient(BaseNNTPClient):
             The article headers.
 
         Raises:
+            ValueError: If the message-id or article number is empty or blank,
+                or a bool. Nothing is sent.
             NNTPReplyError: If there is no such article.
             NNTPDataError: If the headers can't be parsed.
         """
@@ -1553,6 +1572,8 @@ class NNTPClient(BaseNNTPClient):
             The article body.
 
         Raises:
+            ValueError: If the message-id or article number is empty or blank,
+                or a bool. Nothing is sent.
             NNTPReplyError: If there is no such article.
             NNTPYEncError: If yEnc data fails its size or CRC check. The decoded
                 body is in its data attribute.
@@ -1602,6 +1623,8 @@ class NNTPClient(BaseNNTPClient):
             0 when a message-id is given.
 
         Raises:
+            ValueError: If msgid_range is empty or blank, or not a valid range.
+                Nothing is sent.
             NNTPReplyError: If there is no such article.
             NNTPDataError: If a line can't be parsed.
         """
@@ -1615,6 +1638,10 @@ class NNTPClient(BaseNNTPClient):
         """XHDR command, the RFC 2980 form of HDR. See hdr().
 
         Prefer hdr() when the server lists HDR in its capabilities.
+
+        Raises:
+            ValueError: If msgid_range is empty or blank, or not a valid range.
+                Nothing is sent.
         """
         return self._hdr(header, msgid_range, verb="XHDR")
 
@@ -1623,7 +1650,12 @@ class NNTPClient(BaseNNTPClient):
         header: str,
         msgid_range: str | Range | None = None,
     ) -> Iterator[tuple[int, str]]:
-        """XZHDR command, a compressed XHDR. See hdr()."""
+        """XZHDR command, a compressed XHDR. See hdr().
+
+        Raises:
+            ValueError: If msgid_range is empty or blank, or not a valid range.
+                Nothing is sent.
+        """
         return self._hdr(header, msgid_range, verb="XZHDR")
 
     @cached_property
@@ -1694,6 +1726,8 @@ class NNTPClient(BaseNNTPClient):
             come from overview_fmt; "full" fields have the header name removed.
 
         Raises:
+            ValueError: If range is empty or blank, or not a valid range. Nothing
+                is sent.
             NNTPReplyError: If there is no such article or no newsgroup selected.
             NNTPDataError: If a line can't be parsed.
         """
@@ -1724,6 +1758,8 @@ class NNTPClient(BaseNNTPClient):
             xover(). The article number is 0 when a message-id is given.
 
         Raises:
+            ValueError: If msgid_range is empty or blank, or not a valid range.
+                Nothing is sent.
             NNTPReplyError: If there is no such article or no newsgroup
                 selected.
             NNTPDataError: If a line can't be parsed.
@@ -1752,6 +1788,8 @@ class NNTPClient(BaseNNTPClient):
             The article number and header value of each matching article.
 
         Raises:
+            ValueError: If msgid_range is empty or blank, or not a valid range.
+                Nothing is sent.
             NNTPReplyError: If there is no such article.
             NNTPDataError: If a line can't be parsed.
         """
