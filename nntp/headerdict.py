@@ -81,10 +81,19 @@ class HeaderDict(MutableMapping[str, str]):
         Like dict.copy(): changing the copy does not change this HeaderDict,
         and changing this HeaderDict does not change the copy. The copy has
         the same type as this object (a subclass stays a subclass); other
-        instance attributes of a subclass are copied shallowly.
+        instance attributes of a subclass, including those in __slots__, are
+        copied shallowly.
         """
         dup = type(self).__new__(type(self))
-        dup.__dict__.update(self.__dict__)
+        # The state copy.copy() uses: the __dict__, or a (dict, slots) tuple
+        state = object.__getstate__(self)
+        slots: dict[str, object] = {}
+        if isinstance(state, tuple):
+            state, slots = state
+        if isinstance(state, dict):
+            dup.__dict__.update(state)
+        for name, value in slots.items():
+            setattr(dup, name, value)
         dup._items = self._items.copy()  # noqa: SLF001
         return dup
 

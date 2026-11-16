@@ -208,3 +208,42 @@ def test_pickle_round_trip_subclass() -> None:
     assert type(restored) is _Sub
     assert list(restored) == ["KeYMiXeD"]
     assert restored == original
+
+
+class _Slotted(HeaderDict):
+    __slots__ = ("article_number", "extra")
+    article_number: int
+    extra: list[str]
+
+
+def test_copy_keeps_slot_values() -> None:
+    original = _Slotted([("Subject", "x")])
+    original.article_number = 42
+    original.extra = ["a"]
+    for dup in (copy.copy(original), original.copy(), copy.deepcopy(original)):
+        assert type(dup) is _Slotted
+        assert dup.article_number == 42
+        assert dup.extra == ["a"]
+        assert dup == original
+        dup.article_number = 43
+        dup["Subject"] = "y"
+        dup["From"] = "me"
+        assert original.article_number == 42
+        assert original == {"Subject": "x"}
+        assert dup == {"Subject": "y", "From": "me"}
+
+
+def test_deepcopy_slot_values_are_independent() -> None:
+    original = _Slotted()
+    original.extra = ["a"]
+    dup = copy.deepcopy(original)
+    dup.extra.append("b")
+    assert original.extra == ["a"]
+
+
+def test_copy_with_unset_slots() -> None:
+    original = _Slotted([("Subject", "x")])
+    for dup in (copy.copy(original), original.copy()):
+        assert type(dup) is _Slotted
+        assert dup == original
+        assert not hasattr(dup, "article_number")
