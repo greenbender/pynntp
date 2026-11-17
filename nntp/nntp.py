@@ -565,7 +565,8 @@ class BaseNNTPClient:
         if not inflate.eof:
             raise NNTPDataError("Decompression failed: compressed data is truncated")
         # A finished stream may end without CRLF; do not lose its last row.
-        # Rows separated by a bare LF are not one row: refuse them.
+        # A tail that still holds a bare LF is rows without CRLF: refuse it. (An LF
+        # row followed by a CRLF row is read as one row, as in 3.3.0.)
         if last := buf.read():
             if b"\n" in last:
                 raise NNTPDataError("Bad XZ data: line ends without CRLF")
