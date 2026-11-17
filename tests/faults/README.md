@@ -14,7 +14,7 @@ need Go (1.26 or later).
 
 ```sh
 mkdir -p .bin
-GOBIN="$PWD/.bin" go install github.com/go-while/nntp-testkit/cmd/nntp-fakeserver@v0.13.0
+GOBIN="$PWD/.bin" go install github.com/go-while/nntp-testkit/cmd/nntp-fakeserver@v0.14.1
 PYNNTP_FAULT_SERVER=.bin/nntp-fakeserver uv run pytest tests/faults -rxX
 ```
 

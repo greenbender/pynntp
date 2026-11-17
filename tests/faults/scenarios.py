@@ -2007,16 +2007,13 @@ def auth_scenarios() -> Iterator[Scenario]:
         ),
     ]
     for cmd, act, exp in relogin:
-        # The store looks up POST's override twice (the reply, then whether an
-        # article follows), and each lookup counts: 2 gives one 480 reply.
-        times = 2 if cmd == "POST" else 1
         yield Scenario(
             f"auth/480-once-on-{cmd.lower()}",
             store_cfg(
                 store=auth,
                 faults={
                     "override": {cmd: ["480 login expired"]},
-                    "override_times": {cmd: times},
+                    "override_times": {cmd: 1},
                 },
             ),
             logged_in(act),

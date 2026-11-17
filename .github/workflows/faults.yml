@@ -13,7 +13,7 @@ permissions:
   contents: read
 
 env:
-  NNTP_TESTKIT: v0.13.0
+  NNTP_TESTKIT: v0.14.1
 
 jobs:
   faults:
