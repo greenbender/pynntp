@@ -525,12 +525,13 @@ class BaseNNTPClient:
         """Yield the lines of a yEnc-encoded, zlib-compressed response.
 
         Used by XZVER and XZHDR. The lines are the same as _info_plain() would
-        give for the uncompressed command.
+        give for the uncompressed command, except that the last line may lack
+        its CRLF.
 
         Raises:
             NNTPDataError: If the yEnc header or trailer is bad, the size or CRC
-                check fails, decompression fails or ends early, or a line is
-                too long.
+                check fails, decompression fails or ends early, a line is too
+                long, or the unterminated end of the data holds a bare LF.
         """
         decoder = YEnc()
         inflate = zlib.decompressobj(-15)
@@ -563,6 +564,14 @@ class BaseNNTPClient:
             raise NNTPDataError(f"Bad yEnc data: {mismatch}")
         if not inflate.eof:
             raise NNTPDataError("Decompression failed: compressed data is truncated")
+        # A finished stream may end without CRLF; do not lose its last row.
+        # An unterminated tail that holds a bare LF (a row or rows ended by LF,
+        # not CRLF) is refused. An LF row followed by a CRLF row is read as one
+        # row, as in 3.3.0.
+        if last := buf.read():
+            if b"\n" in last:
+                raise NNTPDataError("Bad XZ data: line ends without CRLF")
+            yield last
 
     def _info(self, code: int, message: str, yz: bool = False) -> Iterator[bytes]:
         """Return the lines of a multi-line response as bytes.
