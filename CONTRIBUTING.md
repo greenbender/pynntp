@@ -44,6 +44,12 @@ without it they don't check it. The tests post articles but don't rely on the
 groups being empty, and those for optional features skip when the server
 doesn't list them in CAPABILITIES.
 
+## Fault-injection tests
+
+`tests/faults` runs pynntp against a fake server that splits, delays, drops
+and garbles its replies. These tests are opt-in and need Go; see
+[tests/faults/README.md](tests/faults/README.md).
+
 ## Docs
 
 ```sh
