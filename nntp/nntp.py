@@ -320,6 +320,7 @@ class BaseNNTPClient:
         self._deflate: _Compress | None = None  # Set by COMPRESS (RFC 8054)
         self._inflate: _Decompress | None = None
         self._inflate_more = False  # _inflate may have more output pending
+        self._gzip_overrun = False  # Extra output after an inner gzip terminator
 
         host = self._address[0]
         self.socket = socket.create_connection(self._address, timeout=self._timeout)
@@ -523,6 +524,10 @@ class BaseNNTPClient:
         while not inflate.eof:
             data = _inflate(inflate, b"" if more else self._read())
             more = len(data) == _INFLATE_SIZE
+            if data:
+                # Only its presence matters. Drain the stream without storing
+                # an arbitrarily long suffix behind the terminator.
+                self._gzip_overrun = True
             buf.write(inflate.unused_data)
         # Anything left over belongs to the next reply
         self._buffer.write(buf.read())
@@ -697,7 +702,7 @@ class BaseNNTPClient:
             # Output the last read left in the decompressor still counts. Data
             # that inflates to nothing, such as a sync flush, does not.
             self._buffer.write(self._decompress(b""))
-        if len(self._buffer):
+        if self._gzip_overrun or len(self._buffer):
             raise NNTPProtocolError("Unexpected data from the server after the reply")
 
     def _command(

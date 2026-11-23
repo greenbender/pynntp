@@ -347,8 +347,13 @@ def test_line_after_gzip_response_is_refused(
 
 
 @BIG_RECV
-def test_line_inside_gzip_after_terminator_is_refused(connect: Connect) -> None:
-    # The stray line is in the gzip stream, behind the "." that ends the reply
+@pytest.mark.parametrize("inflate_size", [65536, len(XOVER_LINES) + len(b".\r\n")])
+def test_line_inside_gzip_after_terminator_is_refused(
+    connect: Connect, monkeypatch: pytest.MonkeyPatch, inflate_size: int
+) -> None:
+    # The smaller output limit splits the terminator and the stray line
+    # across two inflate calls on data from the same recv.
+    monkeypatch.setattr("nntp.nntp._INFLATE_SIZE", inflate_size)
     reply = b"224 ok COMPRESS=GZIP\r\n" + gzip.compress(
         XOVER_LINES + b".\r\n" + STRAY_DATE
     )
