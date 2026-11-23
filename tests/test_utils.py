@@ -291,6 +291,29 @@ def test_parse_number_value_invalid(line: str, match: str) -> None:
         parse_number_value(line)
 
 
+@pytest.mark.parametrize(
+    "token", ["<broken", "<>", "<a>b>", "-1", "+1", "1_0", "\u0661"]
+)
+def test_parse_number_value_rejects_invalid_identifier(token: str) -> None:
+    with pytest.raises(ValueError, match="invalid"):
+        parse_number_value(f"{token} value\r\n")
+
+
+@pytest.mark.parametrize("token", ["<id>", "<a@b>"])
+def test_parse_number_value_valid_message_id(token: str) -> None:
+    assert parse_number_value(f"{token} value \t\r\n") == (0, "value \t")
+
+
+@pytest.mark.parametrize("token", ["<id>", "<a@b>"])
+def test_parse_number_value_message_id_not_allowed(token: str) -> None:
+    with pytest.raises(ValueError, match="numeric request"):
+        parse_number_value(f"{token} value\r\n", allow_msgid=False)
+
+
+def test_parse_number_value_number_when_msgid_not_allowed() -> None:
+    assert parse_number_value("7 value\r\n", allow_msgid=False) == (7, "value")
+
+
 @pytest.mark.parametrize("value", [10**17, 10**20, -(10**20)])
 def test_parse_epoch_out_of_range(value: int) -> None:
     with pytest.raises(ValueError, match="out of range"):

@@ -30,6 +30,8 @@ from .types import Newsgroup, Range
 _HEADER_NAME_RE = re.compile(r"[!-9;-~]+")
 # A folded header value continues after a line break followed by whitespace.
 _HEADER_FOLD_RE = re.compile(r"\r?\n(?=[ \t])")
+# RFC 3977 section 3.6: 1-248 printable US-ASCII characters except ">".
+_MESSAGE_ID_RE = re.compile(r"<[!-=?-~]{1,248}>")
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping
@@ -159,14 +161,17 @@ def parse_overview_fmt(line: str) -> tuple[str, bool]:
     return name, full
 
 
-def parse_number_value(line: str) -> tuple[int, str]:
+def parse_number_value(line: str, *, allow_msgid: bool = True) -> tuple[int, str]:
     """Parse an HDR, XHDR or XPAT line: an article number, then a value.
 
     A line starting with a message-id (older XHDR by message-id) gets
-    number 0, as HDR gives.
+    number 0, as HDR gives. Only a request by message-id may be answered
+    with such a line.
 
     Args:
         line: The response line.
+        allow_msgid: False if the request was not by message-id (a range or
+            the current article), so a message-id line is an error.
 
     Returns:
         The article number and the value ("" if there is none).
@@ -175,7 +180,14 @@ def parse_number_value(line: str) -> tuple[int, str]:
         ValueError: If the line cannot be parsed.
     """
     first, *value = line.rstrip("\r\n").split(None, 1)
-    number = 0 if first.startswith("<") else int(first)
+    if _MESSAGE_ID_RE.fullmatch(first):
+        if not allow_msgid:
+            raise ValueError(f"message-id {first!r} in the reply to a numeric request")
+        number = 0
+    elif first.isascii() and first.isdecimal():
+        number = int(first)
+    else:
+        raise ValueError(f"invalid article number or message-id: {first!r}")
     return number, value[0] if value else ""
 
 
