@@ -427,13 +427,19 @@ class BaseNNTPClient:
             self._line_too_long()
         return line
 
-    def _lines(self, buf: BytesFifo) -> Iterator[bytes]:
+    def _lines(
+        self, buf: BytesFifo, *, allow_unterminated: bool = False
+    ) -> Iterator[bytes]:
         """Yield the complete lines in buf, checking their length as _readline()."""
         while line := buf.readline():
             if len(line) > self.max_line_length:
                 self._line_too_long()
             yield line
-        if len(buf) >= self.max_line_length:
+        # XZ may end here, but a partial gzip line still needs a delimiter.
+        partial_limit = (
+            self.max_line_length if allow_unterminated else self.max_line_length - 1
+        )
+        if len(buf) > partial_limit:
             self._line_too_long()
 
     def _line_too_long(self) -> NoReturn:
@@ -553,7 +559,7 @@ class BaseNNTPClient:
             while True:
                 data = _inflate(inflate, data)
                 buf.write(data)
-                yield from self._lines(buf)
+                yield from self._lines(buf, allow_unterminated=True)
                 if len(data) < _INFLATE_SIZE:
                     break
                 data = b""  # More output may be pending

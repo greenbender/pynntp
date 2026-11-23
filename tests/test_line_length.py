@@ -67,6 +67,19 @@ def test_lines_at_limit(connect: Connect, kind: str) -> None:
     assert client.date().year == 2024
 
 
+@pytest.mark.parametrize("length", [DEFAULT, DEFAULT + 1])
+def test_unterminated_xz_row_at_limit(connect: Connect, length: int) -> None:
+    payload = b"x" * length
+    client, _ = connect(WELCOME + MODE_READER + respond("xz", payload))
+    if length == DEFAULT:
+        assert read_response(client, "xz") == payload.decode()
+        assert client.date().year == 2024
+    else:
+        with pytest.raises(nntp.NNTPDataError, match="Line longer than"):
+            read_response(client, "xz")
+        assert_broken(client)
+
+
 @pytest.mark.parametrize("kind", KINDS)
 def test_many_short_lines(connect: Connect, kind: str) -> None:
     payload = b"".join(b"%d\tsubject %d\r\n" % (i, i) for i in range(5_000))
