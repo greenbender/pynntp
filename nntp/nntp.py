@@ -168,6 +168,31 @@ def _msgid_article(msgid_article: str | int | None) -> str | None:
     return None if msgid_article is None else str(msgid_article)
 
 
+def _stray_yend_error(
+    line: bytes, size: int, crc32: int, *, part: bool, dropped: bool, closed: bool
+) -> str | None:
+    """Check a =yend outside a block.
+
+    Args:
+        line: The =yend line.
+        size: Decoded length of the last closed block.
+        crc32: CRC32 of the last closed block.
+        part: The last closed block was a part of a multipart post.
+        dropped: Text was dropped since the last =yend.
+        closed: A block has been closed, so size and crc32 are its own.
+
+    Returns:
+        None if no text was dropped (a harmless stray) or the line repeats
+        the trailer of the last closed block (a duplicate), else a description
+        of the error: an early =yend has hidden the data of its block.
+    """
+    if not dropped:
+        return None
+    if closed and check_trailer(line, size, crc32, part=part) is None:
+        return None
+    return "=yend after data outside a block"
+
+
 def _inflate(inflate: _Decompress, data: bytes) -> bytes:
     """Decompress at most _INFLATE_SIZE bytes of output.
 
@@ -233,6 +258,10 @@ class NNTPProtocolError(NNTPError):
 
 class NNTPDataError(NNTPError):
     """The content of a response could not be parsed or failed a check."""
+
+
+class _DrainedResponseError(Exception):
+    """A data error discovered after the complete response was consumed."""
 
 
 class NNTPYEncError(NNTPDataError):
@@ -521,16 +550,30 @@ class BaseNNTPClient:
         # Anything left over belongs to the next reply
         self._buffer.write(buf.read())
 
+    def _inflated_lines(
+        self, inflate: _Decompress, data: bytes, buf: BytesFifo
+    ) -> Iterator[bytes]:
+        """Decompress data into buf and yield the complete lines in buf."""
+        while True:
+            data = _inflate(inflate, data)
+            buf.write(data)
+            yield from self._lines(buf)
+            if len(data) < _INFLATE_SIZE:
+                return
+            data = b""  # More output may be pending
+
     def _info_yenczlib(self) -> Iterator[bytes]:
         """Yield the lines of a yEnc-encoded, zlib-compressed response.
 
         Used by XZVER and XZHDR. The lines are the same as _info_plain() would
-        give for the uncompressed command.
+        give for the uncompressed command. Only the first =yend is checked;
+        the lines after it are read and ignored, except a second =ybegin,
+        which is an error as the response carries one block.
 
         Raises:
             NNTPDataError: If the yEnc header or trailer is bad, the size or CRC
-                check fails, decompression fails or ends early, or a line is
-                too long.
+                check fails, a second =ybegin follows the trailer, decompression
+                fails or ends early, or a line is too long.
         """
         decoder = YEnc()
         inflate = zlib.decompressobj(-15)
@@ -542,20 +585,17 @@ class BaseNNTPClient:
         if not header.startswith(b"=ybegin "):
             raise NNTPDataError("Bad yEnc header")
 
-        buf, trailer, size = BytesFifo(), b"", 0
+        buf, trailer, size, second_block = BytesFifo(), b"", 0, False
         for line in lines:
+            if trailer:  # Read to the terminator; only a second =ybegin is noted
+                second_block = second_block or line.startswith(b"=ybegin ")
+                continue
             if line.startswith(b"=yend"):
                 trailer = line
                 continue
             data = decoder.decode(line)
             size += len(data)
-            while True:
-                data = _inflate(inflate, data)
-                buf.write(data)
-                yield from self._lines(buf)
-                if len(data) < _INFLATE_SIZE:
-                    break
-                data = b""  # More output may be pending
+            yield from self._inflated_lines(inflate, data, buf)
 
         if not trailer:
             raise NNTPDataError("Missing yEnc trailer")
@@ -563,6 +603,10 @@ class BaseNNTPClient:
             raise NNTPDataError(f"Bad yEnc data: {mismatch}")
         if not inflate.eof:
             raise NNTPDataError("Decompression failed: compressed data is truncated")
+        if second_block:
+            raise _DrainedResponseError(
+                "Bad yEnc data: second =ybegin after the trailer"
+            )
 
     def _info(self, code: int, message: str, yz: bool = False) -> Iterator[bytes]:
         """Return the lines of a multi-line response as bytes.
@@ -587,6 +631,9 @@ class BaseNNTPClient:
         try:
             yield from lines
             complete = True
+        except _DrainedResponseError as e:
+            complete = True
+            raise NNTPDataError(str(e)) from None
         finally:
             # An iterator abandoned before reconnect() must not touch the new
             # connection when it is finally closed
@@ -1424,17 +1471,25 @@ class NNTPClient(BaseNNTPClient):
         raised, so the connection stays in sync.
 
         Only lines between =ybegin and =yend are decoded; text outside them,
-        such as a signature, is dropped.
+        such as a signature, is dropped. A stray =yend outside a block is
+        ignored, unless text was dropped since the last =yend (or the start of
+        the body). Only empty lines are not text; a line of spaces is data
+        (a space encodes byte 0xF6). After dropped text, a stray =yend is
+        accepted if it matches the last closed block (a duplicate trailer after
+        a signature); otherwise an early =yend has hidden the data of its
+        block, which is an error.
 
         Raises:
             NNTPYEncError: If yEnc data does not match its trailer, a =ybegin
-                has no =yend, or there is no =ybegin. The decoded body is in
-                its data attribute.
+                has no =yend, there is no =ybegin, or a =yend follows text
+                outside a block and does not match the last closed block. The
+                decoded body is in its data attribute.
         """
         body: list[bytes] = []
         encoded: list[bytes] = []  # yEnc data lines not yet decoded
         decoder, size, multipart, open_block = YEnc(), 0, False, False
         seen_block = False
+        dropped = False  # Text dropped outside a block since the last =yend
         error: str | None = None
 
         def decode_pending() -> None:
@@ -1448,17 +1503,29 @@ class NNTPClient(BaseNNTPClient):
 
         for line in lines:
             if line[:2] != b"=y":
-                if open_block:  # Text outside blocks (e.g. a signature) is dropped
+                if open_block:
                     encoded.append(line)
+                else:  # Text outside blocks (e.g. a signature) is dropped
+                    dropped |= line not in (b"", b"\r\n", b"\n")
                 continue
             decode_pending()
             if line.startswith(b"=ybegin "):
                 decoder, size, open_block, seen_block = YEnc(), 0, True, True
                 multipart = "part" in parse_keywords(line)
             elif line.startswith(b"=yend"):
-                mismatch = check_trailer(line, size, decoder.crc32, part=multipart)
+                if open_block:
+                    mismatch = check_trailer(line, size, decoder.crc32, part=multipart)
+                else:  # A stray: a duplicate, or an early =yend after text
+                    mismatch = _stray_yend_error(
+                        line,
+                        size,
+                        decoder.crc32,
+                        part=multipart,
+                        dropped=dropped,
+                        closed=seen_block,
+                    )
                 error = error or mismatch
-                open_block = False
+                open_block, dropped = False, False
             # =ypart and other =y lines carry nothing to decode
 
         decode_pending()

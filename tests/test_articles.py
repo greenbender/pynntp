@@ -135,6 +135,95 @@ def test_yenc_text_outside_block_dropped(connect: Connect) -> None:
     assert client.body(1) == PLAIN
 
 
+@pytest.mark.parametrize("article", [False, True])
+@pytest.mark.parametrize("part", [None, 2])
+@pytest.mark.parametrize("trailer", [b"=yend size=0 crc32=0", b"=yend nonsense"])
+def test_yenc_stray_trailer_outside_block(
+    connect: Connect, article: bool, part: int | None, trailer: bytes
+) -> None:
+    server = yenc_body(PLAIN, part=part)[:-3] + trailer + b"\r\n.\r\n"
+    if article:
+        server = server.replace(
+            b"222 1 <a@b>\r\n", b"220 1 <a@b>\r\nSubject: f\r\n\r\n", 1
+        )
+    client, _ = connect(WELCOME + MODE_READER + server + DATE)
+    if article:
+        assert client.article(1)[2] == PLAIN
+    else:
+        assert client.body(1) == PLAIN
+    assert client.date().year == 2024
+
+
+@pytest.mark.parametrize("article", [False, True])
+@pytest.mark.parametrize("early", [b"=yend size=0", b"=yend size=0 crc32=00000000"])
+def test_yenc_early_trailer_does_not_hide_data(
+    connect: Connect, article: bool, early: bytes
+) -> None:
+    # An early =yend closes the block, so the data after it is outside any
+    # block; the real trailer after that data must not be skipped as stray
+    begin, rest = yenc_body(PLAIN).split(b"\r\n", 2)[1:]
+    server = b"222 1 <a@b>\r\n" + begin + b"\r\n" + early + b"\r\n" + rest
+    if article:
+        server = server.replace(
+            b"222 1 <a@b>\r\n", b"220 1 <a@b>\r\nSubject: f\r\n\r\n", 1
+        )
+    client, _ = connect(WELCOME + MODE_READER + server + DATE)
+    read = client.article if article else client.body
+    with pytest.raises(nntp.NNTPYEncError, match="outside a block") as info:
+        read(1)
+    assert info.value.data == b""
+    assert client.date().year == 2024  # Read to the end; still in sync
+
+
+def test_yenc_stray_trailer_after_blank_lines(connect: Connect) -> None:
+    server = yenc_body(PLAIN)[:-3] + b"\r\n\r\n=yend size=0\r\n.\r\n"
+    client, _ = connect(WELCOME + MODE_READER + server + DATE)
+    assert client.body(1) == PLAIN
+    assert client.date().year == 2024
+
+
+def test_yenc_space_line_is_data_not_blank(connect: Connect) -> None:
+    # A space encodes byte 0xf6, so the line is data outside a block, and the
+    # last trailer, which does not match the empty block, must not be ignored
+    server = (
+        b"222 1 <a@b>\r\n=ybegin line=128 size=1 name=x\r\n=yend size=0\r\n"
+        b" \r\n=yend size=1\r\n.\r\n"
+    )
+    client, _ = connect(WELCOME + MODE_READER + server + DATE)
+    with pytest.raises(nntp.NNTPYEncError, match="outside a block") as info:
+        client.body(1)
+    assert info.value.data == b""
+    assert client.date().year == 2024
+
+
+def test_yenc_duplicate_trailer_after_signature(connect: Connect) -> None:
+    server = (
+        b"222 1 <a@b>\r\n=ybegin line=128 size=1 name=x\r\nk\r\n=yend size=1\r\n"
+        b"-- \r\nsignature\r\n=yend size=1\r\n.\r\n"
+    )
+    client, _ = connect(WELCOME + MODE_READER + server + DATE)
+    assert client.body(1) == b"A"
+    assert client.date().year == 2024
+
+
+def test_yenc_stray_trailer_between_blocks(connect: Connect) -> None:
+    first = yenc_body(b"first")[:-3]
+    second = yenc_body(b"second").split(b"\r\n", 1)[1]
+    server = first + b"=yend size=0\r\n" + second + DATE
+    client, _ = connect(WELCOME + MODE_READER + server)
+    assert client.body(1) == b"firstsecond"
+    assert client.date().year == 2024
+
+
+def test_yenc_stray_trailer_does_not_hide_bad_block(connect: Connect) -> None:
+    server = yenc_body(PLAIN, trailer="size=1")[:-3] + b"=yend size=768\r\n.\r\n"
+    client, _ = connect(WELCOME + MODE_READER + server + DATE)
+    with pytest.raises(nntp.NNTPYEncError, match="trailer says 1") as info:
+        client.body(1)
+    assert info.value.data == PLAIN
+    assert client.date().year == 2024
+
+
 def test_body_decode_forced_ybegin_prefix_is_not_a_block(connect: Connect) -> None:
     server = b"222 1 <a@b>\r\n=ybeginners guide\r\n.\r\n"
     client, _ = connect(WELCOME + MODE_READER + server)

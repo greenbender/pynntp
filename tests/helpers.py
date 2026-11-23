@@ -170,9 +170,16 @@ ODD = b"299 unexpected\r\n"  # A success code no command expects
 
 
 def yenczlib(
-    code: bytes, payload: bytes, trailer: str | None = None, line_length: int = 128
+    code: bytes,
+    payload: bytes,
+    trailer: str | None = None,
+    line_length: int = 128,
+    after: bytes = b"",
 ) -> bytes:
-    """An XZVER/XZHDR response: payload deflated, then yEnc-encoded."""
+    """An XZVER/XZHDR response: payload deflated, then yEnc-encoded.
+
+    after is sent between the =yend trailer and the terminator.
+    """
     deflate = zlib.compressobj(wbits=-15)
     raw = deflate.compress(payload) + deflate.flush()
     if trailer is None:
@@ -182,5 +189,7 @@ def yenczlib(
         + b" ok\r\n=ybegin line=128 size=0 name=x\r\n"
         + dot_stuff(yenc_encode(raw, line_length))
         + trailer.encode()
-        + b"\r\n.\r\n"
+        + b"\r\n"
+        + after
+        + b".\r\n"
     )
