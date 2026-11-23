@@ -1572,17 +1572,20 @@ class NNTPClient(BaseNNTPClient):
         return self._number_values(
             verb,
             self.info(code, message, yz=verb == "XZHDR"),
-            allow_msgid=isinstance(msgid_range, str),
+            msgid_range,
         )
 
     def _number_values(
-        self, verb: str, lines: Iterator[str], allow_msgid: bool
+        self, verb: str, lines: Iterator[str], msgid_range: str | Range | None
     ) -> Iterator[tuple[int, str]]:
         """Parse "<article number> <value>" lines, as sent by HDR and XPAT.
 
-        allow_msgid is True if the request was by message-id, the only case
-        where a message-id line (number 0) can be the answer.
+        Only a request by message-id can have a message-id row (number 0).
+        String arguments can also be article numbers or ranges on the wire.
         """
+        allow_msgid = isinstance(msgid_range, str) and bool(
+            _MESSAGE_ID_RE.fullmatch(msgid_range.strip(" \t"))
+        )
         for line in lines:
             with self._data_errors(f"{verb} response"):
                 number, value = utils.parse_number_value(line, allow_msgid=allow_msgid)
@@ -1765,9 +1768,7 @@ class NNTPClient(BaseNNTPClient):
         args = " ".join([header, utils.unparse_msgid_range(msgid_range), *pattern])
 
         code, message = self.command("XPAT", args, expect=221)
-        return self._number_values(
-            "XPAT", self.info(code, message), allow_msgid=isinstance(msgid_range, str)
-        )
+        return self._number_values("XPAT", self.info(code, message), msgid_range)
 
     def xfeature_compress_gzip(self, terminator: bool = False) -> None:
         """XFEATURE COMPRESS GZIP command.

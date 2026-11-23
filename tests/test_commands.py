@@ -339,9 +339,9 @@ def test_header_rows_reject_invalid_identifiers(
 @pytest.mark.parametrize(
     ("verb", "code"), [("hdr", b"225"), ("xhdr", b"221"), ("xpat", b"221")]
 )
-@pytest.mark.parametrize("request_", [(1, 2), 5, (3,)])
+@pytest.mark.parametrize("request_", [(1, 2), 5, (3,), "1-2", "5", "3-"])
 def test_header_numeric_request_rejects_message_id_row(
-    connect: Connect, verb: str, code: bytes, request_: Range
+    connect: Connect, verb: str, code: bytes, request_: str | Range
 ) -> None:
     server = code + b" ok\r\n<a@b> value\r\n.\r\n"
     client, _ = connect(WELCOME + MODE_READER + server)
