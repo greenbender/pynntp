@@ -44,6 +44,9 @@ def test_unparse_msgid_range() -> None:
     assert unparse_msgid_range("<msgid@example.com>") == "<msgid@example.com>"
     with pytest.raises(ValueError):  # noqa: PT011
         unparse_msgid_range(None)  # type: ignore[arg-type]
+    for empty in ("", " ", "\t"):
+        with pytest.raises(ValueError, match="Invalid message-id"):
+            unparse_msgid_range(empty)
 
 
 @pytest.mark.parametrize(
