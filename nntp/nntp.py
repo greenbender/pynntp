@@ -427,13 +427,19 @@ class BaseNNTPClient:
             self._line_too_long()
         return line
 
-    def _lines(self, buf: BytesFifo) -> Iterator[bytes]:
+    def _lines(
+        self, buf: BytesFifo, *, allow_unterminated: bool = False
+    ) -> Iterator[bytes]:
         """Yield the complete lines in buf, checking their length as _readline()."""
         while line := buf.readline():
             if len(line) > self.max_line_length:
                 self._line_too_long()
             yield line
-        if len(buf) >= self.max_line_length:
+        # XZ may end here, but a partial gzip line still needs a delimiter.
+        partial_limit = (
+            self.max_line_length if allow_unterminated else self.max_line_length - 1
+        )
+        if len(buf) > partial_limit:
             self._line_too_long()
 
     def _line_too_long(self) -> NoReturn:
@@ -525,12 +531,13 @@ class BaseNNTPClient:
         """Yield the lines of a yEnc-encoded, zlib-compressed response.
 
         Used by XZVER and XZHDR. The lines are the same as _info_plain() would
-        give for the uncompressed command.
+        give for the uncompressed command, except that the last line may lack
+        its CRLF.
 
         Raises:
             NNTPDataError: If the yEnc header or trailer is bad, the size or CRC
-                check fails, decompression fails or ends early, or a line is
-                too long.
+                check fails, decompression fails or ends early, a line is too
+                long, or the unterminated end of the data holds a bare LF.
         """
         decoder = YEnc()
         inflate = zlib.decompressobj(-15)
@@ -552,7 +559,7 @@ class BaseNNTPClient:
             while True:
                 data = _inflate(inflate, data)
                 buf.write(data)
-                yield from self._lines(buf)
+                yield from self._lines(buf, allow_unterminated=True)
                 if len(data) < _INFLATE_SIZE:
                     break
                 data = b""  # More output may be pending
@@ -563,6 +570,14 @@ class BaseNNTPClient:
             raise NNTPDataError(f"Bad yEnc data: {mismatch}")
         if not inflate.eof:
             raise NNTPDataError("Decompression failed: compressed data is truncated")
+        # A finished stream may end without CRLF; do not lose its last row.
+        # An unterminated tail that holds a bare LF (a row or rows ended by LF,
+        # not CRLF) is refused. An LF row followed by a CRLF row is read as one
+        # row, as in 3.3.0.
+        if last := buf.read():
+            if b"\n" in last:
+                raise NNTPDataError("Bad XZ data: line ends without CRLF")
+            yield last
 
     def _info(self, code: int, message: str, yz: bool = False) -> Iterator[bytes]:
         """Return the lines of a multi-line response as bytes.
