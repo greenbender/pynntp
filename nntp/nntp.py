@@ -260,6 +260,10 @@ class NNTPDataError(NNTPError):
     """The content of a response could not be parsed or failed a check."""
 
 
+class _DrainedResponseError(Exception):
+    """A data error discovered after the complete response was consumed."""
+
+
 class NNTPYEncError(NNTPDataError):
     """yEnc data failed its size or CRC check.
 
@@ -597,10 +601,12 @@ class BaseNNTPClient:
             raise NNTPDataError("Missing yEnc trailer")
         if mismatch := check_trailer(trailer, size, decoder.crc32, part=False):
             raise NNTPDataError(f"Bad yEnc data: {mismatch}")
-        if second_block:
-            raise NNTPDataError("Bad yEnc data: second =ybegin after the trailer")
         if not inflate.eof:
             raise NNTPDataError("Decompression failed: compressed data is truncated")
+        if second_block:
+            raise _DrainedResponseError(
+                "Bad yEnc data: second =ybegin after the trailer"
+            )
 
     def _info(self, code: int, message: str, yz: bool = False) -> Iterator[bytes]:
         """Return the lines of a multi-line response as bytes.
@@ -625,6 +631,9 @@ class BaseNNTPClient:
         try:
             yield from lines
             complete = True
+        except _DrainedResponseError as e:
+            complete = True
+            raise NNTPDataError(str(e)) from None
         finally:
             # An iterator abandoned before reconnect() must not touch the new
             # connection when it is finally closed

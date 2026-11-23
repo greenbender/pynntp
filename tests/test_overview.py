@@ -53,17 +53,29 @@ def test_xover_gzip_bad_trailer_after_terminator(connect: Connect) -> None:
         list(client.xover((1, 2)))
 
 
-def test_xzver_truncated_stream(connect: Connect) -> None:
+SECOND_BLOCK = (
+    b"=ybegin line=128 size=4 name=y\r\n"
+    + yenc_encode(b"abcd")
+    + f"=yend size=4 crc32={zlib.crc32(b'abcd'):08x}\r\n".encode()
+)
+
+
+@pytest.mark.parametrize("after", [b"", SECOND_BLOCK])
+def test_xzver_truncated_stream(connect: Connect, after: bytes) -> None:
     deflate = zlib.compressobj(wbits=-15)
     raw = (deflate.compress(XOVER_LINES) + deflate.flush())[:-6]
     server = (
         b"224 ok\r\n=ybegin line=128 size=0 name=x\r\n"
         + dot_stuff(yenc_encode(raw, 128))
-        + f"=yend size={len(raw)} crc32={zlib.crc32(raw):08x}\r\n.\r\n".encode()
+        + f"=yend size={len(raw)} crc32={zlib.crc32(raw):08x}\r\n".encode()
+        + after
+        + b".\r\n"
     )
     client, _ = connect(WELCOME + MODE_READER + OVERVIEW_FMT + server)
     with pytest.raises(nntp.NNTPDataError, match="truncated"):
         list(client.xzver((1, 2)))
+    with pytest.raises(nntp.NNTPSyncError):
+        client.date()
 
 
 def test_xzver(connect: Connect) -> None:
@@ -175,22 +187,13 @@ def test_xzhdr_stray_yend_after_trailer(connect: Connect, after: bytes) -> None:
     assert client.date().year == 2024
 
 
-SECOND_BLOCK = (
-    b"=ybegin line=128 size=4 name=y\r\n"
-    + yenc_encode(b"abcd")
-    + f"=yend size=4 crc32={zlib.crc32(b'abcd'):08x}\r\n".encode()
-)
-
-
 def test_xzver_second_block_after_trailer(connect: Connect) -> None:
     # XZVER carries one yEnc block: a second =ybegin is an error, not skipped
     server = OVERVIEW_FMT + yenczlib(b"224", XOVER_LINES, after=SECOND_BLOCK) + DATE
     client, _ = connect(WELCOME + MODE_READER + server)
     with pytest.raises(nntp.NNTPDataError, match="second =ybegin"):
         list(client.xzver((1, 2)))
-    # The terminator was read, but an error marks the connection broken
-    with pytest.raises(nntp.NNTPSyncError):
-        client.date()
+    assert client.date().year == 2024
 
 
 def test_xzhdr_second_block_after_trailer(connect: Connect) -> None:
@@ -198,8 +201,7 @@ def test_xzhdr_second_block_after_trailer(connect: Connect) -> None:
     client, _ = connect(WELCOME + MODE_READER + server)
     with pytest.raises(nntp.NNTPDataError, match="second =ybegin"):
         list(client.xzhdr("Subject", (1, 2)))
-    with pytest.raises(nntp.NNTPSyncError):
-        client.date()
+    assert client.date().year == 2024
 
 
 @pytest.mark.parametrize(
