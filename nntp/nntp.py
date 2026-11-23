@@ -273,7 +273,7 @@ class BaseNNTPClient:
         *,
         timeout: float | None = 30,
         use_ssl: bool = False,
-        ssl_mode: SSLMode = SSLMode.IMPLICIT,
+        ssl_mode: SSLMode | Literal["implicit", "starttls"] = SSLMode.IMPLICIT,
         ssl_context: ssl.SSLContext | None = None,
     ) -> None:
         """Connect to the server and read the welcome message.
@@ -813,7 +813,7 @@ class NNTPClient(BaseNNTPClient):
         *,
         timeout: float | None = 30,
         use_ssl: bool = False,
-        ssl_mode: SSLMode = SSLMode.IMPLICIT,
+        ssl_mode: SSLMode | Literal["implicit", "starttls"] = SSLMode.IMPLICIT,
         ssl_context: ssl.SSLContext | None = None,
         reader: bool = True,
     ) -> None:
