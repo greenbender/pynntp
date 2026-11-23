@@ -386,16 +386,6 @@ def in_group(f: Action) -> Action:
     return act
 
 
-def logged_in(f: Action) -> Action:
-    """Log in (AUTHINFO USER, PASS), then f."""
-
-    def act(c: nntp.NNTPClient) -> object:
-        c.login()
-        return f(c)
-
-    return act
-
-
 STORE_BODY = ["line one", ".dot line", "..two dots", ".", "", "last"]
 STORE_BODY_BYTES = b"line one\r\n.dot line\r\n..two dots\r\n.\r\n\r\nlast\r\n"
 BODY_LINES = [b"first", b".", b"..", b".leading", b"", b"middle line", b"last."]
@@ -1987,17 +1977,10 @@ def auth_scenarios() -> Iterator[Scenario]:
         {"reader": False, "username": "u", "password": "x"},
         probe="store",
     )
-    # The store answers 480 to every command before the login, so each action
-    # logs in first: the injected 480 is then one on a logged-in connection,
-    # and exactly one more AUTHINFO USER/PASS and the retried command follow.
-    relogin: list[tuple[str, Action, Expect]] = [
+    # The store challenges the first protected command on a fresh connection.
+    protected: list[tuple[str, Action, Expect]] = [
         ("GROUP", lambda c: c.group("alt.test"), Ok((3, 1, 3, "alt.test"))),
         ("ARTICLE", lambda c: c.article("<1@test>")[2], Ok(STORE_BODY_BYTES)),
-        (
-            "OVER",
-            in_group(lambda c: list(c.over((1, 3)))),
-            Ok(pred=store_over_check, desc="3 rows"),
-        ),
         ("LIST", lambda c: len(list(c.list_active())), Ok(2)),
         ("LISTGROUP", lambda c: list(c.listgroup("alt.test")), Ok([1, 2, 3])),
         (
@@ -2006,29 +1989,31 @@ def auth_scenarios() -> Iterator[Scenario]:
             Ok("<p1@x>"),
         ),
     ]
-    for cmd, act, exp in relogin:
+    for cmd, act, exp in protected:
         yield Scenario(
             f"auth/480-once-on-{cmd.lower()}",
-            store_cfg(
-                store=auth,
-                faults={
-                    "override": {cmd: ["480 login expired"]},
-                    "override_times": {cmd: 1},
-                },
-            ),
-            logged_in(act),
+            store_cfg(store=auth),
+            act,
             exp,
             CREDS,
             probe="store",
-            server_check=line_sequence(
-                "AUTHINFO USER",
-                "AUTHINFO PASS",
-                cmd,
-                "AUTHINFO USER",
-                "AUTHINFO PASS",
-                cmd,
-            ),
+            server_check=line_sequence(cmd, "AUTHINFO USER", "AUTHINFO PASS", cmd),
         )
+    # Allow GROUP and overview discovery before login so OVER itself gets 480.
+    yield Scenario(
+        "auth/480-once-on-over",
+        script(
+            step("GROUP alt.test", b"211 2 1 2 alt.test\r\n"),
+            step("LIST OVERVIEW.FMT", OVERFMT),
+            step("OVER 1-2", b"480 Authentication required\r\n"),
+            step("AUTHINFO USER u", b"381 Password required\r\n"),
+            step("AUTHINFO PASS p", b"281 Authentication accepted\r\n"),
+            step("OVER 1-2", ml(b"224 Overview follows", OVER_ROWS)),
+        ),
+        in_group(lambda c: list(c.over((1, 2)))),
+        Ok(pred=over_check, desc="2 rows"),
+        {**RAW, **CREDS},
+    )
     yield Scenario(
         "auth/481-after-480",
         script(
