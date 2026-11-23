@@ -1395,6 +1395,17 @@ class NNTPClient(BaseNNTPClient):
             raise NNTPDataError(f'Invalid {verb} status "{message}"')
         return int(parts[0]), parts[1]
 
+    def _read_headers(self, lines: Iterator[bytes]) -> HeaderDict:
+        """Parse through the header separator, draining the reply on a bad header."""
+        try:
+            return utils.parse_headers(self._decode(lines))
+        except ValueError as e:
+            # parse_headers() stopped at the bad line: read the rest of the
+            # response, so the connection stays in sync
+            for _ in lines:
+                pass
+            raise NNTPDataError(f"Invalid article headers: {e}") from e
+
     def _read_body(self, lines: Iterator[bytes], decode: bool | None = None) -> bytes:
         """Read an article body, decoding yEnc if decode is set or detected.
 
@@ -1490,7 +1501,9 @@ class NNTPClient(BaseNNTPClient):
 
         Raises:
             NNTPReplyError: If there is no such article.
-            NNTPDataError: If the reply or headers can't be parsed.
+            NNTPDataError: If the reply or headers can't be parsed. If the
+                headers can't be parsed, the rest of the response (the body) is
+                read first, so the connection stays in sync.
             NNTPYEncError: If yEnc data fails its size or CRC check. The decoded
                 body is in its data attribute.
         """
@@ -1501,8 +1514,7 @@ class NNTPClient(BaseNNTPClient):
         # Headers and body come from one response: parse_headers() stops at
         # the blank line and _read_body() reads the rest.
         lines = self._info(code, message)
-        with self._data_errors("article headers"):
-            headers = utils.parse_headers(self._decode(lines))
+        headers = self._read_headers(lines)
         body = self._read_body(lines, decode=decode)
 
         # Parsed only now, so a bad number never leaves the article unread
@@ -1524,16 +1536,22 @@ class NNTPClient(BaseNNTPClient):
                 uses the current article.
 
         Returns:
-            The article headers.
+            The article headers. Only the lines before the first blank line are
+            headers; any lines after it are read and ignored.
 
         Raises:
             NNTPReplyError: If there is no such article.
-            NNTPDataError: If the headers can't be parsed.
+            NNTPDataError: If the headers can't be parsed. The whole response
+                is read first, so the connection stays in sync.
         """
         code, message = self.command("HEAD", _msgid_article(msgid_article), expect=221)
 
-        with self._data_errors("article headers"):
-            return utils.parse_headers(self.info(code, message))
+        lines = self._info(code, message)
+        headers = self._read_headers(lines)
+        # A blank line ends the headers; discard any remaining lines as they arrive.
+        for _ in lines:
+            pass
+        return headers
 
     def body(
         self,

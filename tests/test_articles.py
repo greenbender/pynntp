@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import zlib
+from typing import TYPE_CHECKING
 
 import pytest
 
 import nntp
+from nntp import utils
 from tests.helpers import (
     DATE,
     MODE_READER,
@@ -17,6 +19,9 @@ from tests.helpers import (
     yenc_body,
     yenc_encode,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
 
 
 def test_body_dot_unstuffing(connect: Connect) -> None:
@@ -169,3 +174,66 @@ def test_article_yenc_subject_plain_body(connect: Connect) -> None:
     article = b"220 1 <a@b>\r\nSubject: file yEnc (1/1)\r\n\r\nplain text\r\n.\r\n"
     client, _ = connect(WELCOME + MODE_READER + article)
     assert client.article(1)[2] == b"plain text\r\n"  # Detected from the body only
+
+
+def test_head_blank_line_inside_headers(connect: Connect) -> None:
+    server = b"221 1 <a@b>\r\nSubject: hi\r\n\r\nFrom: me\r\n.\r\n"
+    client, _ = connect(WELCOME + MODE_READER + server + DATE)
+    # Headers end at the blank line; the rest of the response is read and dropped
+    assert client.head(1) == {"Subject": "hi"}
+    assert client.date().year == 2024  # Whole response was read; still in sync
+
+
+@pytest.mark.parametrize("chunk", [1])
+def test_head_parses_before_reading_trailing_lines(
+    connect: Connect, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    server = b"221 1 <a@b>\r\nSubject: hi\r\n\r\ndiscarded\r\n.\r\n"
+    client, sock = connect(WELCOME + MODE_READER + server + DATE)
+    parse = utils.parse_headers
+
+    def parse_stream(lines: Iterable[str]) -> nntp.HeaderDict:
+        headers = parse(lines)
+        assert sock.data[sock.pos :].startswith(b"discarded")
+        return headers
+
+    monkeypatch.setattr(utils, "parse_headers", parse_stream)
+    assert client.head(1) == {"Subject": "hi"}
+    assert client.date().year == 2024
+
+
+def test_head_bad_header_line_keeps_connection(connect: Connect) -> None:
+    server = b"221 1 <a@b>\r\nSubject: hi\r\nno colon here\r\n.\r\n"
+    client, _ = connect(WELCOME + MODE_READER + server + DATE)
+    with pytest.raises(nntp.NNTPDataError, match="Invalid article headers"):
+        client.head(1)
+    assert client.date().year == 2024  # Whole response was read; still in sync
+
+
+def test_article_bad_header_line_keeps_connection(connect: Connect) -> None:
+    server = b"220 1 <a@b>\r\nSubject: hi\r\nno colon here\r\n\r\nbody\r\n.\r\n"
+    client, _ = connect(WELCOME + MODE_READER + server + DATE)
+    with pytest.raises(nntp.NNTPDataError, match="Invalid article headers"):
+        client.article(1)
+    assert client.date().year == 2024  # Whole response was read; still in sync
+
+
+def test_head_connection_lost_breaks_connection(connect: Connect) -> None:
+    # Cut off before the end of the HEAD response
+    client, _ = connect(WELCOME + MODE_READER + b"221 1 <a@b>\r\nSubject: hi\r\n")
+    with pytest.raises(nntp.NNTPError, match="Failed to read"):
+        client.head(1)
+    with pytest.raises(nntp.NNTPSyncError, match="reconnect"):
+        client.date()
+
+
+def test_article_bad_header_then_connection_lost_breaks_connection(
+    connect: Connect,
+) -> None:
+    # The bad line stops the header parse; reading the rest then fails
+    server = b"220 1 <a@b>\r\nSubject: hi\r\nno colon here\r\n"
+    client, _ = connect(WELCOME + MODE_READER + server)
+    with pytest.raises(nntp.NNTPError, match="Failed to read"):
+        client.article(1)
+    with pytest.raises(nntp.NNTPSyncError, match="reconnect"):
+        client.date()
