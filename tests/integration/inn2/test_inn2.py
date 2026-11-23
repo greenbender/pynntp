@@ -41,6 +41,7 @@ import socket
 import ssl
 import time
 import uuid
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any, NoReturn
 
@@ -121,10 +122,16 @@ def check_newsgroups(nntp_client: nntp.NNTPClient) -> None:
         assert newsgroups >= DEFAULT_NEWGROUPS
 
 
-def offers_login(lines: list[str]) -> bool:
-    """Whether CAPABILITIES lines list AUTHINFO USER."""
+def read_capabilities(nntp_client: nntp.NNTPClient) -> list[str]:
+    """Read the whole reply and normalize the case and spacing of its tokens."""
+    return [" ".join(line.upper().split()) for line in nntp_client.capabilities()]
+
+
+def offers(lines: Sequence[str], capability: str) -> bool:
+    """Match a capability label and its requested keywords on the same line."""
+    name, *keywords = capability.split()
     return any(
-        words[:1] == ["AUTHINFO"] and "USER" in words
+        words[:1] == [name] and all(keyword in words[1:] for keyword in keywords)
         for words in (line.split() for line in lines)
     )
 
@@ -143,31 +150,23 @@ def capabilities() -> tuple[str, ...]:
     """
     with client() as nntp_client:
         try:
-            lines = list(nntp_client.capabilities())
-            if USER and offers_login(lines):
-                nntp_client.login()
-                lines += [
-                    line for line in nntp_client.capabilities() if line not in lines
-                ]
-            return tuple(lines)
+            lines = read_capabilities(nntp_client)
         except nntp.NNTPPermanentError as e:
             if OTHER_SERVER and e.code == 500:  # RFC 3977 5.2: not implemented
                 return ()
             raise
+        if USER and offers(lines, "AUTHINFO USER"):
+            nntp_client.login()
+            lines.extend(
+                line for line in read_capabilities(nntp_client) if line not in lines
+            )
+        return tuple(lines)
 
 
 def require(capability: str) -> None:
-    """Skip the test unless CAPABILITIES lists capability.
-
-    The first word of a line must match and the other words must be on the
-    line too, so "COMPRESS DEFLATE" and "LIST ACTIVE.TIMES" both work.
-    """
-    name, *keywords = capability.split()
-    for line in capabilities():
-        words = line.split()
-        if words[:1] == [name] and all(keyword in words for keyword in keywords):
-            return
-    pytest.skip(f"The server does not offer {capability}")
+    """Skip the test unless CAPABILITIES lists the capability and its keywords."""
+    if not offers(capabilities(), capability):
+        pytest.skip(f"The server does not offer {capability}")
 
 
 def require_listed(capability: str) -> None:
@@ -196,7 +195,7 @@ def inn_version() -> tuple[int, ...]:
 
 def is_inn() -> bool:
     """Whether the server is INN, whose default setup some tests check."""
-    return any(line.startswith("IMPLEMENTATION INN ") for line in capabilities())
+    return any(line.split()[:2] == ["IMPLEMENTATION", "INN"] for line in capabilities())
 
 
 def require_inn() -> None:
@@ -280,6 +279,16 @@ def post(
     return number_in_group(nntp_client, message_id, newsgroup), message_id
 
 
+def check_by_message_id(reply: tuple[int, str], number: int, value: str) -> None:
+    """In a selected group STAT and HDR may return its article number or zero."""
+    returned_number, returned_value = reply
+    assert returned_value == value
+    if OTHER_SERVER:
+        assert returned_number in (0, number)
+    else:
+        assert returned_number == 0  # INN uses zero even in the article's group
+
+
 def tls_context() -> ssl.SSLContext:
     """TLS settings for the test server's self-signed certificate."""
     if TLS_CAFILE:
@@ -295,7 +304,7 @@ def compress(nntp_client: nntp.NNTPClient) -> None:
 
     No login is allowed after COMPRESS, so one is done before it.
     """
-    if USER and offers_login(list(nntp_client.capabilities())):
+    if USER and offers(read_capabilities(nntp_client), "AUTHINFO USER"):
         nntp_client.login()
     nntp_client.compress()
 
@@ -379,7 +388,7 @@ def test_post(newsgroup: str) -> None:
         _, _, last, _ = nntp_client.group(newsgroup)
         number, message_id = post(nntp_client, f"Test post to {newsgroup}", newsgroup)
         assert number > last
-        assert nntp_client.stat(message_id) == (0, message_id)
+        check_by_message_id(nntp_client.stat(message_id), number, message_id)
 
 
 @pytest.mark.parametrize("newsgroup", [*GROUPS, "junk"])
@@ -425,11 +434,15 @@ def test_article_in_empty_group() -> None:
     with client() as nntp_client:
         total, low, high, name = nntp_client.group(group)
         if OTHER_SERVER or EMPTY_GROUP:
-            # RFC 3977 6.1.1.2 allows three forms: high = low - 1 (the
-            # preferred one), all zeros, and high >= low (a count of zero is
-            # then possible). A high more than one below low is none of them.
-            assert (total, name) == (0, group)
-            assert high >= low - 1
+            # RFC 3977 6.1.1.2 permits a nonzero estimate within the range
+            # even when there are no articles. ARTICLE below confirms emptiness.
+            assert name == group
+            assert low >= 0
+            assert high >= 0
+            if (low, high) == (0, 0):
+                assert total == 0
+            else:
+                assert 0 <= total <= high - low + 1
         else:
             # INN's own reply for its junk group
             assert (total, low, high, name) == (0, 1, 0, "junk")
@@ -522,12 +535,12 @@ def test_hdr_over_stat_listgroup() -> None:
         number, message_id = post(nntp_client, subject)
         span = (number, number)
         assert list(nntp_client.hdr("Subject", span)) == [(number, subject)]
-        # By message-id, the article number is 0
-        assert list(nntp_client.hdr("Subject", message_id)) == [(0, subject)]
+        [by_message_id] = nntp_client.hdr("Subject", message_id)
+        check_by_message_id(by_message_id, number, subject)
         [(article_number, overview)] = nntp_client.over(span)
         assert (article_number, overview["message-id"]) == (number, message_id)
         assert nntp_client.stat(number) == (number, message_id)
-        assert nntp_client.stat(message_id) == (0, message_id)
+        check_by_message_id(nntp_client.stat(message_id), number, message_id)
         assert number in list(nntp_client.listgroup(GROUP))
         assert list(nntp_client.listgroup(GROUP, span)) == [number]
 
@@ -557,7 +570,7 @@ def test_compress(ssl_mode: SSLMode | None) -> None:
         ssl_context=tls_context(),
     ) as nntp_client:
         compress(nntp_client)
-        assert "COMPRESS DEFLATE" not in list(nntp_client.capabilities())
+        assert not offers(read_capabilities(nntp_client), "COMPRESS DEFLATE")
         check_newsgroups(nntp_client)
         assert nntp_client.date().year >= 2024
         with pytest.raises(nntp.NNTPError, match="not allowed after COMPRESS"):
@@ -611,7 +624,10 @@ def test_login_refused_keeps_connection() -> None:
         nntp_client.username, nntp_client.password = USER, PASSWORD
         # 502: no logins here. INN with TLS set up wants TLS first (483).
         # A server with logins refuses the wrong one (481, RFC 4643).
-        assert info.value.code in {481, 483, 502}
+        if OTHER_SERVER and info.value.code == 500:
+            assert not offers(capabilities(), "AUTHINFO USER")
+        else:
+            assert info.value.code in {481, 483, 502}
         assert nntp_client.date().year >= 2024
 
 
