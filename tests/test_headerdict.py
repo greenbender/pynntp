@@ -1,6 +1,7 @@
 import copy
 import pickle
 from collections.abc import Iterable
+from typing import Self
 
 import pytest
 
@@ -247,3 +248,36 @@ def test_copy_with_unset_slots() -> None:
         assert type(dup) is _Slotted
         assert dup == original
         assert not hasattr(dup, "article_number")
+
+
+class _Tagged(HeaderDict):
+    tag: str
+
+    def __new__(cls, tag: str) -> Self:
+        instance = super().__new__(cls)
+        instance.tag = tag
+        return instance
+
+    def __init__(self, tag: str) -> None:
+        super().__init__(Subject=tag)
+
+    def __getnewargs__(self) -> tuple[str]:
+        return (self.tag,)
+
+
+class _KeywordTagged(_Tagged):
+    def __new__(cls, *, tag: str) -> Self:
+        return super().__new__(cls, tag)
+
+    def __getnewargs_ex__(self) -> tuple[tuple[()], dict[str, str]]:
+        return (), {"tag": self.tag}
+
+
+@pytest.mark.parametrize("original", [_Tagged("id"), _KeywordTagged(tag="id")])
+def test_copy_uses_subclass_constructor_arguments(original: _Tagged) -> None:
+    for dup in (original.copy(), copy.copy(original)):
+        assert type(dup) is type(original)
+        assert dup.tag == original.tag
+        assert dup == original
+        dup["Subject"] = "changed"
+        assert original["Subject"] == "id"

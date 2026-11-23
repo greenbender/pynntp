@@ -84,7 +84,14 @@ class HeaderDict(MutableMapping[str, str]):
         instance attributes of a subclass, including those in __slots__, are
         copied shallowly.
         """
-        dup = type(self).__new__(type(self))
+        # A subclass can require constructor arguments when making a copy.
+        args: tuple[object, ...] = ()
+        kwargs: dict[str, object] = {}
+        if getnewargs_ex := getattr(self, "__getnewargs_ex__", None):
+            args, kwargs = getnewargs_ex()
+        elif getnewargs := getattr(self, "__getnewargs__", None):
+            args = getnewargs()
+        dup = type(self).__new__(type(self), *args, **kwargs)
         # The state copy.copy() uses: the __dict__, or a (dict, slots) tuple
         state = object.__getstate__(self)
         slots: dict[str, object] = {}
