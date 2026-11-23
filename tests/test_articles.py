@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import zlib
+from typing import TYPE_CHECKING
 
 import pytest
 
 import nntp
+from nntp import utils
 from tests.helpers import (
     DATE,
     MODE_READER,
@@ -17,6 +19,9 @@ from tests.helpers import (
     yenc_body,
     yenc_encode,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
 
 
 def test_body_dot_unstuffing(connect: Connect) -> None:
@@ -177,6 +182,24 @@ def test_head_blank_line_inside_headers(connect: Connect) -> None:
     # Headers end at the blank line; the rest of the response is read and dropped
     assert client.head(1) == {"Subject": "hi"}
     assert client.date().year == 2024  # Whole response was read; still in sync
+
+
+@pytest.mark.parametrize("chunk", [1])
+def test_head_parses_before_reading_trailing_lines(
+    connect: Connect, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    server = b"221 1 <a@b>\r\nSubject: hi\r\n\r\ndiscarded\r\n.\r\n"
+    client, sock = connect(WELCOME + MODE_READER + server + DATE)
+    parse = utils.parse_headers
+
+    def parse_stream(lines: Iterable[str]) -> nntp.HeaderDict:
+        headers = parse(lines)
+        assert sock.data[sock.pos :].startswith(b"discarded")
+        return headers
+
+    monkeypatch.setattr(utils, "parse_headers", parse_stream)
+    assert client.head(1) == {"Subject": "hi"}
+    assert client.date().year == 2024
 
 
 def test_head_bad_header_line_keeps_connection(connect: Connect) -> None:
