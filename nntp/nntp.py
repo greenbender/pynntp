@@ -193,7 +193,8 @@ class NNTPSyncError(NNTPError):
 
     Raised when a command is issued while the response to a previous command
     is still being read, or after a response was abandoned or failed part way
-    through, leaving unread data on the connection, or after close(). Call
+    through, leaving unread data on the connection, or after the server sent
+    more than a response (see NNTPProtocolError), or after close(). Call
     reconnect() to recover.
     """
 
@@ -228,7 +229,12 @@ class NNTPPermanentError(NNTPReplyError):
 
 
 class NNTPProtocolError(NNTPError):
-    """The server sent a status line that could not be parsed."""
+    """The server sent a status line that could not be parsed.
+
+    Also raised when a command finds data the server sent beyond the reply to
+    the previous command. The connection is then out of sync: nothing is sent,
+    and later commands raise NNTPSyncError until reconnect().
+    """
 
 
 class NNTPDataError(NNTPError):
@@ -314,6 +320,7 @@ class BaseNNTPClient:
         self._deflate: _Compress | None = None  # Set by COMPRESS (RFC 8054)
         self._inflate: _Decompress | None = None
         self._inflate_more = False  # _inflate may have more output pending
+        self._gzip_overrun = False  # Extra output after an inner gzip terminator
 
         host = self._address[0]
         self.socket = socket.create_connection(self._address, timeout=self._timeout)
@@ -517,6 +524,10 @@ class BaseNNTPClient:
         while not inflate.eof:
             data = _inflate(inflate, b"" if more else self._read())
             more = len(data) == _INFLATE_SIZE
+            if data:
+                # Only its presence matters. Drain the stream without storing
+                # an arbitrarily long suffix behind the terminator.
+                self._gzip_overrun = True
             buf.write(inflate.unused_data)
         # Anything left over belongs to the next reply
         self._buffer.write(buf.read())
@@ -658,7 +669,10 @@ class BaseNNTPClient:
                 first, so the connection stays in sync.
             NNTPTemporaryError: For status codes 400-499.
             NNTPPermanentError: For status codes 500-599.
-            NNTPProtocolError: If the status line can't be parsed.
+            NNTPProtocolError: If the status line can't be parsed, or the server
+                sent data beyond the reply to the previous command. In the
+                second case nothing is sent. Either way the connection is
+                then out of sync.
         """
         code, message = self._command(verb, args)
         if expect is not None:
@@ -673,6 +687,23 @@ class BaseNNTPClient:
             for _ in self._info(code, message):
                 pass
         raise NNTPReplyError(code, message)
+
+    def _check_nothing_unread(self) -> None:
+        """Raise NNTPProtocolError if the server sent more than the last reply.
+
+        Anything still buffered would be taken for the reply to the next
+        command, and every later reply would be shifted by one.
+
+        Raises:
+            NNTPProtocolError: If received data is unread. Called inside
+                _sync(), so the connection is then marked out of sync.
+        """
+        if self._inflate_more:
+            # Output the last read left in the decompressor still counts. Data
+            # that inflates to nothing, such as a sync flush, does not.
+            self._buffer.write(self._decompress(b""))
+        if self._gzip_overrun or len(self._buffer):
+            raise NNTPProtocolError("Unexpected data from the server after the reply")
 
     def _command(
         self, verb: str, args: str | None, *, login: bool = True
@@ -698,6 +729,7 @@ class BaseNNTPClient:
             raise ValueError(f"Command longer than {_MAX_COMMAND} octets: {shown!r}")
 
         with self._sync():
+            self._check_nothing_unread()
             self._send(line)
             try:
                 return self.status()
@@ -1872,6 +1904,9 @@ class NNTPClient(BaseNNTPClient):
             code, message = self.command(verb, args, expect=ready)
 
             with self._sync():
+                # Data that came with the ready reply, such as a fake final
+                # reply, would be taken for the answer to the article
+                self._check_nothing_unread()
                 while chunk := article.read(_SEND_SIZE):
                     self._send(chunk)
                 code, message = self.status()

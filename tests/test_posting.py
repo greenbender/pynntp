@@ -8,7 +8,15 @@ import pytest
 
 import nntp
 from nntp.nntp import NNTPSyncError
-from tests.helpers import DATE, IHAVE_OK, MODE_READER, ODD, WELCOME, Connect
+from tests.helpers import (
+    DATE,
+    IHAVE_OK,
+    MODE_READER,
+    ODD,
+    WELCOME,
+    Connect,
+    Packets,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -175,3 +183,36 @@ def test_post_unexpected_final_reply(connect: Connect) -> None:
         client.post({"Subject": "x"}, b"x\n")
     assert info.value.code == 299
     assert client.date().year == 2024
+
+
+# A fake final reply that arrives with the ready reply must not be taken for
+# the answer to the article, which must then not be sent. Only data in the
+# same recv is found, so these run with one big recv.
+@pytest.mark.parametrize("chunk", [4096])
+def test_post_refuses_data_after_ready_reply(connect: Connect) -> None:
+    packets = Packets(
+        WELCOME, MODE_READER, b"340 send\r\n240 <fake@x> ok\r\n", b"240 <real@x>\r\n"
+    )
+    client, sock = connect(packets)
+    sock.sent = b""
+    with pytest.raises(nntp.NNTPProtocolError, match="Unexpected data"):
+        client.post({"Subject": "hi"}, b"line\n")
+    assert sock.sent == b"POST\r\n"  # The article was not sent
+    with pytest.raises(NNTPSyncError, match="reconnect"):
+        client.date()
+    assert sock.sent == b"POST\r\n"
+
+
+@pytest.mark.parametrize("chunk", [4096])
+def test_ihave_refuses_data_after_ready_reply(connect: Connect) -> None:
+    packets = Packets(
+        WELCOME, MODE_READER, b"335 send\r\n235 <fake@x> ok\r\n", b"235 <real@x>\r\n"
+    )
+    client, sock = connect(packets)
+    sock.sent = b""
+    with pytest.raises(nntp.NNTPProtocolError, match="Unexpected data"):
+        client.ihave("<a@b>", {"Subject": "hi"}, b"line\n")
+    assert sock.sent == b"IHAVE <a@b>\r\n"  # The article was not sent
+    with pytest.raises(NNTPSyncError, match="reconnect"):
+        client.date()
+    assert sock.sent == b"IHAVE <a@b>\r\n"
