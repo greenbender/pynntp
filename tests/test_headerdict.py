@@ -1,3 +1,8 @@
+import copy
+import pickle
+from collections.abc import Iterable
+from typing import Self
+
 import pytest
 
 from nntp.headerdict import HeaderDict
@@ -122,3 +127,157 @@ def test_eq_values_case_sensitive() -> None:
 )
 def test_not_equal(other: object) -> None:
     assert HeaderDict(A="1") != other
+
+
+def test_copy_module_is_independent() -> None:
+    original = HeaderDict(Subject="x")
+    dup = copy.copy(original)
+    dup["SUBJECT"] = "y"
+    dup["From"] = "me"
+    assert original == {"Subject": "x"}
+    assert dup == {"Subject": "y", "From": "me"}
+
+
+def test_copy_method_is_independent() -> None:
+    original = HeaderDict(Subject="x")
+    dup = original.copy()
+    assert type(dup) is HeaderDict
+    del dup["subject"]
+    original["From"] = "me"
+    assert dup == {}
+    assert original == {"Subject": "x", "From": "me"}
+
+
+def test_copy_keeps_names_and_order() -> None:
+    original = HeaderDict([("KeYMiXeD", "1"), ("Subject", "2")])
+    for dup in (copy.copy(original), original.copy()):
+        assert list(dup) == ["KeYMiXeD", "Subject"]
+        assert dup["keymixed"] == "1"
+        assert "SUBJECT" in dup
+        dup["keymixed"] = "3"
+        assert list(dup) == ["KeYMiXeD", "Subject"]
+        assert original["KEYMIXED"] == "1"
+
+
+def test_deepcopy_is_independent() -> None:
+    original = HeaderDict(Subject="x")
+    dup = copy.deepcopy(original)
+    assert type(dup) is HeaderDict
+    dup["SUBJECT"] = "y"
+    assert original == {"Subject": "x"}
+    assert dup == {"Subject": "y"}
+
+
+def test_pickle_round_trip() -> None:
+    original = HeaderDict([("KeYMiXeD", "1"), ("Subject", "2")])
+    restored = pickle.loads(pickle.dumps(original))  # noqa: S301 - our own data
+    assert type(restored) is HeaderDict
+    assert list(restored) == ["KeYMiXeD", "Subject"]
+    assert restored["keymixed"] == "1"
+    assert restored == original
+
+
+class _Sub(HeaderDict):
+    note = "class attribute"
+
+    def __init__(self, other: Iterable[tuple[str, str]] = ()) -> None:
+        super().__init__(other)
+        self.tag = "instance attribute"
+
+
+def test_copy_keeps_subclass_type() -> None:
+    original = _Sub([("KeYMiXeD", "1"), ("Subject", "2")])
+    for dup in (copy.copy(original), original.copy(), copy.deepcopy(original)):
+        assert type(dup) is _Sub
+        assert dup == original
+        assert dup.tag == "instance attribute"
+        assert list(dup) == ["KeYMiXeD", "Subject"]
+        assert dup["keymixed"] == "1"
+        assert "SUBJECT" in dup
+        dup["keymixed"] = "3"
+        dup["From"] = "me"
+        del dup["subject"]
+        assert list(dup) == ["KeYMiXeD", "From"]
+        assert list(original) == ["KeYMiXeD", "Subject"]
+        assert original["KEYMIXED"] == "1"
+        assert original["subject"] == "2"
+
+
+def test_pickle_round_trip_subclass() -> None:
+    original = _Sub([("KeYMiXeD", "1")])
+    restored = pickle.loads(pickle.dumps(original))  # noqa: S301 - our own data
+    assert type(restored) is _Sub
+    assert list(restored) == ["KeYMiXeD"]
+    assert restored == original
+
+
+class _Slotted(HeaderDict):
+    __slots__ = ("article_number", "extra")
+    article_number: int
+    extra: list[str]
+
+
+def test_copy_keeps_slot_values() -> None:
+    original = _Slotted([("Subject", "x")])
+    original.article_number = 42
+    original.extra = ["a"]
+    for dup in (copy.copy(original), original.copy(), copy.deepcopy(original)):
+        assert type(dup) is _Slotted
+        assert dup.article_number == 42
+        assert dup.extra == ["a"]
+        assert dup == original
+        dup.article_number = 43
+        dup["Subject"] = "y"
+        dup["From"] = "me"
+        assert original.article_number == 42
+        assert original == {"Subject": "x"}
+        assert dup == {"Subject": "y", "From": "me"}
+
+
+def test_deepcopy_slot_values_are_independent() -> None:
+    original = _Slotted()
+    original.extra = ["a"]
+    dup = copy.deepcopy(original)
+    dup.extra.append("b")
+    assert original.extra == ["a"]
+
+
+def test_copy_with_unset_slots() -> None:
+    original = _Slotted([("Subject", "x")])
+    for dup in (copy.copy(original), original.copy()):
+        assert type(dup) is _Slotted
+        assert dup == original
+        assert not hasattr(dup, "article_number")
+
+
+class _Tagged(HeaderDict):
+    tag: str
+
+    def __new__(cls, tag: str) -> Self:
+        instance = super().__new__(cls)
+        instance.tag = tag
+        return instance
+
+    def __init__(self, tag: str) -> None:
+        super().__init__(Subject=tag)
+
+    def __getnewargs__(self) -> tuple[str]:
+        return (self.tag,)
+
+
+class _KeywordTagged(_Tagged):
+    def __new__(cls, *, tag: str) -> Self:
+        return super().__new__(cls, tag)
+
+    def __getnewargs_ex__(self) -> tuple[tuple[()], dict[str, str]]:
+        return (), {"tag": self.tag}
+
+
+@pytest.mark.parametrize("original", [_Tagged("id"), _KeywordTagged(tag="id")])
+def test_copy_uses_subclass_constructor_arguments(original: _Tagged) -> None:
+    for dup in (original.copy(), copy.copy(original)):
+        assert type(dup) is type(original)
+        assert dup.tag == original.tag
+        assert dup == original
+        dup["Subject"] = "changed"
+        assert original["Subject"] == "id"
